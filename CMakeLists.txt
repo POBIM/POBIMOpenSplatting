@@ -295,7 +295,9 @@ if(OPENSPLAT_BUILD_SIMPLE_TRAINER)
         ${GPU_INCLUDE_DIRS}
         /usr/include/opencv4
     )
-    target_link_libraries(simple_trainer PUBLIC ${GPU_LIBRARIES} ${GSPLAT_LIBS} ${TORCH_LIBRARIES} ${OpenCV_LIBS})
+    target_link_libraries(simple_trainer PUBLIC ${GPU_LIBRARIES} ${GSPLAT_LIBS} ${TORCH_LIBRARIES})
+    target_link_directories(simple_trainer PUBLIC ${OpenCV_LIBRARY_DIRS})
+    target_link_libraries(simple_trainer PUBLIC ${OpenCV_LIBRARIES})
     target_link_libraries(simple_trainer PRIVATE
         nlohmann_json::nlohmann_json
         cxxopts::cxxopts

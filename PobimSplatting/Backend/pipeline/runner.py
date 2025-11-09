@@ -1,0 +1,1622 @@
+"""High-level processing pipeline orchestration."""
+
+from __future__ import annotations
+
+import logging
+import os
+import re
+import shutil
+import subprocess
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+from ..core import config as app_config
+from ..core import projects as project_store
+from ..core.commands import run_command_with_logs
+from ..core.projects import (
+    append_log_line,
+    emit_stage_progress,
+    save_projects_db,
+    update_stage_detail,
+    update_state,
+)
+from ..utils.video_processor import VideoProcessor
+
+logger = logging.getLogger(__name__)
+
+video_processor = VideoProcessor()
+
+
+def run_processing_pipeline_from_stage(project_id, paths, config, video_files, image_files, from_stage='ingest'):
+    """Run the processing pipeline from a specific stage."""
+    try:
+        with project_store.status_lock:
+            project_store.processing_status[project_id]['status'] = 'processing'
+
+        # Skip to the specified stage
+        stage_order = [s['key'] for s in app_config.PIPELINE_STAGES]
+        start_index = stage_order.index(from_stage) if from_stage in stage_order else 0
+
+        # Import time estimator
+        from services.time_estimator import time_estimator
+
+        # Calculate smart time estimate
+        num_total_images = len(image_files) + config.get('max_frames', 0) * len(video_files)
+        time_estimate = time_estimator.estimate_processing_time(
+            num_images=max(num_total_images, 50),
+            quality_mode=config.get('quality_mode', 'balanced'),
+            has_videos=len(video_files) > 0,
+            num_videos=len(video_files)
+        )
+
+        processing_start_time = time.time()
+
+        # Handle each stage based on start_index
+        if start_index <= stage_order.index('ingest'):
+            with project_store.status_lock:
+                update_state(project_id, 'ingest', status='running')
+            update_stage_detail(project_id, 'ingest', text='Preparing upload...', subtext=None)
+
+            append_log_line(project_id, f"🚀 Starting {config.get('quality_mode', 'balanced').title()} Quality Processing")
+            append_log_line(project_id, f"📊 Dataset: {num_total_images} images, {len(video_files)} videos")
+            append_log_line(project_id, f"⏱️  Estimated time: {time_estimator.format_time_display(time_estimate.total_seconds)}")
+            append_log_line(project_id, f"🎯 GPU: {time_estimator.detect_gpu()}")
+
+        # Video extraction stage
+        total_extracted_frames = 0
+        if start_index <= stage_order.index('video_extraction'):
+            if video_files:
+                total_videos = len(video_files)
+                update_state(project_id, 'video_extraction', status='running')
+                update_stage_detail(project_id, 'video_extraction', text=f'Videos processed: 0/{total_videos}', subtext='Frames extracted: 0')
+                append_log_line(project_id, f"📹 Processing {total_videos} video file(s)...")
+
+                for i, video_path in enumerate(video_files):
+                    append_log_line(project_id, f"Extracting frames from: {Path(video_path).name}")
+
+                    if config.get('extraction_mode') == 'fps':
+                        extraction_config = {
+                            'mode': 'fps',
+                            'target_fps': config['target_fps'],
+                            'quality': config['quality'],
+                            'preview_count': config.get('preview_count', 10)
+                        }
+                    else:
+                        extraction_config = {
+                            'mode': 'frames',
+                            'max_frames': config.get('max_frames', 100),
+                            'quality': config.get('quality', 100),
+                            'preview_count': config.get('preview_count', 10)
+                        }
+
+                    extracted = video_processor.extract_frames(
+                        video_path,
+                        paths['images_path'],
+                        extraction_config=extraction_config
+                    )
+
+                    total_extracted_frames += len(extracted)
+                    append_log_line(project_id, f"✅ Extracted {len(extracted)} frames from video {i + 1}")
+
+                    videos_done = i + 1
+                    progress = int((videos_done / total_videos) * 100)
+                    update_state(project_id, 'video_extraction', progress=progress)
+                    update_stage_detail(
+                        project_id,
+                        'video_extraction',
+                        text=f'Videos processed: {videos_done}/{total_videos}',
+                        subtext=f'Frames extracted: {total_extracted_frames}'
+                    )
+
+                update_state(project_id, 'video_extraction', status='completed', progress=100)
+                append_log_line(project_id, f"🎬 Frame extraction complete. Total frames: {total_extracted_frames}")
+            else:
+                update_state(project_id, 'video_extraction', status='completed', progress=100)
+                update_stage_detail(project_id, 'video_extraction', text='No video files', subtext=None)
+
+        # Complete ingest stage if we started from there
+        if start_index <= stage_order.index('ingest'):
+            update_state(project_id, 'ingest', status='completed', progress=100)
+            total_images = len(list(paths['images_path'].glob('*')))
+            append_log_line(project_id, f"📸 Total images for reconstruction: {total_images}")
+            update_stage_detail(project_id, 'ingest', text=f'Images ready: {total_images}', subtext=None)
+
+            if total_images < 10:
+                raise ValueError(f"Need at least 10 images, but only have {total_images}")
+
+        # Continue with COLMAP and OpenSplat pipeline from the appropriate stage
+        if start_index <= stage_order.index('feature_extraction'):
+            run_colmap_pipeline(project_id, paths, config, processing_start_time, time_estimate, time_estimator)
+        elif start_index <= stage_order.index('gaussian_splatting'):
+            # Start from gaussian splatting (skip COLMAP stages)
+            # First, ensure we select the best sparse model, rename to 0/, and clean up inferior ones
+            append_log_line(project_id, "🔍 Checking sparse reconstruction models...")
+            sparse_model_path = select_best_sparse_model(paths['sparse_path'], project_id)
+
+            if not sparse_model_path:
+                raise Exception("No valid sparse reconstruction found. Please retry from an earlier stage.")
+
+            run_opensplat_training(project_id, paths, config, processing_start_time, time_estimate, time_estimator)
+        else:
+            # Just finalize
+            finalize_project(project_id)
+
+    except Exception as e:
+        logger.error(f"Processing failed for {project_id}: {e}")
+        append_log_line(project_id, f"❌ Error: {str(e)}")
+
+        with project_store.status_lock:
+            project_store.processing_status[project_id]['status'] = 'failed'
+            project_store.processing_status[project_id]['error'] = str(e)
+            project_store.processing_status[project_id]['end_time'] = datetime.now().isoformat()
+            save_projects_db()
+
+
+def run_processing_pipeline(project_id, paths, config, video_files, image_files):
+    """Run the complete processing pipeline."""
+    run_processing_pipeline_from_stage(project_id, paths, config, video_files, image_files, from_stage='ingest')
+
+
+def get_colmap_executable():
+    """Get the appropriate COLMAP executable (GPU version if available, fallback to system version)"""
+    for candidate in app_config.COLMAP_CANDIDATE_PATHS:
+        try:
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate)
+        except OSError:
+            continue
+
+    if app_config.COLMAP_ENV_PATH:
+        return app_config.COLMAP_ENV_PATH
+
+    return 'colmap'  # fallback to system COLMAP
+
+
+def get_vocab_tree_path(project_id=None):
+    """Get vocab tree path, download if needed"""
+    vocab_tree_path = app_config.VOCAB_TREE_FOLDER / app_config.VOCAB_TREE_FILENAME
+
+    if vocab_tree_path.exists():
+        return str(vocab_tree_path)
+
+    # Download vocab tree
+    if project_id:
+        append_log_line(project_id, "📥 Downloading vocab tree for improved matching...")
+
+    try:
+        import requests
+        response = requests.get(app_config.VOCAB_TREE_URL, stream=True)
+        response.raise_for_status()
+
+        total_size = int(response.headers.get('content-length', 0))
+        downloaded = 0
+
+        with open(vocab_tree_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if project_id and total_size > 0:
+                        progress = int((downloaded / total_size) * 100)
+                        if progress % 10 == 0:  # Log every 10%
+                            append_log_line(project_id, f"📥 Downloading vocab tree: {progress}% ({downloaded / 1024 / 1024:.1f}MB / {total_size / 1024 / 1024:.1f}MB)")
+
+        if project_id:
+            append_log_line(project_id, f"✅ Vocab tree downloaded successfully ({total_size / 1024 / 1024:.1f}MB)")
+
+        return str(vocab_tree_path)
+    except Exception as e:
+        if project_id:
+            append_log_line(project_id, f"⚠️ Failed to download vocab tree: {str(e)}")
+        logger.error(f"Failed to download vocab tree: {str(e)}")
+        return None
+
+
+def select_best_sparse_model(sparse_path, project_id=None):
+    """
+    Analyze all sparse reconstruction models and select the best one.
+    Returns the path to the best model based on number of registered images.
+    Also deletes all inferior models to keep only the best one.
+    """
+    if not sparse_path.exists():
+        return None
+
+    colmap_exe = get_colmap_executable()
+    best_model = None
+    best_score = (-1, -1, -1, -1)
+    all_models = []  # Store all models with their scores for later cleanup
+
+    # Analyze each sparse model directory
+    for item in sparse_path.iterdir():
+        if not item.is_dir():
+            continue
+
+        # Check if this is a valid COLMAP model (has cameras.bin or cameras.txt)
+        cameras_bin = item / 'cameras.bin'
+        cameras_txt = item / 'cameras.txt'
+        images_bin = item / 'images.bin'
+        images_txt = item / 'images.txt'
+
+        if not (cameras_bin.exists() or cameras_txt.exists()):
+            continue
+
+        try:
+            # Use colmap model_analyzer to get statistics
+            result = subprocess.run(
+                [colmap_exe, 'model_analyzer', '--path', str(item)],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+
+            combined_output = ''
+            if result.stdout:
+                combined_output += result.stdout
+            if result.stderr:
+                combined_output += result.stderr
+
+            if result.returncode != 0:
+                if project_id:
+                    append_log_line(
+                        project_id,
+                        f"⚠️ Failed to analyze model {item.name}: return code {result.returncode}"
+                    )
+                    if combined_output:
+                        append_log_line(project_id, f"[DEBUG] model_analyzer output: {combined_output.strip()[:500]}")
+                continue
+
+            # Parse output for COLMAP model stats
+            num_cameras = 0
+            num_images = 0
+            registered_images = 0
+            num_points = 0
+
+            for line in combined_output.splitlines():
+                match_cameras = re.search(r'Cameras:\s*(\d+)', line)
+                if match_cameras:
+                    num_cameras = int(match_cameras.group(1))
+                    continue
+
+                match_images = re.search(r'Images:\s*(\d+)', line)
+                if match_images:
+                    num_images = int(match_images.group(1))
+                    continue
+
+                match_images = re.search(r'Registered images:\s*(\d+)', line)
+                if match_images:
+                    registered_images = int(match_images.group(1))
+                    continue
+
+                match_points = re.search(r'Points:\s*(\d+)', line)
+                if match_points:
+                    num_points = int(match_points.group(1))
+
+            # Score prioritizes highest camera count, then registered images, then points
+            score = (num_cameras, registered_images, num_points, num_images)
+
+            if project_id:
+                append_log_line(
+                    project_id,
+                    f"📊 Model {item.name}: cameras={num_cameras}, registered={registered_images}, images={num_images}, points={num_points}"
+                )
+
+            # Store model info for later cleanup
+            all_models.append({
+                'path': item,
+                'score': score,
+                'num_cameras': num_cameras,
+                'registered_images': registered_images
+            })
+
+            if score > best_score:
+                best_score = score
+                best_model = item
+
+        except Exception as e:
+            logger.warning(f"Failed to analyze model {item}: {e}")
+            continue
+
+    if best_model and project_id:
+        append_log_line(project_id, f"✅ Selected best reconstruction: {best_model.name}")
+
+        # Step 1: Rename all models to temporary names (A, B, C, D...) to avoid conflicts
+        append_log_line(project_id, "📦 Step 1: Renaming all models to temporary names...")
+        temp_names = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+        temp_mappings = {}  # Maps temp name to original model_info
+
+        for idx, model_info in enumerate(all_models):
+            if idx >= len(temp_names):
+                break
+            temp_name = temp_names[idx]
+            original_path = model_info['path']
+            temp_path = original_path.parent / temp_name
+
+            try:
+                shutil.move(str(original_path), str(temp_path))
+                temp_mappings[temp_name] = {
+                    'path': temp_path,
+                    'original_name': original_path.name,
+                    'model_info': model_info,
+                    'is_best': (original_path == best_model)
+                }
+                if project_id:
+                    append_log_line(project_id, f"  ↳ Renamed {original_path.name} → {temp_name}")
+
+                # Update best_model reference if this was the best
+                if original_path == best_model:
+                    best_model = temp_path
+                    best_temp_name = temp_name
+            except Exception as e:
+                logger.warning(f"Failed to rename {original_path.name} to {temp_name}: {e}")
+                if project_id:
+                    append_log_line(project_id, f"⚠️ Failed to rename {original_path.name}: {e}")
+
+        # Step 2: Rename the best model to '0'
+        append_log_line(project_id, f"📦 Step 2: Renaming best model ({best_temp_name}) to 0...")
+        target_path = best_model.parent / '0'
+        try:
+            shutil.move(str(best_model), str(target_path))
+            best_model = target_path
+            append_log_line(project_id, f"✅ Best model renamed to 0/")
+        except Exception as e:
+            logger.warning(f"Failed to rename best model to 0/: {e}")
+            if project_id:
+                append_log_line(project_id, f"⚠️ Failed to rename best model: {e}")
+
+        # Step 3: Delete all other temporary models
+        append_log_line(project_id, "📦 Step 3: Removing inferior models...")
+        for temp_name, mapping in temp_mappings.items():
+            if not mapping['is_best']:
+                temp_path = mapping['path']
+                original_name = mapping['original_name']
+                model_info = mapping['model_info']
+
+                if temp_path.exists():
+                    try:
+                        shutil.rmtree(temp_path)
+                        append_log_line(
+                            project_id,
+                            f"🗑️ Removed inferior model: {original_name} (cameras={model_info['num_cameras']}, registered={model_info['registered_images']})"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to delete {temp_name}: {e}")
+                        if project_id:
+                            append_log_line(project_id, f"⚠️ Failed to delete {temp_name}: {e}")
+
+        append_log_line(project_id, "✅ Model organization completed - only best model (0/) remains")
+
+    return best_model
+
+
+def get_colmap_config(num_images, project_id=None, quality_mode='balanced', custom_params=None):
+    """Configure COLMAP parameters based on image count and quality requirements"""
+
+    if project_id:
+        append_log_line(project_id, f"Optimizing COLMAP config for {num_images} images (Quality: {quality_mode})")
+
+    # Quality-based parameter scaling - NEW: Balanced = High quality baseline
+    quality_scales = {
+        'fast': {'size': 0.6, 'features': 0.5, 'matches': 0.5, 'octaves': -1},
+        'balanced': {'size': 1.0, 'features': 1.0, 'matches': 2.0, 'octaves': 0},  # Use base directly (High quality)
+        'high': {'size': 1.0, 'features': 1.0, 'matches': 2.0, 'octaves': 0},  # Use base directly
+        'ultra': {'size': 1.2, 'features': 1.2, 'matches': 2.5, 'octaves': 0},  # Slightly higher than base
+        'professional': {'size': 1.5, 'features': 1.5, 'matches': 2.5, 'octaves': 0},  # 4K+ support (30,000 iterations)
+        'ultra_professional': {'size': 1.8, 'features': 1.8, 'matches': 3.0, 'octaves': 0},  # 4K+ ultra support (60,000 iterations)
+        'robust': {'size': 1.0, 'features': 1.0, 'matches': 2.5, 'octaves': 0},  # Base with more matches
+        'custom': {'size': 1.0, 'features': 1.0, 'matches': 2.0, 'octaves': 0}   # Use base, let user override
+    }
+
+    scale = quality_scales.get(quality_mode, quality_scales['balanced'])
+
+    # Base feature extraction settings - MAXIMUM quality for ALL dataset sizes
+    # NO MORE QUALITY REDUCTION regardless of image count
+    base_max_image_size = 4160  # High quality size (same as 7000 iter mode)
+    base_max_num_features = 32768  # Increased from 12288 for 4K image support
+    base_octaves = 4
+
+    # Apply quality scaling for all dataset sizes equally
+    max_image_size = int(base_max_image_size * scale['size'])
+    max_num_features = int(base_max_num_features * scale['features'])
+
+    # Override with custom parameters if provided (custom mode)
+    if custom_params and quality_mode == 'custom':
+        if 'max_num_features' in custom_params and custom_params['max_num_features'] is not None:
+            max_num_features = custom_params['max_num_features']
+            if project_id:
+                append_log_line(project_id, f"🔧 Custom max_num_features: {max_num_features}")
+
+    first_octave = -1 if quality_mode in ['high', 'ultra', 'professional', 'ultra_professional'] else scale['octaves']
+    num_octaves = base_octaves + (1 if quality_mode in ['ultra', 'professional', 'ultra_professional'] else 0)
+
+    # Quality-aware matching strategy
+    base_matches = 16384  # Base number of matches
+    max_num_matches = int(base_matches * scale['matches'])
+
+    # Override with custom parameters if provided
+    if custom_params and quality_mode == 'custom':
+        if 'max_num_matches' in custom_params and custom_params['max_num_matches'] is not None:
+            max_num_matches = custom_params['max_num_matches']
+            if project_id:
+                append_log_line(project_id, f"🔧 Custom max_num_matches: {max_num_matches}")
+
+    # Matching strategy based on dataset size and quality requirements
+    if quality_mode == 'robust':
+        # Robust mode: Always use exhaustive for difficult datasets
+        matcher_type = 'exhaustive'
+        max_num_matches = min(max_num_matches, 65536)
+        matcher_params = {}
+        if project_id:
+            append_log_line(project_id, "🔧 Using ROBUST mode: Exhaustive matching for maximum coverage")
+    elif quality_mode == 'ultra' and num_images <= 200:
+        # Ultra quality: Use exhaustive for smaller datasets
+        matcher_type = 'exhaustive'
+        max_num_matches = min(max_num_matches, 65536)  # Cap at 64k matches
+        matcher_params = {}
+    elif num_images <= 50:
+        # Small: Use exhaustive for best coverage
+        matcher_type = 'exhaustive'
+        matcher_params = {}
+    elif num_images <= 150:
+        # Medium-small: Sequential with enhanced overlap for better coverage
+        matcher_type = 'sequential'
+        overlap = '35' if quality_mode == 'ultra_professional' else ('30' if quality_mode == 'professional' else ('25' if quality_mode in ['high', 'ultra'] else '20'))
+        quadratic = '1'  # Always enable quadratic overlap
+        matcher_params = {
+            'SequentialMatching.overlap': overlap,
+            'SequentialMatching.quadratic_overlap': quadratic,
+            'SequentialMatching.loop_detection': '1'  # Enable loop detection
+        }
+    elif num_images <= 400:
+        # Medium-large: Enhanced sequential for better quality
+        matcher_type = 'sequential'  # Changed from spatial for better GPU utilization
+        overlap = '30' if quality_mode == 'ultra_professional' else ('25' if quality_mode == 'professional' else ('18' if quality_mode in ['high', 'ultra'] else '12'))
+        quadratic = '1'  # Always enable quadratic overlap
+        matcher_params = {
+            'SequentialMatching.overlap': overlap,
+            'SequentialMatching.quadratic_overlap': quadratic,
+            'SequentialMatching.loop_detection': '1'
+        }
+    elif num_images <= 1000:
+        # Large: Quality-aware sequential with improved coverage
+        matcher_type = 'sequential'
+        overlap = '25' if quality_mode == 'ultra_professional' else ('20' if quality_mode == 'professional' else ('15' if quality_mode in ['high', 'ultra'] else '12'))
+        quadratic = '1'  # Always enable quadratic overlap
+        matcher_params = {
+            'SequentialMatching.overlap': overlap,
+            'SequentialMatching.quadratic_overlap': quadratic,
+            'SequentialMatching.loop_detection': '1'  # Enable loop detection
+        }
+    else:
+        # Very large: Optimized sequential
+        matcher_type = 'sequential'
+        overlap = '18' if quality_mode == 'ultra_professional' else ('12' if quality_mode == 'professional' else ('8' if quality_mode in ['high', 'ultra'] else '5'))
+        matcher_params = {
+            'SequentialMatching.overlap': overlap,
+            'SequentialMatching.quadratic_overlap': '0'
+        }
+
+    # Quality-aware reconstruction settings - NEW: Balanced = High quality baseline
+    quality_mapper_scales = {
+        'fast': {'matches': 1.0, 'trials': 0.5, 'models': 0.5},
+        'balanced': {'matches': 0.8, 'trials': 1.5, 'models': 2.0},  # Same as High (aggressive for better results)
+        'high': {'matches': 0.8, 'trials': 1.5, 'models': 2.0},  # Aggressive reconstruction
+        'ultra': {'matches': 0.7, 'trials': 2.0, 'models': 3.0},  # Very aggressive
+        'professional': {'matches': 0.6, 'trials': 2.5, 'models': 5.0},  # Maximum for 4K+ (30,000 iterations)
+        'ultra_professional': {'matches': 0.5, 'trials': 3.0, 'models': 7.0},  # Ultra maximum (60,000 iterations)
+        'unlimited': {'matches': 0.6, 'trials': 2.5, 'models': 5.0},  # Maximum for 4K - same as robust
+        'robust': {'matches': 0.6, 'trials': 2.5, 'models': 5.0},  # Extremely aggressive for difficult data
+        'custom': {'matches': 0.8, 'trials': 1.5, 'models': 2.0}  # Same as High baseline
+    }
+
+    mapper_scale = quality_mapper_scales.get(quality_mode, quality_mapper_scales['balanced'])
+
+    # Base mapper settings for reconstruction
+    if num_images <= 100:
+        base_min_matches = 8  # Reduced from 15 for better registration success
+        base_min_model_size = 3  # Reduced from 10 to accept smaller valid models
+        base_max_models = 50
+        base_init_trials = 200
+        max_extra_param = 1  # Always allow extra camera parameters for flexibility
+    elif num_images <= 300:
+        base_min_matches = 20
+        base_min_model_size = 15
+        base_max_models = 20
+        base_init_trials = 150
+        max_extra_param = 1 if quality_mode in ['high', 'ultra', 'professional', 'ultra_professional'] else 0
+    elif num_images <= 1000:
+        base_min_matches = 12  # Reduced from 25 for better registration
+        base_min_model_size = 8  # Reduced from 20 to accept smaller valid models
+        base_max_models = 15
+        base_init_trials = 150  # Increased from 120 for more initialization attempts
+        max_extra_param = 1  # Always allow extra camera parameters for flexibility
+    else:
+        base_min_matches = 30
+        base_min_model_size = 25
+        base_max_models = 10
+        base_init_trials = 100
+        max_extra_param = 0
+
+    # Override with custom sequential overlap if provided
+    if custom_params and quality_mode == 'custom' and 'sequential_overlap' in custom_params and custom_params['sequential_overlap'] is not None:
+        if matcher_type == 'sequential' and matcher_params:
+            matcher_params['SequentialMatching.overlap'] = str(custom_params['sequential_overlap'])
+            if project_id:
+                append_log_line(project_id, f"🔧 Custom sequential_overlap: {custom_params['sequential_overlap']}")
+
+    # Apply quality scaling to mapper settings
+    min_num_matches = max(6, int(base_min_matches * mapper_scale['matches']))  # Minimum 6 instead of 10
+    min_model_size = base_min_model_size
+    max_num_models = int(base_max_models * mapper_scale['models'])
+    init_num_trials = int(base_init_trials * mapper_scale['trials'])
+
+    # Override with custom mapper parameters if provided
+    if custom_params and quality_mode == 'custom':
+        if 'min_num_matches' in custom_params and custom_params['min_num_matches'] is not None:
+            min_num_matches = custom_params['min_num_matches']
+            if project_id:
+                append_log_line(project_id, f"🔧 Custom min_num_matches: {min_num_matches}")
+        if 'max_num_models' in custom_params and custom_params['max_num_models'] is not None:
+            max_num_models = custom_params['max_num_models']
+            if project_id:
+                append_log_line(project_id, f"🔧 Custom max_num_models: {max_num_models}")
+        if 'init_num_trials' in custom_params and custom_params['init_num_trials'] is not None:
+            init_num_trials = custom_params['init_num_trials']
+            if project_id:
+                append_log_line(project_id, f"🔧 Custom init_num_trials: {init_num_trials}")
+
+    # Enhanced SIFT parameters for better feature quality
+    sift_params = {}
+    if quality_mode == 'ultra_professional':
+        # Ultra Professional mode: Ultra maximum feature quality for highest quality (60,000 iterations)
+        sift_params.update({
+            'peak_threshold': 0.004,  # Ultra low = maximum features detected
+            'edge_threshold': 25,      # Ultra high = most robust edge filtering
+            'max_num_orientations': 5,  # Ultra maximum orientations for best matching
+        })
+    elif quality_mode == 'professional':
+        # Professional mode: Maximum feature quality for 4K+ images (30,000 iterations)
+        sift_params.update({
+            'peak_threshold': 0.006,  # Lower = more features detected
+            'edge_threshold': 20,      # Higher = more robust edge filtering
+            'max_num_orientations': 4,  # Maximum orientations for best matching
+        })
+    elif quality_mode in ['high', 'ultra']:
+        sift_params.update({
+            'peak_threshold': 0.008 if quality_mode == 'ultra' else 0.01,  # Higher = more robust features
+            'edge_threshold': 15 if quality_mode == 'ultra' else 15,        # Higher = reduce false edges
+            'max_num_orientations': 3 if quality_mode == 'ultra' else 2,    # More orientations
+        })
+    elif quality_mode == 'balanced':
+        # Balanced mode gets same SIFT params as High quality
+        sift_params.update({
+            'peak_threshold': 0.01,  # Slightly more selective than default
+            'edge_threshold': 15,     # More robust edge filtering
+            'max_num_orientations': 2  # Same as High quality
+        })
+    elif quality_mode == 'custom':
+        # Custom mode: Use provided params or High quality defaults
+        sift_params.update({
+            'peak_threshold': (custom_params.get('peak_threshold') or 0.01) if custom_params else 0.01,
+            'edge_threshold': (custom_params.get('edge_threshold') or 15) if custom_params else 15,
+            'max_num_orientations': (custom_params.get('max_num_orientations') or 2) if custom_params else 2
+        })
+        if project_id and custom_params:
+            if 'peak_threshold' in custom_params and custom_params['peak_threshold'] is not None:
+                append_log_line(project_id, f"🔧 Custom peak_threshold: {custom_params['peak_threshold']}")
+            if 'edge_threshold' in custom_params and custom_params['edge_threshold'] is not None:
+                append_log_line(project_id, f"🔧 Custom edge_threshold: {custom_params['edge_threshold']}")
+            if 'max_num_orientations' in custom_params and custom_params['max_num_orientations'] is not None:
+                append_log_line(project_id, f"🔧 Custom max_num_orientations: {custom_params['max_num_orientations']}")
+
+    # Hybrid matching configuration - Use vocab tree for better loop closure
+    use_vocab_tree = num_images >= 30  # Enable vocab tree for 30+ images
+
+    config = {
+        # Feature extraction - Enhanced
+        'max_image_size': max_image_size,
+        'max_num_features': max_num_features,
+        'first_octave': first_octave,
+        'num_octaves': num_octaves,
+
+        # Enhanced SIFT parameters
+        'sift_params': sift_params,
+
+        # Matching - Quality aware with hybrid approach
+        'matcher_type': matcher_type,
+        'max_num_matches': max_num_matches,
+        'matcher_params': matcher_params,
+        'use_vocab_tree': use_vocab_tree,  # Hybrid: sequential + vocab tree
+
+        # Reconstruction - High quality settings
+        'min_num_matches': min_num_matches,
+        'min_model_size': min_model_size,
+        'max_num_models': max_num_models,
+        'init_num_trials': init_num_trials,
+        'max_extra_param': max_extra_param,
+
+        # Quality metadata
+        'quality_mode': quality_mode,
+        'total_expected_matches': int(num_images * float(matcher_params.get('SequentialMatching.overlap', '10')) if matcher_type == 'sequential' else num_images * (num_images - 1) / 2)
+    }
+
+    return config
+
+
+def get_opensplat_config(quality_mode='balanced', num_images=100, custom_params=None):
+    """Get OpenSplat training configuration based on quality requirements and dataset size"""
+
+    # Quality-based scaling factors - NEW: Balanced = High quality (7000 iter) baseline
+    quality_scales = {
+        'fast': {
+            'iterations': 500,
+            'densify_from': 100,
+            'densify_until': 300,
+            'densify_grad_threshold': 0.0002,
+            'opacity_reset_interval': 3000,
+            'prune_opacity': 0.005
+        },
+        'balanced': {
+            'iterations': 7000,  # NOW SAME AS HIGH
+            'densify_from': 1000,
+            'densify_until': 3500,
+            'densify_grad_threshold': 0.00015,  # Lower = more dense
+            'opacity_reset_interval': 3000,
+            'prune_opacity': 0.003  # Lower = more conservative pruning
+        },
+        'high': {
+            'iterations': 7000,
+            'densify_from': 1000,
+            'densify_until': 3500,
+            'densify_grad_threshold': 0.00015,  # Lower = more dense
+            'opacity_reset_interval': 3000,
+            'prune_opacity': 0.003  # Lower = more conservative pruning
+        },
+        'ultra': {
+            'iterations': 15000,
+            'densify_from': 2000,
+            'densify_until': 7500,
+            'densify_grad_threshold': 0.0001,  # Even lower = very dense
+            'opacity_reset_interval': 2500,   # More frequent resets
+            'prune_opacity': 0.002  # Very conservative pruning
+        },
+        'professional': {
+            'iterations': 30000,
+            'densify_from': 3000,
+            'densify_until': 15000,
+            'densify_grad_threshold': 0.00008,  # Extremely dense for 4K+
+            'opacity_reset_interval': 2000,     # Very frequent resets
+            'prune_opacity': 0.001  # Extremely conservative pruning
+        },
+        'ultra_professional': {
+            'iterations': 60000,
+            'densify_from': 4000,
+            'densify_until': 30000,
+            'densify_grad_threshold': 0.00005,  # Ultra dense for ultra high quality
+            'opacity_reset_interval': 1500,     # Even more frequent resets
+            'prune_opacity': 0.0005  # Ultra conservative pruning
+        },
+        'custom': {
+            'iterations': 7000,  # NOW SAME AS HIGH baseline
+            'densify_from': 1000,
+            'densify_until': 3500,
+            'densify_grad_threshold': 0.00015,
+            'opacity_reset_interval': 3000,
+            'prune_opacity': 0.003
+        }
+    }
+
+    base_config = quality_scales.get(quality_mode, quality_scales['balanced'])
+
+    # Dataset size adjustments
+    if num_images > 500:
+        # For large datasets, increase iterations for better convergence
+        base_config['iterations'] = int(base_config['iterations'] * 1.2)
+        base_config['densify_until'] = int(base_config['densify_until'] * 1.2)
+    elif num_images < 50:
+        # For small datasets, reduce iterations to prevent overfitting
+        base_config['iterations'] = max(1000, int(base_config['iterations'] * 0.8))
+
+    # Additional high-quality parameters
+    if quality_mode in ['high', 'ultra', 'balanced']:
+        base_config.update({
+            'learning_rate': 0.0025,  # Lower learning rate for stability
+            'position_lr_init': 0.00016,
+            'position_lr_final': 0.0000016,
+            'feature_lr': 0.0025,
+            'opacity_lr': 0.05,
+            'scaling_lr': 0.005,
+            'rotation_lr': 0.001,
+            'percent_dense': 0.1 if quality_mode == 'ultra' else 0.01,
+        })
+
+    # Override with custom parameters if provided
+    if custom_params and quality_mode == 'custom':
+        # OpenSplat Training Parameters
+        if 'iterations' in custom_params and custom_params['iterations'] is not None:
+            base_config['iterations'] = int(custom_params['iterations'])
+        if 'densify_grad_threshold' in custom_params and custom_params['densify_grad_threshold'] is not None:
+            base_config['densify_grad_threshold'] = float(custom_params['densify_grad_threshold'])
+        if 'refine_every' in custom_params and custom_params['refine_every'] is not None:
+            base_config['refine_every'] = int(custom_params['refine_every'])
+        if 'warmup_length' in custom_params and custom_params['warmup_length'] is not None:
+            base_config['warmup_length'] = int(custom_params['warmup_length'])
+        if 'ssim_weight' in custom_params and custom_params['ssim_weight'] is not None:
+            base_config['ssim_weight'] = float(custom_params['ssim_weight'])
+
+        # OpenSplat Learning Rates
+        if 'learning_rate' in custom_params and custom_params['learning_rate'] is not None:
+            base_config['learning_rate'] = float(custom_params['learning_rate'])
+        if 'position_lr_init' in custom_params and custom_params['position_lr_init'] is not None:
+            base_config['position_lr_init'] = float(custom_params['position_lr_init'])
+        if 'position_lr_final' in custom_params and custom_params['position_lr_final'] is not None:
+            base_config['position_lr_final'] = float(custom_params['position_lr_final'])
+        if 'feature_lr' in custom_params and custom_params['feature_lr'] is not None:
+            base_config['feature_lr'] = float(custom_params['feature_lr'])
+        if 'opacity_lr' in custom_params and custom_params['opacity_lr'] is not None:
+            base_config['opacity_lr'] = float(custom_params['opacity_lr'])
+        if 'scaling_lr' in custom_params and custom_params['scaling_lr'] is not None:
+            base_config['scaling_lr'] = float(custom_params['scaling_lr'])
+        if 'rotation_lr' in custom_params and custom_params['rotation_lr'] is not None:
+            base_config['rotation_lr'] = float(custom_params['rotation_lr'])
+        if 'percent_dense' in custom_params and custom_params['percent_dense'] is not None:
+            base_config['percent_dense'] = float(custom_params['percent_dense'])
+
+    return base_config
+
+
+def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_estimate, time_estimator):
+    """Run real COLMAP + OpenSplat pipeline."""
+    try:
+        # Set up environment variables for libtorch and headless operation
+        libtorch_path = Path('../libtorch')
+        env = os.environ.copy()
+        env['LD_LIBRARY_PATH'] = f"{libtorch_path}/lib:{env.get('LD_LIBRARY_PATH', '')}"
+        # Force headless operation to avoid GUI errors
+        env['QT_QPA_PLATFORM'] = 'offscreen'
+        env['DISPLAY'] = ''
+
+        # Count images to determine optimal COLMAP configuration
+        images_path = paths['images_path']
+        num_images = len([f for f in os.listdir(images_path)
+                         if f.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.tiff'))])
+
+        # Get optimized COLMAP configuration with quality mode
+        quality_mode = config.get('quality_mode', 'balanced')
+
+        # Extract custom parameters if in custom mode
+        custom_params = None
+        if quality_mode == 'custom':
+            custom_params = {
+                # SIFT Feature Parameters
+                'peak_threshold': config.get('peak_threshold'),
+                'edge_threshold': config.get('edge_threshold'),
+                'max_num_orientations': config.get('max_num_orientations'),
+                # Feature Extraction & Matching
+                'max_num_features': config.get('max_num_features'),
+                'max_num_matches': config.get('max_num_matches'),
+                'sequential_overlap': config.get('sequential_overlap'),
+                # Mapper (Reconstruction)
+                'min_num_matches': config.get('min_num_matches'),
+                'max_num_models': config.get('max_num_models'),
+                'init_num_trials': config.get('init_num_trials')
+            }
+
+        colmap_config = get_colmap_config(num_images, project_id, quality_mode, custom_params)
+
+        # 1. Feature Extraction
+        update_state(project_id, 'feature_extraction', status='running')
+        update_stage_detail(project_id, 'feature_extraction', text=f'Images processed: 0/{num_images}', subtext=None)
+        append_log_line(project_id, "🔄 Running COLMAP Feature Extraction...")
+        append_log_line(project_id, f"📊 Using optimized settings for {num_images} images")
+
+        colmap_exe = get_colmap_executable()
+
+        # Check if COLMAP has CUDA support
+        colmap_info = subprocess.run([colmap_exe, '-h'], capture_output=True, text=True)
+        has_cuda = 'with CUDA' in (colmap_info.stdout or '')
+
+        if has_cuda:
+            append_log_line(project_id, "🚀 Using GPU-accelerated COLMAP for feature extraction")
+        else:
+            append_log_line(project_id, "⚠️ COLMAP CUDA support not detected; falling back to CPU mode")
+
+        cmd = [
+            colmap_exe, 'feature_extractor',
+            '--database_path', str(paths['database_path']),
+            '--image_path', str(paths['images_path']),
+            '--ImageReader.camera_model', config['camera_model'],
+            '--ImageReader.single_camera', '1',
+            '--FeatureExtraction.use_gpu', '1' if has_cuda else '0',  # Use GPU only if CUDA available
+            '--SiftExtraction.max_image_size', str(colmap_config['max_image_size']),
+            '--SiftExtraction.max_num_features', str(colmap_config['max_num_features']),
+            '--SiftExtraction.first_octave', str(colmap_config['first_octave']),
+            '--SiftExtraction.num_octaves', str(colmap_config['num_octaves'])
+        ]
+
+        # Add enhanced SIFT parameters for high quality modes
+        sift_params = colmap_config.get('sift_params', {})
+        for param, value in sift_params.items():
+            if value is not None:  # Only add if value is not None
+                cmd.extend([f'--SiftExtraction.{param}', str(value)])
+
+        progress_tracker = {'count': 0}
+
+        def feature_line_handler(line):
+            if num_images == 0:
+                return
+
+            # Debug logging for feature extraction
+            if any(keyword in line.lower() for keyword in ['processing', 'processed', 'image', 'file', 'features']):
+                append_log_line(project_id, f"[DEBUG] Feature extraction: {line.strip()}")
+
+            # Enhanced pattern matching for COLMAP feature extraction
+            patterns = [
+                r'Processing image \[(\d+)/(\d+)\]',    # COLMAP format
+                r'Processed file \[(\d+)/(\d+)\]',       # Alternative format
+                r'Processing image (\d+)/(\d+)',         # Simple format
+                r'Processed image (\d+)/(\d+)',          # Simple format
+                r'Processing\s+(\d+)\s*\/\s*(\d+)',      # Generic processing
+                r'Extracting.*\s(\d+)\s*/\s*(\d+)',      # Extracting format
+                r'Image\s+(\d+)\s*\/\s*(\d+)',           # Image format
+                r'(\d+)\s*/\s*(\d+)\s*images?',          # X/Y images format
+                r'Features\s+(\d+)\s*\/\s*(\d+)',        # Features format
+            ]
+
+            for pattern in patterns:
+                match = re.search(pattern, line, re.IGNORECASE)
+                if match:
+                    current = int(match.group(1))
+                    total = int(match.group(2))
+
+                    # Ensure we don't exceed the known number of images
+                    if total != num_images:
+                        total = num_images
+                    if current > total:
+                        current = total
+
+                    percent = int((current / total) * 100)
+
+                    # Real-time update with detailed progress
+                    details = {
+                        'text': f'Images processed: {current}/{total}',
+                        'current_item': current,
+                        'total_items': total,
+                        'item_name': f'Image {current}'
+                    }
+
+                    # Emit real-time progress via WebSocket
+                    emit_stage_progress(project_id, 'feature_extraction', percent, details)
+
+                    update_state(project_id, 'feature_extraction', progress=min(percent, 99), details=details)
+                    update_stage_detail(project_id, 'feature_extraction', text=f'Images processed: {current}/{total}', subtext=None)
+                    return
+
+            # Fallback for older counting method
+            if any(keyword in line.lower() for keyword in ['processed', 'processing']):
+                progress_tracker['count'] += 1
+                processed = progress_tracker['count']
+                if processed > num_images:
+                    processed = num_images
+                percent = int((processed / num_images) * 100)
+
+                details = {
+                    'text': f'Images processed: {processed}/{num_images}',
+                    'current_item': processed,
+                    'total_items': num_images,
+                    'item_name': f'Image {processed}'
+                }
+
+                # Emit real-time progress via WebSocket
+                emit_stage_progress(project_id, 'feature_extraction', percent, details)
+
+                update_state(project_id, 'feature_extraction', progress=min(percent, 99), details=details)
+                update_stage_detail(project_id, 'feature_extraction', text=f'Images processed: {processed}/{num_images}', subtext=None)
+
+        run_command_with_logs(project_id, cmd, line_handler=feature_line_handler)
+
+        update_state(project_id, 'feature_extraction', status='completed', progress=100)
+        update_stage_detail(project_id, 'feature_extraction', text=f'Images processed: {num_images}/{num_images}', subtext='Feature extraction complete')
+        append_log_line(project_id, "✅ COLMAP Feature Extraction completed")
+
+        # 2. Feature Matching (Hybrid Approach)
+        update_state(project_id, 'feature_matching', status='running')
+        update_stage_detail(project_id, 'feature_matching', text='Matching pairs: 0/0', subtext=None)
+        append_log_line(project_id, "🔄 Running COLMAP Feature Matching...")
+
+        colmap_exe = get_colmap_executable()
+
+        # Check if COLMAP has CUDA support
+        colmap_info = subprocess.run([colmap_exe, '-h'], capture_output=True, text=True)
+        has_cuda = 'with CUDA' in (colmap_info.stdout or '')
+
+        if has_cuda:
+            append_log_line(project_id, "🚀 Using GPU-accelerated COLMAP for feature matching")
+        else:
+            append_log_line(project_id, "⚠️ COLMAP CUDA support not detected; falling back to CPU mode for matching")
+
+        # Hybrid matching: Use both sequential and vocab tree for better coverage
+        use_hybrid = colmap_config.get('use_vocab_tree', False)
+
+        if use_hybrid:
+            append_log_line(project_id, "🔗 Using HYBRID matcher (sequential + vocab tree) for improved loop closure")
+        else:
+            append_log_line(project_id, f"🔗 Using {colmap_config['matcher_type']} matcher")
+
+        matching_progress = {'current': 0, 'total': 0}
+
+        # Step 1: Sequential matcher (fast, for nearby images)
+        matcher_cmd = f'{colmap_config["matcher_type"]}_matcher'
+        append_log_line(project_id, f"📍 Step 1/2: Running {colmap_config['matcher_type']} matcher for nearby images...")
+
+        cmd = [
+            colmap_exe, matcher_cmd,
+            '--database_path', str(paths['database_path']),
+            '--FeatureMatching.max_num_matches', str(colmap_config['max_num_matches']),
+            '--FeatureMatching.use_gpu', '1' if has_cuda else '0'
+        ]
+
+        # Add matcher-specific parameters
+        for param, value in colmap_config['matcher_params'].items():
+            cmd.extend([f'--{param}', value])
+
+        def matching_line_handler(line):
+            # Debug logging for feature matching
+            if any(keyword in line.lower() for keyword in ['matching', 'match', 'pair', 'block']):
+                append_log_line(project_id, f"[DEBUG] Feature matching: {line.strip()}")
+
+            # Enhanced patterns for feature matching
+            patterns = [
+                r'Matching block \[(\d+)/(\d+)\]',     # Block matching
+                r'Matching image \[(\d+)/(\d+)\]',     # Image matching
+                r'Matching pair \[(\d+)/(\d+)\]',      # Pair matching
+                r'Processing pair (\d+)/(\d+)',        # Simple pair
+                r'Matching\s+(\d+)\s*\/\s*(\d+)',      # Generic matching
+                r'(\d+)/(\d+)\s+matches',               # Match results
+                r'Pair\s+(\d+)\s*\/\s*(\d+)',          # Pair format
+                r'\[(\d+)/(\d+)\]',                     # Bracket format
+            ]
+
+            for pattern in patterns:
+                match = re.search(pattern, line, re.IGNORECASE)
+                if match:
+                    current = int(match.group(1))
+                    total = int(match.group(2))
+                    matching_progress['current'] = current
+                    matching_progress['total'] = total
+
+                    if total > 0:
+                        percent = int((min(current, total) / total) * 100)
+
+                        details = {
+                            'text': f'Matching pairs: {current}/{total}',
+                            'current_item': current,
+                            'total_items': total,
+                            'item_name': f'Pair {current}'
+                        }
+
+                        # Emit real-time progress via WebSocket
+                        emit_stage_progress(project_id, 'feature_matching', percent, details)
+
+                        update_state(project_id, 'feature_matching', progress=min(percent, 99), details=details)
+                        update_stage_detail(project_id, 'feature_matching', text=f'Matching pairs: {current}/{total}', subtext=None)
+                    return
+
+        run_command_with_logs(project_id, cmd, line_handler=matching_line_handler)
+
+        # Step 2: Vocab tree matcher (for loop closure and non-sequential images)
+        if use_hybrid:
+            vocab_tree_path = get_vocab_tree_path(project_id)
+
+            if vocab_tree_path:
+                append_log_line(project_id, "📍 Step 2/2: Running vocab tree matcher for loop closure...")
+                update_stage_detail(project_id, 'feature_matching', text='Running vocab tree matching...', subtext='Finding similar images')
+
+                vocab_cmd = [
+                    colmap_exe, 'vocab_tree_matcher',
+                    '--database_path', str(paths['database_path']),
+                    '--VocabTreeMatching.vocab_tree_path', vocab_tree_path,
+                    '--FeatureMatching.max_num_matches', str(colmap_config['max_num_matches']),
+                    '--FeatureMatching.use_gpu', '1' if has_cuda else '0',
+                    '--VocabTreeMatching.num_images', str(min(100, num_images)),  # Match top 100 similar images
+                ]
+
+                run_command_with_logs(project_id, vocab_cmd, line_handler=matching_line_handler)
+                append_log_line(project_id, "✅ Vocab tree matching completed")
+            else:
+                append_log_line(project_id, "⚠️ Vocab tree not available, skipping Step 2/2")
+        else:
+            append_log_line(project_id, "ℹ️ Vocab tree matching skipped (dataset too small or disabled)")
+
+        update_state(project_id, 'feature_matching', status='completed', progress=100)
+        current = matching_progress['current'] or matching_progress['total']
+        total_pairs = matching_progress['total'] or matching_progress['current']
+        if total_pairs:
+            update_stage_detail(project_id, 'feature_matching', text=f'Matching pairs: {min(current, total_pairs)}/{total_pairs}', subtext='Feature matching complete')
+        else:
+            update_stage_detail(project_id, 'feature_matching', text='Feature matching complete', subtext=None)
+        append_log_line(project_id, "✅ COLMAP Feature Matching completed")
+
+        # 3. Sparse Reconstruction
+        update_state(project_id, 'sparse_reconstruction', status='running')
+        update_stage_detail(project_id, 'sparse_reconstruction', text=f'Images registered: 0/{num_images}', subtext=None)
+        append_log_line(project_id, "🔄 Running Sparse Reconstruction...")
+        append_log_line(project_id, f"🏗️ Optimized mapper settings for {num_images} images")
+
+        colmap_exe = get_colmap_executable()
+        
+        # GPU-accelerated Bundle Adjustment settings
+        # Check if COLMAP supports GPU bundle adjustment
+        colmap_info = subprocess.run([colmap_exe, '-h'], capture_output=True, text=True)
+        has_cuda = 'with CUDA' in (colmap_info.stdout or '')
+        
+        cmd = [
+            colmap_exe, 'mapper',
+            '--database_path', str(paths['database_path']),
+            '--image_path', str(paths['images_path']),
+            '--output_path', str(paths['sparse_path']),
+            '--Mapper.min_num_matches', str(colmap_config['min_num_matches']),
+            '--Mapper.min_model_size', str(colmap_config['min_model_size']),
+            '--Mapper.max_num_models', str(colmap_config['max_num_models']),
+            '--Mapper.init_num_trials', str(colmap_config['init_num_trials']),
+            '--Mapper.max_extra_param', str(colmap_config['max_extra_param']),
+            # Performance optimizations
+            '--Mapper.num_threads', str(os.cpu_count() or 8)  # Use all CPU cores
+        ]
+        
+        if has_cuda:
+            append_log_line(project_id, "🚀 GPU-enabled COLMAP detected")
+        else:
+            append_log_line(project_id, "ℹ️ Using CPU-only COLMAP")
+            
+        append_log_line(project_id, f"🔧 Using {os.cpu_count() or 8} CPU threads for mapper")
+
+        sparse_tracker = {'registered': 0}
+
+        def sparse_line_handler(line):
+            if num_images == 0:
+                return
+
+            # Debug logging for sparse reconstruction
+            if any(keyword in line.lower() for keyword in ['registering', 'registered', 'reconstruction', 'bundle', 'mapper']):
+                append_log_line(project_id, f"[DEBUG] Sparse reconstruction: {line.strip()}")
+
+            # Enhanced patterns for sparse reconstruction
+            patterns = [
+                r'Registering image #(\d+)',              # Direct registration
+                r'Registered image #(\d+)',               # Registration complete
+                r'Processing image (\d+)/(\d+)',          # With progress
+                r'Reconstruction: (\d+)/(\d+)',           # Reconstruction progress
+                r'Bundle adjustment: (\d+) images',       # Bundle adjustment
+                r'Image #(\d+)',                          # Simple image format
+                r'(\d+) images registered',               # Summary format
+                r'Registering\s+(\d+)\s*/\s*(\d+)',       # Generic registering
+            ]
+
+            for pattern in patterns:
+                match = re.search(pattern, line, re.IGNORECASE)
+                if match:
+                    if len(match.groups()) == 2:  # Progress format
+                        current = int(match.group(1))
+                        total = int(match.group(2))
+                        if total != num_images:
+                            total = num_images
+                        if current > total:
+                            current = total
+                    else:  # Single number format
+                        sparse_tracker['registered'] += 1
+                        current = sparse_tracker['registered']
+                        total = num_images
+                        if current > total:
+                            current = total
+
+                    percent = int((current / total) * 100)
+
+                    details = {
+                        'text': f'Images registered: {current}/{total}',
+                        'current_item': current,
+                        'total_items': total,
+                        'item_name': f'Image {current}'
+                    }
+
+                    # Emit real-time progress via WebSocket
+                    emit_stage_progress(project_id, 'sparse_reconstruction', percent, details)
+
+                    update_state(project_id, 'sparse_reconstruction', progress=min(percent, 99), details=details)
+                    update_stage_detail(project_id, 'sparse_reconstruction', text=f'Images registered: {current}/{total}', subtext=None)
+                    return
+
+        run_command_with_logs(project_id, cmd, line_handler=sparse_line_handler)
+
+        update_state(project_id, 'sparse_reconstruction', status='completed', progress=100)
+        registered = sparse_tracker['registered'] if sparse_tracker['registered'] else num_images
+        update_stage_detail(project_id, 'sparse_reconstruction', text=f'Images registered: {min(registered, num_images)}/{num_images}', subtext='Sparse reconstruction complete')
+        append_log_line(project_id, "✅ Sparse Reconstruction completed")
+
+        # Select the best reconstruction model (with most registered images)
+        # This also renames it to 0/ and deletes inferior models
+        update_state(project_id, 'model_conversion', status='running')
+        update_stage_detail(project_id, 'model_conversion', text='Organizing sparse model...', subtext=None)
+        append_log_line(project_id, "🔄 Organizing Model Structure...")
+
+        sparse_model_path = select_best_sparse_model(paths['sparse_path'], project_id)
+
+        if not sparse_model_path:
+            raise Exception("No sparse reconstruction found")
+
+        update_state(project_id, 'model_conversion', status='completed', progress=100)
+        update_stage_detail(project_id, 'model_conversion', text='Model organization complete', subtext=None)
+        append_log_line(project_id, "✅ Model Organization completed")
+
+        # 5. Enhanced OpenSplat Training
+        update_state(project_id, 'gaussian_splatting', status='running')
+
+        # Get high-quality OpenSplat configuration
+        quality_mode = config.get('quality_mode', 'balanced')
+
+        # Pass config as custom_params if in custom mode
+        custom_params = config if quality_mode == 'custom' else None
+        opensplat_config = get_opensplat_config(quality_mode, num_images, custom_params)
+
+        # Use custom iterations if provided, otherwise use quality config
+        enhanced_iterations = opensplat_config['iterations']
+        if quality_mode == 'custom':
+            append_log_line(project_id, f"🔧 Using custom quality mode: {enhanced_iterations} iterations")
+        else:
+            append_log_line(project_id, f"🎯 Using {quality_mode} quality mode: {enhanced_iterations} iterations")
+
+        # Calculate progress and remaining time
+        elapsed = time.time() - processing_start_time
+        estimated_remaining = max(0, time_estimate.total_seconds - elapsed)
+        progress_pct = min(95, int((elapsed / time_estimate.total_seconds) * 100))
+
+        append_log_line(project_id, f"⏱️  Progress: {progress_pct}% | Remaining: ~{time_estimator.format_time_display(estimated_remaining)}")
+
+        update_stage_detail(project_id, 'gaussian_splatting',
+                          text=f'Training iterations: 0/{enhanced_iterations}',
+                          subtext=f'Quality: {quality_mode.title()}')
+        append_log_line(project_id, "🔄 Running High-Quality Gaussian Splatting Training...")
+
+        opensplat_binary = app_config.OPENSPLAT_BINARY_PATH
+        if opensplat_binary.is_dir():
+            potential_binary = opensplat_binary / 'opensplat'
+            if potential_binary.exists():
+                opensplat_binary = potential_binary
+
+        if not opensplat_binary.exists():
+            raise Exception(f"OpenSplat binary not found at {opensplat_binary}")
+
+        opensplat_working_dir = opensplat_binary.parent if opensplat_binary.is_file() else opensplat_binary
+
+        output_ply = paths['results_path'] / f"{project_id}_{quality_mode}_{enhanced_iterations}iter.ply"
+
+        # Enhanced OpenSplat command with quality parameters
+        # OpenSplat expects a COLMAP project folder with images/ and sparse/0/
+        cmd = [
+            str(opensplat_binary),
+            str(paths['project_path'].absolute()),
+            '-n', str(enhanced_iterations),
+            '--output', str(output_ply.absolute())
+        ]
+
+        # Add advanced quality parameters for high/ultra/custom modes (using correct OpenSplat parameter names)
+        if quality_mode in ['high', 'ultra', 'custom', 'balanced']:
+            # Map our config to actual OpenSplat parameters
+            densify_threshold = opensplat_config.get('densify_grad_threshold')
+            refine_every = 75
+            warmup = 750
+            ssim = 0.25
+
+            # Learning rates from opensplat_config (High quality defaults)
+            learning_rate = opensplat_config.get('learning_rate')
+            position_lr_init = opensplat_config.get('position_lr_init')
+            position_lr_final = opensplat_config.get('position_lr_final')
+            feature_lr = opensplat_config.get('feature_lr')
+            opacity_lr = opensplat_config.get('opacity_lr')
+            scaling_lr = opensplat_config.get('scaling_lr')
+            rotation_lr = opensplat_config.get('rotation_lr')
+            percent_dense = opensplat_config.get('percent_dense')
+
+            # Override with custom parameters if provided (only use non-None values)
+            if quality_mode == 'custom':
+                custom_densify = config.get('densify_grad_threshold')
+                custom_refine = config.get('refine_every')
+                custom_warmup = config.get('warmup_length')
+                custom_ssim = config.get('ssim_weight')
+
+                # Custom learning rates
+                custom_lr = config.get('learning_rate')
+                custom_pos_lr_init = config.get('position_lr_init')
+                custom_pos_lr_final = config.get('position_lr_final')
+                custom_feat_lr = config.get('feature_lr')
+                custom_opacity_lr = config.get('opacity_lr')
+                custom_scaling_lr = config.get('scaling_lr')
+                custom_rotation_lr = config.get('rotation_lr')
+                custom_percent_dense = config.get('percent_dense')
+
+                # Only override if not None
+                if custom_densify is not None:
+                    densify_threshold = custom_densify
+                if custom_refine is not None:
+                    refine_every = custom_refine
+                if custom_warmup is not None:
+                    warmup = custom_warmup
+                if custom_ssim is not None:
+                    ssim = custom_ssim
+
+                # Override learning rates if provided
+                if custom_lr is not None:
+                    learning_rate = custom_lr
+                if custom_pos_lr_init is not None:
+                    position_lr_init = custom_pos_lr_init
+                if custom_pos_lr_final is not None:
+                    position_lr_final = custom_pos_lr_final
+                if custom_feat_lr is not None:
+                    feature_lr = custom_feat_lr
+                if custom_opacity_lr is not None:
+                    opacity_lr = custom_opacity_lr
+                if custom_scaling_lr is not None:
+                    scaling_lr = custom_scaling_lr
+                if custom_rotation_lr is not None:
+                    rotation_lr = custom_rotation_lr
+                if custom_percent_dense is not None:
+                    percent_dense = custom_percent_dense
+
+                append_log_line(project_id, f"🔧 Custom OpenSplat params: densify={densify_threshold}, refine={refine_every}, warmup={warmup}, ssim={ssim}")
+            elif quality_mode == 'ultra':
+                refine_every = 50
+                warmup = 1000
+                ssim = 0.3
+            elif quality_mode == 'high':
+                refine_every = 75
+                warmup = 750
+                ssim = 0.25
+
+            # Add only parameters that OpenSplat actually supports
+            if densify_threshold is not None:
+                cmd.extend(['--densify-grad-thresh', str(densify_threshold)])
+            cmd.extend(['--refine-every', str(refine_every)])
+            cmd.extend(['--warmup-length', str(warmup)])
+            cmd.extend(['--ssim-weight', str(ssim)])
+
+            # OpenSplat 1.1.5 does NOT support learning rate parameters
+            # These are internal to the training and cannot be overridden via CLI
+            # Available parameters: densify-grad-thresh, refine-every, warmup-length, ssim-weight, reset-alpha-every
+
+            if quality_mode == 'ultra':
+                cmd.extend(['--reset-alpha-every', '20'])   # More frequent opacity reset (default: 30)
+
+            append_log_line(project_id, f"⚡ Enhanced parameters: densify_threshold={densify_threshold}, refine_every={refine_every}")
+
+        iteration_total = enhanced_iterations
+
+        training_progress = {'current': 0, 'total': iteration_total}
+
+        def training_line_handler(line):
+            # Debug logging for training
+            if any(keyword in line.lower() for keyword in ['iteration', 'step', 'epoch', 'training', 'iter']):
+                append_log_line(project_id, f"[DEBUG] Training: {line.strip()}")
+
+            # Enhanced patterns for training progress - OpenSplat specific patterns
+            patterns = [
+                r'Iteration\s+(\d+)/(\d+)',                     # Standard iteration
+                r'Step\s+(\d+)/(\d+)',                          # Step format
+                r'Epoch\s+(\d+)/(\d+)',                         # Epoch format
+                r'Progress:\s+(\d+)/(\d+)',                     # Progress format
+                r'Training\s+(\d+)/(\d+)',                      # Training format
+                r'iter\s*:\s*(\d+)\s*/\s*(\d+)',                # iter: format
+                r'(\d+)\s*/\s*(\d+)\s*iterations?',             # Generic iterations
+                r'Iteration\s+(\d+)\s+\(.*?\)\s*/\s*(\d+)',     # Iteration with loss info
+                r'\[(\d+)/(\d+)\]',                             # Bracket format
+                r'it\s*(\d+)/(\d+)',                            # it format
+                r'step\s*(\d+)\s*\/\s*(\d+)',                   # step format
+            ]
+
+            for pattern in patterns:
+                match = re.search(pattern, line, re.IGNORECASE)
+                if match:
+                    current = int(match.group(1))
+                    total = int(match.group(2))
+                    training_progress['current'] = current
+                    training_progress['total'] = total
+
+                    # Validate total against iteration_total
+                    if total != iteration_total and iteration_total > 0:
+                        total = iteration_total
+
+                    if total > 0:
+                        percent = int((min(current, total) / total) * 100)
+
+                        details = {
+                            'text': f'Training iterations: {current}/{total}',
+                            'current_item': current,
+                            'total_items': total,
+                            'item_name': f'Iteration {current}'
+                        }
+
+                        # Emit real-time progress via WebSocket
+                        emit_stage_progress(project_id, 'gaussian_splatting', percent, details)
+
+                        update_state(project_id, 'gaussian_splatting', progress=min(percent, 99), details=details)
+                        update_stage_detail(project_id, 'gaussian_splatting', text=f'Training iterations: {current}/{total}', subtext=None)
+                    return
+
+            # Fallback for simple iteration counting
+            if any(keyword in line.lower() for keyword in ['iteration', 'step']):
+                # Try to extract just a number for simple progress tracking
+                number_match = re.search(r'(\d+)', line)
+                if number_match:
+                    current = int(number_match.group(1))
+                    if iteration_total > 0 and current <= iteration_total:
+                        percent = int((current / iteration_total) * 100)
+
+                        training_progress['current'] = current
+                        training_progress['total'] = iteration_total
+
+                        details = {
+                            'text': f'Training iterations: {current}/{iteration_total}',
+                            'current_item': current,
+                            'total_items': iteration_total,
+                            'item_name': f'Step {current}'
+                        }
+
+                        emit_stage_progress(project_id, 'gaussian_splatting', percent, details)
+                        update_state(project_id, 'gaussian_splatting', progress=min(percent, 99), details=details)
+                        update_stage_detail(
+                            project_id,
+                            'gaussian_splatting',
+                            text=f'Training iterations: {current}/{iteration_total}',
+                            subtext=None
+                        )
+
+        run_command_with_logs(project_id, cmd, cwd=opensplat_working_dir, line_handler=training_line_handler)
+
+        update_state(project_id, 'gaussian_splatting', status='completed', progress=100)
+        current = training_progress['current'] or iteration_total or 0
+        total = training_progress['total'] or iteration_total or current
+        if total:
+            update_stage_detail(project_id, 'gaussian_splatting', text=f'Training iterations: {min(current, total)}/{total}', subtext='Training complete')
+        else:
+            update_stage_detail(project_id, 'gaussian_splatting', text='Training complete', subtext=None)
+        append_log_line(project_id, "✅ PobimSplats Training completed")
+
+        # Finalize
+        update_state(project_id, 'finalizing', status='running')
+        update_stage_detail(project_id, 'finalizing', text='Packaging outputs...', subtext=None)
+        update_state(project_id, 'finalizing', status='completed', progress=100)
+        update_stage_detail(project_id, 'finalizing', text='Processing complete', subtext=None)
+
+        with project_store.status_lock:
+            project_store.processing_status[project_id]['status'] = 'completed'
+            project_store.processing_status[project_id]['end_time'] = datetime.now().isoformat()
+            save_projects_db()
+
+        append_log_line(project_id, "🎉 PobimSplats processing completed successfully!")
+
+    except Exception as e:
+        logger.error(f"COLMAP pipeline failed for {project_id}: {e}")
+        append_log_line(project_id, f"❌ Pipeline Error: {str(e)}")
+
+        with project_store.status_lock:
+            project_store.processing_status[project_id]['status'] = 'failed'
+            project_store.processing_status[project_id]['error'] = str(e)
+            project_store.processing_status[project_id]['end_time'] = datetime.now().isoformat()
+            save_projects_db()
+
+        raise
+
+
+def run_opensplat_training(project_id, paths, config, processing_start_time, time_estimate, time_estimator):
+    """Run OpenSplat training stage only."""
+    try:
+        images_path = paths['images_path']
+        num_images = len([f for f in os.listdir(images_path)
+                         if f.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.tiff'))])
+
+        # 5. Enhanced OpenSplat Training
+        update_state(project_id, 'gaussian_splatting', status='running')
+
+        # Get high-quality OpenSplat configuration
+        quality_mode = config.get('quality_mode', 'balanced')
+
+        # Pass config as custom_params if in custom mode
+        custom_params = config if quality_mode == 'custom' else None
+        opensplat_config = get_opensplat_config(quality_mode, num_images, custom_params)
+
+        # Use custom iterations if provided, otherwise use quality config
+        enhanced_iterations = opensplat_config['iterations']
+        if quality_mode == 'custom':
+            append_log_line(project_id, f"🔧 Using custom quality mode: {enhanced_iterations} iterations")
+        else:
+            append_log_line(project_id, f"🎯 Using {quality_mode} quality mode: {enhanced_iterations} iterations")
+
+        # Calculate progress and remaining time
+        elapsed = time.time() - processing_start_time
+        estimated_remaining = max(0, time_estimate.total_seconds - elapsed)
+        progress_pct = min(95, int((elapsed / time_estimate.total_seconds) * 100))
+
+        append_log_line(project_id, f"⏱️  Progress: {progress_pct}% | Remaining: ~{time_estimator.format_time_display(estimated_remaining)}")
+
+        update_stage_detail(project_id, 'gaussian_splatting',
+                          text=f'Training iterations: 0/{enhanced_iterations}',
+                          subtext=f'Quality: {quality_mode.title()}')
+        append_log_line(project_id, "🔄 Running High-Quality Gaussian Splatting Training...")
+
+        opensplat_binary = app_config.OPENSPLAT_BINARY_PATH
+        if opensplat_binary.is_dir():
+            potential_binary = opensplat_binary / 'opensplat'
+            if potential_binary.exists():
+                opensplat_binary = potential_binary
+
+        if not opensplat_binary.exists():
+            raise Exception(f"OpenSplat binary not found at {opensplat_binary}")
+
+        opensplat_working_dir = opensplat_binary.parent if opensplat_binary.is_file() else opensplat_binary
+
+        output_ply = paths['results_path'] / f"{project_id}_{quality_mode}_{enhanced_iterations}iter.ply"
+
+        # Enhanced OpenSplat command with quality parameters
+        # OpenSplat expects a COLMAP project folder with images/ and sparse/0/
+        cmd = [
+            str(opensplat_binary),
+            str(paths['project_path'].absolute()),
+            '-n', str(enhanced_iterations),
+            '--output', str(output_ply.absolute())
+        ]
+
+        # Add advanced quality parameters for high/ultra/custom modes
+        if quality_mode in ['high', 'ultra', 'custom', 'balanced']:
+            densify_threshold = opensplat_config.get('densify_grad_threshold')
+            refine_every = 75
+            warmup = 750
+            ssim = 0.25
+
+            # Learning rates from opensplat_config (High quality defaults)
+            learning_rate = opensplat_config.get('learning_rate')
+            position_lr_init = opensplat_config.get('position_lr_init')
+            position_lr_final = opensplat_config.get('position_lr_final')
+            feature_lr = opensplat_config.get('feature_lr')
+            opacity_lr = opensplat_config.get('opacity_lr')
+            scaling_lr = opensplat_config.get('scaling_lr')
+            rotation_lr = opensplat_config.get('rotation_lr')
+            percent_dense = opensplat_config.get('percent_dense')
+
+            # Override with custom parameters if provided (only use non-None values)
+            if quality_mode == 'custom':
+                custom_densify = config.get('densify_grad_threshold')
+                custom_refine = config.get('refine_every')
+                custom_warmup = config.get('warmup_length')
+                custom_ssim = config.get('ssim_weight')
+
+                # Custom learning rates
+                custom_lr = config.get('learning_rate')
+                custom_pos_lr_init = config.get('position_lr_init')
+                custom_pos_lr_final = config.get('position_lr_final')
+                custom_feat_lr = config.get('feature_lr')
+                custom_opacity_lr = config.get('opacity_lr')
+                custom_scaling_lr = config.get('scaling_lr')
+                custom_rotation_lr = config.get('rotation_lr')
+                custom_percent_dense = config.get('percent_dense')
+
+                # Only override if not None
+                if custom_densify is not None:
+                    densify_threshold = custom_densify
+                if custom_refine is not None:
+                    refine_every = custom_refine
+                if custom_warmup is not None:
+                    warmup = custom_warmup
+                if custom_ssim is not None:
+                    ssim = custom_ssim
+
+                # Override learning rates if provided
+                if custom_lr is not None:
+                    learning_rate = custom_lr
+                if custom_pos_lr_init is not None:
+                    position_lr_init = custom_pos_lr_init
+                if custom_pos_lr_final is not None:
+                    position_lr_final = custom_pos_lr_final
+                if custom_feat_lr is not None:
+                    feature_lr = custom_feat_lr
+                if custom_opacity_lr is not None:
+                    opacity_lr = custom_opacity_lr
+                if custom_scaling_lr is not None:
+                    scaling_lr = custom_scaling_lr
+                if custom_rotation_lr is not None:
+                    rotation_lr = custom_rotation_lr
+                if custom_percent_dense is not None:
+                    percent_dense = custom_percent_dense
+
+                append_log_line(project_id, f"🔧 Custom OpenSplat params: densify={densify_threshold}, refine={refine_every}, warmup={warmup}, ssim={ssim}")
+            elif quality_mode == 'ultra':
+                refine_every = 50
+                warmup = 1000
+                ssim = 0.3
+            elif quality_mode == 'high':
+                refine_every = 75
+                warmup = 750
+                ssim = 0.25
+
+            # Add only parameters that OpenSplat actually supports
+            if densify_threshold is not None:
+                cmd.extend(['--densify-grad-thresh', str(densify_threshold)])
+            cmd.extend(['--refine-every', str(refine_every)])
+            cmd.extend(['--warmup-length', str(warmup)])
+            cmd.extend(['--ssim-weight', str(ssim)])
+
+            # OpenSplat 1.1.5 does NOT support learning rate parameters
+            # These are internal to the training and cannot be overridden via CLI
+            # Available parameters: densify-grad-thresh, refine-every, warmup-length, ssim-weight, reset-alpha-every
+
+            if quality_mode == 'ultra':
+                cmd.extend(['--reset-alpha-every', '20'])
+
+            append_log_line(project_id, f"⚡ Enhanced parameters: densify_threshold={densify_threshold}")
+
+        iteration_total = enhanced_iterations
+        training_progress = {'current': 0, 'total': iteration_total}
+
+        def training_line_handler(line):
+            patterns = [
+                r'Iteration\s+(\d+)/(\d+)',
+                r'Step\s+(\d+)/(\d+)',
+                r'iter\s*:\s*(\d+)\s*/\s*(\d+)',
+                r'(\d+)\s*/\s*(\d+)\s*iterations?',
+            ]
+
+            for pattern in patterns:
+                match = re.search(pattern, line, re.IGNORECASE)
+                if match:
+                    current = int(match.group(1))
+                    total = int(match.group(2))
+                    training_progress['current'] = current
+                    training_progress['total'] = total
+
+                    if total != iteration_total and iteration_total > 0:
+                        total = iteration_total
+
+                    if total > 0:
+                        percent = int((min(current, total) / total) * 100)
+                        details = {
+                            'text': f'Training iterations: {current}/{total}',
+                            'current_item': current,
+                            'total_items': total,
+                        }
+                        emit_stage_progress(project_id, 'gaussian_splatting', percent, details)
+                        update_state(project_id, 'gaussian_splatting', progress=min(percent, 99), details=details)
+                        update_stage_detail(project_id, 'gaussian_splatting', text=f'Training iterations: {current}/{total}', subtext=None)
+                    return
+
+        run_command_with_logs(project_id, cmd, cwd=opensplat_working_dir, line_handler=training_line_handler)
+
+        update_state(project_id, 'gaussian_splatting', status='completed', progress=100)
+        append_log_line(project_id, "✅ PobimSplats Training completed")
+
+        # Finalize
+        finalize_project(project_id)
+
+    except Exception as e:
+        logger.error(f"OpenSplat training failed for {project_id}: {e}")
+        append_log_line(project_id, f"❌ Training Error: {str(e)}")
+        raise
+
+
+def finalize_project(project_id):
+    """Finalize project completion."""
+    try:
+        update_state(project_id, 'finalizing', status='running')
+        update_stage_detail(project_id, 'finalizing', text='Packaging outputs...', subtext=None)
+        update_state(project_id, 'finalizing', status='completed', progress=100)
+        update_stage_detail(project_id, 'finalizing', text='Processing complete', subtext=None)
+
+        with project_store.status_lock:
+            project_store.processing_status[project_id]['status'] = 'completed'
+            project_store.processing_status[project_id]['end_time'] = datetime.now().isoformat()
+            save_projects_db()
+
+        append_log_line(project_id, "🎉 PobimSplats processing completed successfully!")
+
+    except Exception as e:
+        logger.error(f"Finalization failed for {project_id}: {e}")
+        append_log_line(project_id, f"❌ Finalization Error: {str(e)}")
+        raise

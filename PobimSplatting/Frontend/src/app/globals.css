@@ -1,0 +1,116 @@
+@import "tailwindcss";
+
+:root {
+  /* Minimal Black & White Theme */
+  --background: #ffffff;
+  --foreground: #000000;
+  --gray-50: #fafafa;
+  --gray-100: #f5f5f5;
+  --gray-200: #e5e5e5;
+  --gray-300: #d4d4d4;
+  --gray-400: #a3a3a3;
+  --gray-500: #737373;
+  --gray-600: #525252;
+  --gray-700: #404040;
+  --gray-800: #262626;
+  --gray-900: #171717;
+
+  /* Accent */
+  --accent: #000000;
+  --accent-hover: #262626;
+
+  /* Border */
+  --border: #e5e5e5;
+  --border-hover: #000000;
+
+  /* Pastel Status Colors */
+  --success-bg: #d1fae5;
+  --success-border: #6ee7b7;
+  --success-text: #065f46;
+  --success-icon: #10b981;
+
+  --error-bg: #fee2e2;
+  --error-border: #fca5a5;
+  --error-text: #991b1b;
+  --error-icon: #ef4444;
+
+  --warning-bg: #fef3c7;
+  --warning-border: #fcd34d;
+  --warning-text: #92400e;
+
+  --processing-bg: #dbeafe;
+  --processing-border: #93c5fd;
+  --processing-text: #1e3a8a;
+
+  --navbar-height: 4rem;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+@layer components {
+  /* Minimal Button Styles */
+  .btn-primary {
+    @apply inline-flex items-center px-4 py-2 text-sm font-medium rounded-xl text-white bg-black hover:bg-gray-800 transition-colors;
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center px-4 py-2 border border-gray-200 text-sm font-medium rounded-xl text-black hover:bg-gray-50 transition-colors;
+  }
+
+  .btn-ghost {
+    @apply inline-flex items-center px-4 py-2 text-sm font-medium text-gray-600 hover:text-black transition-colors;
+  }
+
+  /* Card Styles */
+  .card {
+    @apply border border-gray-200 rounded-2xl bg-white transition-all;
+  }
+
+  .card-hover {
+    @apply border border-gray-200 rounded-2xl bg-white transition-all hover:border-black hover:shadow-lg;
+  }
+
+  /* Input Styles */
+  .input {
+    @apply w-full px-4 py-3 border border-gray-200 rounded-xl text-black placeholder-gray-400 focus:border-black focus:outline-none focus:ring-1 focus:ring-black transition-colors;
+  }
+
+  /* Status Indicators */
+  .status-badge {
+    @apply px-3 py-1 rounded-full text-xs font-medium;
+  }
+
+  .status-processing {
+    @apply px-3 py-1 rounded-full text-xs font-medium;
+    background-color: var(--processing-bg);
+    color: var(--processing-text);
+    border: 1px solid var(--processing-border);
+  }
+
+  .status-completed {
+    @apply px-3 py-1 rounded-full text-xs font-medium;
+    background-color: var(--success-bg);
+    color: var(--success-text);
+    border: 1px solid var(--success-border);
+  }
+
+  .status-failed {
+    @apply px-3 py-1 rounded-full text-xs font-medium;
+    background-color: var(--error-bg);
+    color: var(--error-text);
+    border: 1px solid var(--error-border);
+  }
+}

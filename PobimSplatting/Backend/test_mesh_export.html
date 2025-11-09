@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mesh Export Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 50px auto;
+            padding: 20px;
+        }
+        .container {
+            border: 1px solid #ccc;
+            padding: 20px;
+            border-radius: 8px;
+        }
+        button {
+            background: #0070f3;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            font-size: 16px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #0051cc;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .status {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 5px;
+            background: #f5f5f5;
+        }
+        .log {
+            margin-top: 20px;
+            padding: 15px;
+            background: #000;
+            color: #0f0;
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 400px;
+            overflow-y: auto;
+            border-radius: 5px;
+        }
+        .log div {
+            margin-bottom: 5px;
+        }
+        .success { color: #0f0; }
+        .error { color: #f00; }
+        .info { color: #00f; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎨 Mesh Export Test</h1>
+        
+        <div>
+            <label>Project ID:</label>
+            <input type="text" id="projectId" style="width: 400px; padding: 5px;" 
+                   value="58e94cf4-569b-4857-963e-25622333b1d8">
+        </div>
+        
+        <div style="margin-top: 20px;">
+            <label>Method:</label>
+            <select id="method" style="padding: 5px;">
+                <option value="poisson">Poisson</option>
+                <option value="delaunay">Delaunay</option>
+            </select>
+            
+            <label>Quality:</label>
+            <select id="quality" style="padding: 5px;">
+                <option value="low">Low</option>
+                <option value="medium" selected>Medium</option>
+                <option value="high">High</option>
+            </select>
+            
+            <label>Format:</label>
+            <select id="format" style="padding: 5px;">
+                <option value="glb" selected>GLB</option>
+                <option value="obj">OBJ</option>
+                <option value="ply">PLY</option>
+                <option value="dae">DAE</option>
+            </select>
+        </div>
+        
+        <div style="margin-top: 20px;">
+            <button onclick="testExport()">🚀 Test Export</button>
+            <button onclick="checkExports()">📋 Check Exports</button>
+            <button onclick="clearLog()">🗑️ Clear Log</button>
+        </div>
+        
+        <div class="status" id="status">
+            Status: Ready
+        </div>
+        
+        <div class="log" id="log"></div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:5000';
+        
+        function addLog(message, type = 'info') {
+            const logDiv = document.getElementById('log');
+            const timestamp = new Date().toISOString().split('T')[1].split('.')[0];
+            const div = document.createElement('div');
+            div.className = type;
+            div.textContent = `[${timestamp}] ${message}`;
+            logDiv.appendChild(div);
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+        
+        function clearLog() {
+            document.getElementById('log').innerHTML = '';
+        }
+        
+        function updateStatus(message) {
+            document.getElementById('status').textContent = message;
+        }
+        
+        async function testExport() {
+            const projectId = document.getElementById('projectId').value;
+            const method = document.getElementById('method').value;
+            const quality = document.getElementById('quality').value;
+            const format = document.getElementById('format').value;
+            
+            addLog('='.repeat(70));
+            addLog('Starting mesh export test...', 'info');
+            addLog(`Project ID: ${projectId}`, 'info');
+            addLog(`Settings: ${method}, ${quality}, ${format}`, 'info');
+            
+            updateStatus('Creating textured mesh...');
+            
+            try {
+                addLog('Calling API: POST /api/project/${projectId}/create_textured_mesh', 'info');
+                
+                const response = await fetch(`${API_BASE}/api/project/${projectId}/create_textured_mesh`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        method,
+                        quality,
+                        format
+                    })
+                });
+                
+                addLog(`Response status: ${response.status}`, 'info');
+                
+                const data = await response.json();
+                addLog(`Response data: ${JSON.stringify(data, null, 2)}`, 'info');
+                
+                if (data.success) {
+                    addLog('✅ Export started successfully!', 'success');
+                    addLog(`Expected filename: ${data.filename}`, 'success');
+                    updateStatus(`Export started: ${data.filename}`);
+                    
+                    if (data.status === 'processing') {
+                        addLog('⏳ Export is processing in background...', 'info');
+                        addLog('💡 Use "Check Exports" button to see when it completes', 'info');
+                    }
+                } else {
+                    addLog('❌ Export failed!', 'error');
+                    addLog(`Error: ${data.error || 'Unknown error'}`, 'error');
+                    updateStatus(`Failed: ${data.error}`);
+                }
+            } catch (error) {
+                addLog('❌ Exception occurred!', 'error');
+                addLog(`Error: ${error.message}`, 'error');
+                console.error('Full error:', error);
+                updateStatus(`Error: ${error.message}`);
+            }
+            
+            addLog('='.repeat(70));
+        }
+        
+        async function checkExports() {
+            const projectId = document.getElementById('projectId').value;
+            
+            addLog('Checking available exports...', 'info');
+            updateStatus('Checking exports...');
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/project/${projectId}/available_exports`);
+                const data = await response.json();
+                
+                addLog(`Found ${data.exports?.length || 0} exports`, 'info');
+                
+                if (data.exports && data.exports.length > 0) {
+                    data.exports.forEach(exp => {
+                        addLog(`  📦 ${exp.filename} (${exp.size_mb} MB)`, 'success');
+                        addLog(`     Download: ${API_BASE}${exp.download_url}`, 'success');
+                    });
+                    updateStatus(`Found ${data.exports.length} export(s)`);
+                } else {
+                    addLog('  No exports found yet', 'info');
+                    updateStatus('No exports available');
+                }
+            } catch (error) {
+                addLog('❌ Error checking exports', 'error');
+                addLog(`Error: ${error.message}`, 'error');
+                updateStatus(`Error: ${error.message}`);
+            }
+        }
+        
+        // Auto-load on page load
+        addLog('🚀 Test page loaded', 'success');
+        addLog('💡 Click "Test Export" to start mesh export', 'info');
+        addLog('💡 Click "Check Exports" to see completed exports', 'info');
+    </script>
+</body>
+</html>

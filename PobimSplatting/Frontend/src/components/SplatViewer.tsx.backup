@@ -1,0 +1,1174 @@
+'use client';
+
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { PointerEvent as ReactPointerEvent } from 'react';
+import { Ruler } from 'lucide-react';
+import { useSearchParams } from 'next/navigation';
+import { InfoPanel } from './splat-viewer/InfoPanel';
+import { TransformPanel } from './splat-viewer/TransformPanel';
+import { ViewCube } from './splat-viewer/ViewCube';
+import { IconSidebar } from './splat-viewer/IconSidebar';
+import { Vec3, useSplatScene } from './splat-viewer/useSplatScene';
+import {
+  useMeasurementTools,
+  type MeasurementOverlayState,
+} from './splat-viewer/measurement/useMeasurementTools';
+
+const DEFAULT_ROTATION: Vec3 = { x: 0, y: 0, z: 0 };
+const DEFAULT_POSITION: Vec3 = { x: 0, y: 0, z: 0 };
+
+export default function SplatViewer() {
+  const searchParams = useSearchParams();
+  const fileUrl = searchParams.get('file') || searchParams.get('url');
+  const projectId = searchParams.get('project');
+
+  const plyUrl = useMemo(() => {
+    if (fileUrl) return fileUrl;
+    if (projectId) {
+      const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
+      return `${apiBaseUrl}/api/ply/${projectId}`;
+    }
+    return null;
+  }, [fileUrl, projectId]);
+
+  const {
+    canvasRef,
+    loading,
+    error,
+    splatCount,
+    resetScene,
+    syncModelPosition,
+    syncModelRotation,
+    adjustZoom,
+    cameraAxes,
+    alignCamera,
+    backgroundOptions,
+    activeBackground,
+    setBackground,
+    showGrid,
+    setGridVisible,
+    showAxes,
+    setAxesVisible,
+    pickWorldPoint,
+    projectWorldToScreen,
+  } = useSplatScene(plyUrl);
+
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showInfo, setShowInfo] = useState(false);
+  const [showTransformPanel, setShowTransformPanel] = useState(false);
+  const [modelRotation, setModelRotation] = useState<Vec3>(() => ({ ...DEFAULT_ROTATION }));
+  const [modelPosition, setModelPosition] = useState<Vec3>(() => ({ ...DEFAULT_POSITION }));
+  const measurement = useMeasurementTools({ pickWorldPoint, projectWorldToScreen });
+
+  const {
+    mode: measureMode,
+    isDistanceMode,
+    isAreaMode,
+    toggleDistanceMode,
+    toggleAreaMode,
+    clearAll,
+    overlayState,
+    message: measurementMessage,
+    messageOffsetWithPanel,
+    selectedDistanceLabel,
+    selectedDistanceId,
+    selectedAreaLabel,
+    selectedAreaId,
+    selectDistance,
+    selectArea,
+    handleDeleteMeasurement,
+    handleDeleteArea,
+    openRescaleDialog,
+    rescaleDialog,
+  } = measurement;
+
+  const {
+    open: rescaleDialogOpen,
+    metersInput: rescaleMetersInput,
+    centimetersInput: rescaleCentimetersInput,
+    setMetersInput: setRescaleMetersInput,
+    setCentimetersInput: setRescaleCentimetersInput,
+    onSubmit: handleRescaleSubmit,
+    onClose: closeRescaleDialog,
+  } = rescaleDialog;
+
+  const hasFloatingPanel = messageOffsetWithPanel;
+
+  const goBack = useCallback(() => window.history.back(), []);
+
+  const resetView = useCallback(() => {
+    resetScene();
+    setModelRotation({ ...DEFAULT_ROTATION });
+    setModelPosition({ ...DEFAULT_POSITION });
+  }, [resetScene]);
+
+  const updateModelRotation = useCallback((axis: keyof Vec3, value: number) => {
+    setModelRotation((prev) => {
+      const next = { ...prev, [axis]: value };
+      syncModelRotation(next);
+      return next;
+    });
+  }, [syncModelRotation]);
+
+  const updateModelPosition = useCallback((axis: keyof Vec3, value: number) => {
+    setModelPosition((prev) => {
+      const next = { ...prev, [axis]: value };
+      syncModelPosition(next);
+      return next;
+    });
+  }, [syncModelPosition]);
+
+  const nudgeModelRotation = useCallback((axis: keyof Vec3, delta: number) => {
+    setModelRotation((prev) => {
+      const next = { ...prev, [axis]: prev[axis] + delta };
+      syncModelRotation(next);
+      return next;
+    });
+  }, [syncModelRotation]);
+
+  const zoomCamera = useCallback((amount: number) => {
+    adjustZoom(amount);
+  }, [adjustZoom]);
+
+  const toggleFullscreen = useCallback(() => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen();
+      setIsFullscreen(true);
+    } else {
+      document.exitFullscreen();
+      setIsFullscreen(false);
+    }
+  }, []);
+
+  // Exit measurement mode by toggling the current mode off
+  const exitMeasurementMode = useCallback(() => {
+    if (isDistanceMode) {
+      toggleDistanceMode();
+    } else if (isAreaMode) {
+      toggleAreaMode();
+    }
+  }, [isDistanceMode, isAreaMode, toggleDistanceMode, toggleAreaMode]);
+
+  useEffect(() => {
+    if (!measureMode) {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() === 'escape') {
+        exitMeasurementMode();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [measureMode, exitMeasurementMode]);
+
+  useEffect(() => {
+    if (!measurementMessage || measurementMessagePersistent) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      setMeasurementMessage(null);
+      setMeasurementMessagePersistent(false);
+    }, 2500);
+    return () => window.clearTimeout(timeout);
+  }, [measurementMessage, measurementMessagePersistent]);
+
+  const handleMeasurementPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!isDistanceMode) {
+      return;
+    }
+
+    if (event.button === 2) {
+      event.preventDefault();
+      exitMeasurementMode();
+      return;
+    }
+
+    if (event.button !== 0) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return;
+    }
+
+    const rect = canvas.getBoundingClientRect();
+    const canvasX = event.clientX - rect.left;
+    const canvasY = event.clientY - rect.top;
+
+    const worldPoint = pickWorldPoint(canvasX, canvasY);
+
+    if (!worldPoint) {
+      showMeasurementMessage('ไม่พบข้อมูลจุดในบริเวณนั้น', { persistent: false });
+      return;
+    }
+
+    if (measurementPoints.length === 0) {
+      setMeasurementPoints([worldPoint]);
+      setSnappedPreviewPoint(null);
+      setPreviewSnapAxis(null);
+      setSelectedElement(null);
+      showMeasurementMessage('เลื่อนเมาส์เพื่อเลือกจุดที่สอง (ระบบจะดึงเข้าหาแกนเมื่อระยะห่างน้อย)', { persistent: true });
+      return;
+    }
+
+    const base = measurementPoints[0];
+    let axis = previewSnapAxis;
+    let finalPoint = snappedPreviewPoint ?? worldPoint;
+
+    if (!snappedPreviewPoint) {
+      const snapResult = trySnapToAxis(base, worldPoint);
+      if (snapResult) {
+        finalPoint = snapResult.point;
+        axis = snapResult.axis;
+      }
+    }
+
+    appendMeasurement(base, finalPoint, axis ?? null);
+    setMeasurementPoints([]);
+    setSnappedPreviewPoint(null);
+    setPreviewSnapAxis(null);
+    showMeasurementMessage('บันทึกระยะแล้ว คลิกต่อเพื่อวัดใหม่ หรือคลิกขวาเพื่อหยุด', { persistent: true });
+  }, [
+    isDistanceMode,
+    exitMeasurementMode,
+    canvasRef,
+    pickWorldPoint,
+    measurementPoints,
+    previewSnapAxis,
+    snappedPreviewPoint,
+    appendMeasurement,
+    showMeasurementMessage,
+  ]);
+
+  const handleMeasurementPointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!isDistanceMode) {
+      return;
+    }
+
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return;
+    }
+
+    const rect = canvas.getBoundingClientRect();
+    const canvasX = event.clientX - rect.left;
+    const canvasY = event.clientY - rect.top;
+
+    const worldPoint = pickWorldPoint(canvasX, canvasY);
+
+    if (!worldPoint) {
+      setSnappedPreviewPoint(null);
+      setPreviewSnapAxis(null);
+      return;
+    }
+
+    if (measurementPoints.length === 0) {
+      setSnappedPreviewPoint(null);
+      setPreviewSnapAxis(null);
+      return;
+    }
+
+    if (measurementPoints.length === 1) {
+      const base = measurementPoints[0];
+      const snapResult = trySnapToAxis(base, worldPoint);
+      if (snapResult) {
+        setSnappedPreviewPoint(snapResult.point);
+        setPreviewSnapAxis(snapResult.axis);
+      } else {
+        setSnappedPreviewPoint(worldPoint);
+        setPreviewSnapAxis(null);
+      }
+      return;
+    }
+
+    setSnappedPreviewPoint(null);
+    setPreviewSnapAxis(null);
+  }, [isDistanceMode, canvasRef, pickWorldPoint, measurementPoints]);
+
+  const handleMeasurementPointerLeave = useCallback(() => {
+    if (!isDistanceMode) {
+      return;
+    }
+    if (measurementPoints.length === 1) {
+      setSnappedPreviewPoint(null);
+      setPreviewSnapAxis(null);
+    }
+  }, [isDistanceMode, measurementPoints]);
+
+  const handleAreaPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!isAreaMode) {
+      return;
+    }
+
+    if (event.button === 2) {
+      event.preventDefault();
+      if (areaPoints.length === 0) {
+        exitMeasurementMode();
+      } else if (areaPoints.length >= 3) {
+        finalizeAreaPolygon();
+      } else {
+        showMeasurementMessage('จำเป็นต้องมีอย่างน้อย 3 จุดเพื่อสร้างพื้นที่', { persistent: false });
+      }
+      return;
+    }
+
+    if (event.button !== 0) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return;
+    }
+
+    const rect = canvas.getBoundingClientRect();
+    const canvasX = event.clientX - rect.left;
+    const canvasY = event.clientY - rect.top;
+
+    const worldPoint = pickWorldPoint(canvasX, canvasY);
+
+    if (!worldPoint) {
+      showMeasurementMessage('ไม่พบข้อมูลจุดในบริเวณนั้น', { persistent: false });
+      return;
+    }
+
+    let finalPoint = worldPoint;
+    if (areaPoints.length > 0) {
+      const lastVertex = areaPoints[areaPoints.length - 1];
+      const snapResult = trySnapToAxis(lastVertex, worldPoint);
+      if (snapResult) {
+        finalPoint = snapResult.point;
+      }
+    }
+
+    setAreaPoints((prev) => {
+      const next = [...prev, finalPoint];
+      if (next.length === 1) {
+        showMeasurementMessage('เพิ่มจุดอื่นเพื่อกำหนดพื้นที่', { persistent: true });
+      } else if (next.length === 2) {
+        showMeasurementMessage('เพิ่มจุดต่อไป (ต้องมีอย่างน้อย 3 จุด)', { persistent: true });
+      } else {
+        showMeasurementMessage('คลิกเพิ่มจุดต่อไป หรือคลิกขวาเพื่อปิดพื้นที่', { persistent: true });
+      }
+      return next;
+    });
+
+    setAreaPreviewPoint(null);
+    setSelectedElement(null);
+  }, [
+    isAreaMode,
+    areaPoints,
+    canvasRef,
+    pickWorldPoint,
+    finalizeAreaPolygon,
+    exitMeasurementMode,
+    showMeasurementMessage,
+  ]);
+
+  const handleAreaPointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    if (!isAreaMode) {
+      return;
+    }
+
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return;
+    }
+
+    const rect = canvas.getBoundingClientRect();
+    const canvasX = event.clientX - rect.left;
+    const canvasY = event.clientY - rect.top;
+
+    const worldPoint = pickWorldPoint(canvasX, canvasY);
+
+    if (!worldPoint) {
+      setAreaPreviewPoint(null);
+      return;
+    }
+
+    if (areaPoints.length === 0) {
+      setAreaPreviewPoint(worldPoint);
+      return;
+    }
+
+    const lastVertex = areaPoints[areaPoints.length - 1];
+    const snapResult = trySnapToAxis(lastVertex, worldPoint);
+    if (snapResult) {
+      setAreaPreviewPoint(snapResult.point);
+    } else {
+      setAreaPreviewPoint(worldPoint);
+    }
+  }, [isAreaMode, canvasRef, pickWorldPoint, areaPoints]);
+
+  const handleAreaPointerLeave = useCallback(() => {
+    if (!isAreaMode) {
+      return;
+    }
+    setAreaPreviewPoint(null);
+  }, [isAreaMode]);
+
+  const basePoint = measurementPoints[0] ?? null;
+  const previewDistance = useMemo(() => {
+    if (!basePoint || !snappedPreviewPoint) {
+      return null;
+    }
+    return distanceBetween(basePoint, snappedPreviewPoint);
+  }, [basePoint, snappedPreviewPoint]);
+
+  const previewLabel = useMemo(() => {
+    if (!previewDistance) {
+      return null;
+    }
+    return formatDistance(previewDistance * measurementScale);
+  }, [previewDistance, measurementScale]);
+
+  const previewAxis = measurementPoints.length === 1 ? previewSnapAxis : null;
+
+  const activeAxisForDisplay = previewAxis;
+
+  const previewLabelWithAxis = previewLabel
+    ? `${previewLabel}${previewAxis ? ` · ${SNAP_AXIS_CONFIG[previewAxis].shortLabel}` : ''}`
+    : null;
+
+  const baseProjection = basePoint ? projectWorldToScreen(basePoint) : null;
+  const previewProjection = snappedPreviewPoint ? projectWorldToScreen(snappedPreviewPoint) : null;
+
+  const viewBoxSize = 100;
+  const toViewBox = (projection: { nx: number; ny: number }) => ({
+    x: projection.nx * viewBoxSize,
+    y: projection.ny * viewBoxSize,
+  });
+
+  const measurementScreenData = useMemo<MeasurementScreenDatum[]>(() => {
+    const results: MeasurementScreenDatum[] = [];
+
+    measurements.forEach((measurement) => {
+      const startProjection = projectWorldToScreen(measurement.start);
+      const endProjection = projectWorldToScreen(measurement.end);
+      if (!startProjection || !endProjection || !startProjection.visible || !endProjection.visible) {
+        return;
+      }
+
+      const startView = toViewBox(startProjection);
+      const endView = toViewBox(endProjection);
+      const distance = distanceBetween(measurement.start, measurement.end) * measurementScale;
+      const label = formatDistance(distance);
+      const labelWithAxis = measurement.axis
+        ? `${label} · ${SNAP_AXIS_CONFIG[measurement.axis].shortLabel}`
+        : label;
+      const midPoint = {
+        x: (startProjection.x + endProjection.x) / 2,
+        y: (startProjection.y + endProjection.y) / 2,
+      };
+
+      const isSelected = selectedElement?.type === 'distance' && selectedElement.id === measurement.id;
+
+      results.push({
+        id: measurement.id,
+        startView,
+        endView,
+        labelWithAxis,
+        midPoint,
+        isSelected,
+      });
+    });
+
+    return results;
+  }, [measurements, projectWorldToScreen, toViewBox, measurementScale, selectedElement]);
+
+  const areaScreenData = useMemo<AreaScreenDatum[]>(() => {
+    const data: AreaScreenDatum[] = [];
+
+    areaPolygons.forEach((polygon) => {
+      if (polygon.points.length < 3) {
+        return;
+      }
+
+      const projectedPoints = polygon.points
+        .map((point) => projectWorldToScreen(point))
+        .filter((projection): projection is NonNullable<typeof projection> => Boolean(projection && projection.visible));
+
+      if (projectedPoints.length !== polygon.points.length) {
+        return;
+      }
+
+      const path = projectedPoints.map((projection) => toViewBox(projection));
+
+      const centroid3d = polygon.points.reduce(
+        (acc, point) => ({ x: acc.x + point.x, y: acc.y + point.y, z: acc.z + point.z }),
+        { x: 0, y: 0, z: 0 },
+      );
+      centroid3d.x /= polygon.points.length;
+      centroid3d.y /= polygon.points.length;
+      centroid3d.z /= polygon.points.length;
+
+      const centroidProjection = projectWorldToScreen(centroid3d);
+
+      const centroid = centroidProjection
+        ? { x: centroidProjection.x, y: centroidProjection.y }
+        : {
+            x: projectedPoints.reduce((sum, point) => sum + point.x, 0) / projectedPoints.length,
+            y: projectedPoints.reduce((sum, point) => sum + point.y, 0) / projectedPoints.length,
+          };
+
+      const rawArea = computePolygonArea(polygon.points);
+      const scaledArea = rawArea * measurementScale * measurementScale;
+      const label = formatArea(scaledArea);
+      const isSelected = selectedElement?.type === 'area' && selectedElement.id === polygon.id;
+
+      data.push({ id: polygon.id, path, centroid, label, isSelected });
+    });
+
+    return data;
+  }, [areaPolygons, projectWorldToScreen, toViewBox, measurementScale, selectedElement]);
+
+  const areaPreviewScreen = useMemo(() => {
+    if (!isAreaMode) {
+      return null;
+    }
+
+    if (areaPoints.length === 0 && !areaPreviewPoint) {
+      return null;
+    }
+
+    const previewVertices = [...areaPoints];
+    if (areaPreviewPoint) {
+      previewVertices.push(areaPreviewPoint);
+    }
+
+    const projections = previewVertices
+      .map((point) => projectWorldToScreen(point))
+      .filter((projection): projection is NonNullable<typeof projection> => Boolean(projection && projection.visible));
+
+    if (projections.length !== previewVertices.length) {
+      return null;
+    }
+
+    const path = projections.map((projection) => toViewBox(projection));
+
+    const centroidPx = {
+      x: projections.reduce((sum, projection) => sum + projection.x, 0) / projections.length,
+      y: projections.reduce((sum, projection) => sum + projection.y, 0) / projections.length,
+    };
+
+    const rawArea = previewVertices.length >= 3 ? computePolygonArea(previewVertices) : null;
+    const scaledArea = rawArea !== null ? rawArea * measurementScale * measurementScale : null;
+    const label = scaledArea !== null ? formatArea(scaledArea) : null;
+
+    return {
+      path,
+      centroid: centroidPx,
+      label,
+    };
+  }, [isAreaMode, areaPoints, areaPreviewPoint, projectWorldToScreen, toViewBox, measurementScale]);
+
+  const axisGuideLength = useMemo(() => {
+    if (!basePoint) {
+      return 2;
+    }
+    if (snappedPreviewPoint) {
+      return Math.max(distanceBetween(basePoint, snappedPreviewPoint), 1.5);
+    }
+    return 2;
+  }, [basePoint, snappedPreviewPoint]);
+
+  const axisGuides = useMemo(() => {
+    if (!isDistanceMode || !basePoint) {
+      return [] as Array<{ axis: SnapAxis; x1: number; y1: number; x2: number; y2: number; color: string; active: boolean }>;
+    }
+
+    return AXIS_ORDER.map((axis) => {
+      const dir = AXIS_VECTORS[axis];
+      const start = {
+        x: basePoint.x - dir.x * axisGuideLength,
+        y: basePoint.y - dir.y * axisGuideLength,
+        z: basePoint.z - dir.z * axisGuideLength,
+      };
+      const end = {
+        x: basePoint.x + dir.x * axisGuideLength,
+        y: basePoint.y + dir.y * axisGuideLength,
+        z: basePoint.z + dir.z * axisGuideLength,
+      };
+
+      const startProjection = projectWorldToScreen(start);
+      const endProjection = projectWorldToScreen(end);
+
+      if (!startProjection || !endProjection || !startProjection.visible || !endProjection.visible) {
+        return null;
+      }
+
+      const startView = toViewBox(startProjection);
+      const endView = toViewBox(endProjection);
+
+      return {
+        axis,
+        x1: startView.x,
+        y1: startView.y,
+        x2: endView.x,
+        y2: endView.y,
+        color: SNAP_AXIS_CONFIG[axis].color,
+        active: activeAxisForDisplay === axis,
+      };
+    }).filter(Boolean) as Array<{
+      axis: SnapAxis;
+      x1: number;
+      y1: number;
+      x2: number;
+      y2: number;
+      color: string;
+      active: boolean;
+    }>;
+  }, [isDistanceMode, basePoint, axisGuideLength, projectWorldToScreen, activeAxisForDisplay]);
+
+  const activeAxisColor = activeAxisForDisplay ? SNAP_AXIS_CONFIG[activeAxisForDisplay].color : null;
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const key = e.key.toLowerCase();
+
+      switch (key) {
+        case 'escape':
+          if (document.fullscreenElement) {
+            document.exitFullscreen();
+          } else {
+            goBack();
+          }
+          break;
+        case 'r':
+          if (!e.ctrlKey && !e.metaKey) {
+            e.preventDefault();
+            resetView();
+          }
+          break;
+        case 'f':
+          if (!e.ctrlKey && !e.metaKey) {
+            e.preventDefault();
+            toggleFullscreen();
+          }
+          break;
+        case 'i':
+          e.preventDefault();
+          setShowInfo((prev) => !prev);
+          break;
+        case 'c':
+          e.preventDefault();
+          setShowTransformPanel((prev) => !prev);
+          break;
+        case 'arrowleft':
+          e.preventDefault();
+          nudgeModelRotation('y', -15);
+          break;
+        case 'arrowright':
+          e.preventDefault();
+          nudgeModelRotation('y', 15);
+          break;
+        case 'arrowup':
+          e.preventDefault();
+          nudgeModelRotation('x', -15);
+          break;
+        case 'arrowdown':
+          e.preventDefault();
+          nudgeModelRotation('x', 15);
+          break;
+        case 'q':
+          if (!e.ctrlKey && !e.metaKey) {
+            e.preventDefault();
+            nudgeModelRotation('z', -15);
+          }
+          break;
+        case 'e':
+          if (!e.ctrlKey && !e.metaKey) {
+            e.preventDefault();
+            nudgeModelRotation('z', 15);
+          }
+          break;
+        case '+':
+        case '=':
+          e.preventDefault();
+          zoomCamera(-0.5);
+          break;
+        case '-':
+        case '_':
+          e.preventDefault();
+          zoomCamera(0.5);
+          break;
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [goBack, resetView, toggleFullscreen, nudgeModelRotation, zoomCamera]);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
+
+  if (error) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-white">
+        <div className="max-w-sm rounded-2xl border border-gray-200 bg-white p-8 text-center shadow-lg">
+          <div className="mx-auto mb-5 flex h-12 w-12 items-center justify-center rounded-full border-2 border-red-200 bg-red-50 text-lg font-semibold text-red-600">
+            !
+          </div>
+          <h2 className="mb-3 text-xl font-semibold text-black">Viewer unavailable</h2>
+          <p className="mb-6 text-sm text-gray-600">{error}</p>
+          <button
+            onClick={goBack}
+            className="btn-secondary"
+          >
+            Go back
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative h-screen w-screen bg-gray-50">
+      {loading && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-white/95 backdrop-blur">
+          <div className="text-center">
+            <div className="mx-auto mb-4 h-12 w-12 animate-spin rounded-full border-2 border-gray-200 border-t-black"></div>
+            <h2 className="text-lg font-medium tracking-wide text-black">Preparing viewer…</h2>
+            <p className="mt-2 text-xs uppercase tracking-[0.2em] text-gray-400">Loading Gaussian splats</p>
+          </div>
+        </div>
+      )}
+
+      <IconSidebar
+        onBack={goBack}
+        onReset={resetView}
+        onToggleFullscreen={toggleFullscreen}
+        isFullscreen={isFullscreen}
+        onToggleTransform={() => setShowTransformPanel((prev) => !prev)}
+        showTransform={showTransformPanel}
+        onToggleInfo={() => setShowInfo((prev) => !prev)}
+        infoOpen={showInfo}
+        splatCount={splatCount}
+        backgroundOptions={backgroundOptions}
+        activeBackground={activeBackground}
+        onBackgroundSelect={setBackground}
+        showGrid={showGrid}
+        onToggleGrid={setGridVisible}
+        showAxes={showAxes}
+        onToggleAxes={setAxesVisible}
+      />
+
+      {showTransformPanel && (
+        <TransformPanel
+          position={modelPosition}
+          rotation={modelRotation}
+          onPositionChange={updateModelPosition}
+          onRotationChange={updateModelRotation}
+          onReset={resetView}
+        />
+      )}
+
+      {showInfo && <InfoPanel projectId={projectId} fileUrl={plyUrl} />}
+
+      {cameraAxes && <ViewCube axes={cameraAxes} onAlign={alignCamera} />}
+
+      <canvas ref={canvasRef} id="application-canvas" className="h-full w-full" />
+
+      <div
+        className="absolute left-6 bottom-6 z-40 flex flex-col gap-2 pointer-events-none"
+        data-orbit-block="true"
+      >
+        <button
+          type="button"
+          onClick={toggleDistanceMode}
+          className={`pointer-events-auto inline-flex h-10 w-10 items-center justify-center rounded-xl border transition-all ${isDistanceMode ? 'border-black bg-black text-white shadow-lg' : 'border-gray-200 bg-white text-gray-600 hover:bg-black hover:text-white hover:border-black'}`}
+          title="Ruler"
+        >
+          <Ruler className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          onClick={toggleAreaMode}
+          className={`pointer-events-auto inline-flex h-10 w-10 items-center justify-center rounded-xl border transition-all ${isAreaMode ? 'border-black bg-black text-white shadow-lg' : 'border-gray-200 bg-white text-gray-600 hover:bg-black hover:text-white hover:border-black'}`}
+          title="Area"
+        >
+          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 4h16v16H4z" />
+            <path d="M4 9h16" />
+            <path d="M9 4v16" />
+          </svg>
+        </button>
+        {(isDistanceMode || measurements.length > 0 || isAreaMode || areaPolygons.length > 0) && (
+          <button
+            type="button"
+          className="pointer-events-auto inline-flex h-10 px-3 items-center justify-center rounded-xl border border-gray-200 bg-white text-xs font-medium text-gray-600 hover:bg-black hover:text-white hover:border-black transition-all"
+          onClick={() => {
+            setMeasurementPoints([]);
+            setSnappedPreviewPoint(null);
+            setPreviewSnapAxis(null);
+            setAreaPoints([]);
+            clearMeasurements();
+            if (isDistanceMode) {
+              showMeasurementMessage('คลิกเลือกจุดแรก (จับตำแหน่งจากเมฆจุดจริง)', { persistent: true });
+            } else if (isAreaMode) {
+              showMeasurementMessage('คลิกเพิ่มจุดเพื่อกำหนดพื้นที่ (ต้องมีอย่างน้อย 3 จุด)', { persistent: true });
+            } else {
+                showMeasurementMessage(null);
+              }
+            }}
+          >
+            ล้างทั้งหมด
+          </button>
+        )}
+      </div>
+
+      <div
+        className={`absolute inset-0 z-30 pointer-events-none`}
+        data-orbit-block="true"
+      >
+        <div
+          className={`absolute inset-0 ${isDistanceMode || isAreaMode ? 'pointer-events-auto' : 'pointer-events-none'}`}
+          onPointerDown={(event) => {
+            handleMeasurementPointerDown(event);
+            handleAreaPointerDown(event);
+          }}
+          onPointerMove={(event) => {
+            handleMeasurementPointerMove(event);
+            handleAreaPointerMove(event);
+          }}
+          onPointerLeave={() => {
+            handleMeasurementPointerLeave();
+            handleAreaPointerLeave();
+          }}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          <svg className="h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none" style={{ pointerEvents: 'none' }}>
+            {areaScreenData.map((item) => (
+              <polygon
+                key={`area-${item.id}`}
+                points={item.path.map((point) => `${point.x},${point.y}`).join(' ')}
+                fill={item.isSelected ? 'rgba(14, 165, 233, 0.25)' : 'rgba(37, 99, 235, 0.12)'}
+              stroke={item.isSelected ? '#0ea5e9' : '#2563eb'}
+              strokeWidth={item.isSelected ? 0.6 : 0.45}
+              strokeLinejoin="round"
+            />
+          ))}
+
+          {areaPreviewScreen && (
+            <>
+              <polygon
+                points={areaPreviewScreen.path.map((point) => `${point.x},${point.y}`).join(' ')}
+                fill="rgba(59, 130, 246, 0.12)"
+                stroke="#2563eb"
+                strokeWidth={0.4}
+                strokeLinejoin="round"
+                strokeDasharray="1.4 0.9"
+              />
+              {areaPreviewScreen.path.length >= 2 && (
+                <polyline
+                  points={areaPreviewScreen.path.map((point) => `${point.x},${point.y}`).join(' ')}
+                  fill="none"
+                  stroke="#2563eb"
+                  strokeWidth={0.5}
+                  strokeDasharray="1.4 0.9"
+                />
+              )}
+            </>
+          )}
+
+          {measurementScreenData.map((item) => {
+            const lineColor = item.isSelected ? '#000000' : '#525252';
+            const startStroke = item.isSelected ? '#000000' : '#737373';
+            const endFill = item.isSelected ? '#000000' : '#525252';
+            return (
+              <g key={item.id}>
+                <line
+                  x1={item.startView.x}
+                  y1={item.startView.y}
+                  x2={item.endView.x}
+                  y2={item.endView.y}
+                  stroke={lineColor}
+                  strokeWidth={item.isSelected ? 0.65 : 0.5}
+                  strokeLinecap="round"
+                />
+                <circle
+                  cx={item.startView.x}
+                  cy={item.startView.y}
+                  r={item.isSelected ? 0.85 : 0.75}
+                  fill="#ffffff"
+                  stroke={startStroke}
+                  strokeWidth={0.35}
+                  opacity={0.95}
+                />
+                <circle
+                  cx={item.endView.x}
+                  cy={item.endView.y}
+                  r={item.isSelected ? 0.75 : 0.65}
+                  fill={endFill}
+                  opacity={0.95}
+                />
+              </g>
+            );
+          })}
+
+          {axisGuides.map((guide) => (
+            <line
+              key={`axis-${guide.axis}`}
+              x1={guide.x1}
+              y1={guide.y1}
+              x2={guide.x2}
+              y2={guide.y2}
+              stroke={guide.color}
+              strokeWidth={guide.active ? 0.6 : 0.25}
+              strokeOpacity={guide.active ? 0.9 : 0.35}
+              strokeLinecap="round"
+              strokeDasharray={guide.active ? '0' : '1.4 1.2'}
+            />
+          ))}
+
+          {measurementPoints.length === 1 && baseProjection?.visible && (
+            <circle
+              cx={toViewBox(baseProjection).x}
+              cy={toViewBox(baseProjection).y}
+              r={0.75}
+              fill="#ffffff"
+              stroke="#000000"
+              strokeWidth={0.35}
+              opacity={0.95}
+            />
+          )}
+
+          {measurementPoints.length === 1 && baseProjection?.visible && previewProjection?.visible && (
+            <>
+              <line
+                x1={toViewBox(baseProjection).x}
+                y1={toViewBox(baseProjection).y}
+                x2={toViewBox(previewProjection).x}
+                y2={toViewBox(previewProjection).y}
+                stroke="#525252"
+                strokeWidth={0.4}
+                strokeOpacity={0.85}
+                strokeDasharray="2 1.2"
+                strokeLinecap="round"
+              />
+              <circle
+                cx={toViewBox(previewProjection).x}
+                cy={toViewBox(previewProjection).y}
+                r={0.6}
+                fill="#525252"
+                opacity={0.95}
+              />
+            </>
+          )}
+          </svg>
+        </div>
+
+        {areaScreenData.map((item) => (
+          <button
+            key={`area-label-${item.id}`}
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              handleSelectArea(item.id);
+            }}
+            className={`absolute rounded-full px-3 py-1 text-xs font-semibold shadow transition ${
+              item.isSelected
+                ? 'bg-sky-500 text-white ring-2 ring-sky-200'
+                : 'bg-white text-blue-600 hover:bg-blue-500 hover:text-white'
+            }`}
+            style={{
+              left: `${item.centroid.x}px`,
+              top: `${item.centroid.y - 12}px`,
+              transform: 'translate(-50%, -50%)',
+            }}
+          >
+            {item.label}
+          </button>
+        ))}
+
+        {areaPreviewScreen?.label && (
+          <div
+            className="absolute rounded-full bg-white/90 px-3 py-1 text-[11px] font-semibold text-blue-600 shadow"
+            style={{
+              left: `${areaPreviewScreen.centroid.x}px`,
+              top: `${areaPreviewScreen.centroid.y - 12}px`,
+              transform: 'translate(-50%, -50%)',
+            }}
+          >
+            {areaPreviewScreen.label}
+          </div>
+        )}
+
+        {measurementScreenData.map((item) => (
+          <button
+            key={`label-${item.id}`}
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              handleSelectMeasurement(item.id);
+            }}
+            className={`absolute rounded-xl px-3 py-1.5 text-xs font-semibold shadow-lg transition border ${
+              item.isSelected
+                ? 'bg-black text-white border-black'
+                : 'bg-white text-black border-gray-200 hover:bg-gray-100'
+            }`}
+            style={{
+              left: `${item.midPoint.x}px`,
+              top: `${item.midPoint.y - 12}px`,
+              transform: 'translate(-50%, -50%)',
+            }}
+          >
+            {item.labelWithAxis}
+          </button>
+        ))}
+
+        {measurementPoints.length === 1 && baseProjection?.visible && previewProjection?.visible && previewLabelWithAxis && (
+          <div
+            className="absolute rounded-xl bg-white/90 border border-gray-200 px-3 py-1.5 text-xs font-semibold text-black shadow-lg"
+            style={{
+              left: `${(baseProjection.x + previewProjection.x) / 2}px`,
+              top: `${(baseProjection.y + previewProjection.y) / 2 - 12}px`,
+              transform: 'translate(-50%, -50%)',
+            }}
+          >
+            {previewLabelWithAxis}
+          </div>
+        )}
+
+        {isDistanceMode && baseProjection?.visible && activeAxisForDisplay && (
+          <div
+            className="pointer-events-none absolute rounded-xl border border-gray-300 bg-white/90 px-3 py-1.5 text-xs font-semibold text-black shadow-lg"
+            style={{
+              left: `${baseProjection.x}px`,
+              top: `${baseProjection.y - 32}px`,
+              transform: 'translate(-50%, -50%)',
+            }}
+          >
+            {`Snap: ${SNAP_AXIS_CONFIG[activeAxisForDisplay].label}`}
+          </div>
+        )}
+      </div>
+
+      {selectedMeasurement && selectedMeasurementLabel && (
+        <div
+          className="pointer-events-auto absolute bottom-6 left-1/2 z-40 flex -translate-x-1/2 items-center gap-3 rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-semibold text-black shadow-lg"
+          data-orbit-block="true"
+        >
+          <span>รวม: {selectedMeasurementLabel}</span>
+          <button
+            type="button"
+            className="inline-flex items-center rounded-xl border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-900 transition hover:bg-black hover:text-white hover:border-black"
+            onClick={() => openRescaleDialog()}
+          >
+            ปรับสเกล
+          </button>
+          <button
+            type="button"
+            className="inline-flex items-center rounded-xl border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-600 transition hover:bg-red-600 hover:text-white hover:border-red-600"
+            onClick={() => handleDeleteMeasurement(selectedMeasurement.id)}
+          >
+            ลบเส้นนี้
+          </button>
+        </div>
+      )}
+
+      {selectedArea && selectedAreaLabel && (
+        <div
+          className="pointer-events-auto absolute bottom-6 left-1/2 z-40 flex -translate-x-1/2 items-center gap-3 rounded-2xl border border-blue-200 bg-white px-4 py-3 text-sm font-semibold text-blue-700 shadow-lg"
+          data-orbit-block="true"
+        >
+          <span>พื้นที่: {selectedAreaLabel}</span>
+          <button
+            type="button"
+            className="inline-flex items-center rounded-xl border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-600 transition hover:bg-red-600 hover:text-white hover:border-red-600"
+            onClick={() => handleDeleteArea(selectedArea.id)}
+          >
+            ลบพื้นที่
+          </button>
+        </div>
+      )}
+
+      {measurementMessage && (
+        <div
+          className={`pointer-events-none absolute ${hasFloatingPanel ? 'bottom-24' : 'bottom-6'} left-1/2 z-50 -translate-x-1/2 rounded-xl border border-gray-200 bg-white px-4 py-2 text-xs font-medium text-gray-900 shadow-lg`}
+        >
+          {measurementMessage}
+        </div>
+      )}
+
+      {rescaleDialogOpen && selectedMeasurement && selectedMeasurementRawLength !== null && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm" data-orbit-block="true">
+          <form
+            onSubmit={handleRescaleSubmit}
+            className="w-[320px] rounded-2xl border border-gray-200 bg-white p-6 text-sm shadow-2xl"
+          >
+            <h3 className="mb-4 text-lg font-semibold text-black">ปรับสเกล</h3>
+            <div className="mb-4 space-y-1">
+              <p className="text-xs font-medium text-gray-500">ระยะปัจจุบัน</p>
+              <p className="text-base font-semibold text-black">{formatMetersCentimeters(selectedMeasurementScaledLength ?? 0)}</p>
+            </div>
+            <div className="mb-6 space-y-2">
+              <p className="text-xs font-medium text-gray-500">ระยะจริงที่ต้องการ</p>
+              <div className="flex items-center gap-2 text-sm">
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={rescaleMetersInput}
+                  onChange={(event) => setRescaleMetersInput(event.target.value)}
+                  className="input"
+                  placeholder="เมตร"
+                />
+                <span className="text-gray-500">m</span>
+                <input
+                  type="number"
+                  step="1"
+                  min="0"
+                  value={rescaleCentimetersInput}
+                  onChange={(event) => setRescaleCentimetersInput(event.target.value)}
+                  className="input"
+                  placeholder="เซนติเมตร"
+                />
+                <span className="text-gray-500">cm</span>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={closeRescaleDialog}
+              >
+                ยกเลิก
+              </button>
+              <button
+                type="submit"
+                className="btn-primary"
+              >
+                ยืนยัน
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      <div className="sr-only">
+        <kbd>ESC</kbd> to go back
+        <kbd>R</kbd> to reset view
+        <kbd>F</kbd> for fullscreen
+        <kbd>Right click</kbd> to pan camera
+      </div>
+    </div>
+  );
+}

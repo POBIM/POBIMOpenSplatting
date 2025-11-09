@@ -1,0 +1,107 @@
+# MacOS
+.DS_Store
+
+# Build directories
+build/
+my_build/
+colmap-build
+# IDE
+.idea/
+.vscode/
+node_modules.root-owned
+# Web Frontend - User Data
+web-frontend/uploads/*/
+web-frontend/results/*/
+web-frontend/projects_db.json
+
+# Keep directory structure but ignore contents
+!web-frontend/uploads/.gitkeep
+!web-frontend/results/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.pytest_cache/
+
+# Virtual environments
+.venv/
+env/
+ENV/
+venv/
+libtorch-cuda126/
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+*~
+
+# PyTorch models and checkpoints
+*.pth
+*.pt
+
+# COLMAP files
+database.db
+cameras.bin
+images.bin
+points3D.bin
+project.ini
+
+# 3D model files
+*.ply
+*.obj
+*.gltf
+
+# Large binary files
+*.zip
+*.tar.gz
+*.7z
+
+# Results and output files
+PobimSplats/results/
+!PobimSplats/results/.gitkeep
+PobimSplats/uploads/
+!PobimSplats/uploads/.gitkeep
+PobimSplatting/Backend/results/
+!PobimSplatting/Backend/results/.gitkeep
+PobimSplatting/Backend/uploads/
+!PobimSplatting/Backend/uploads/.gitkeep
+
+# libtorch
+libtorch/
+libtorch-*.zip
+datasets/
+cuda_12.1.1_530.30.02_linux.run
+libtorch-cpu/
+
+node_modules/
+cuda_12.6.3_560.35.05_linux.run
+colmap
+.env
+PobimSplatting/Backend/.env
+PobimSplatting/backend.pid
+PobimSplatting/frontend.pid
+colmap-build/colmap
+.claude/settings.local.json
+PobimSplatting/Backend/.env
+PobimSplatting/Backend/projects_db.json
+PobimSplatting/Backend/.env
+
+PobimSplatting/Backend/.env
+PobimSplatting/Backend/.env
+PobimSplats/projects_db.json
+PobimSplatting/Backend/test_exports/gltf_buffer_0.bin
+PobimSplatting/Backend/test_exports/gltf_buffer_1.bin
+PobimSplatting/Backend/test_exports/test_alpha.glb
+PobimSplatting/Backend/test_exports/test_pointcloud.glb
+PobimSplatting/Backend/test_exports/test_poisson.glb
+quick-start.sh
+PobimSplatting/Backend/projects_db.json
+PobimSplatting/Backend/projects_db.json
+PobimSplatting/Backend/projects_db.json

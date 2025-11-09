@@ -1,0 +1,92 @@
+POBIMOPENSPATTING COMMUNITY LICENSE
+Version 1.0 — November 6, 2025
+
+Copyright (c) 2025 POBIM
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+1. DEFINITIONS
+   1.1 "Software" means the collection of source code, binaries, assets, and
+       documentation distributed within this repository under the name
+       "POBIMOpenSplatting".
+   1.2 "Derivative Work" means any work that is based on or derived from the
+       Software, including modifications, enhancements, translations, or
+       porting to new platforms.
+   1.3 "You" (or "Your") refers to an individual or legal entity exercising
+       permissions granted by this License.
+
+2. GRANT OF RIGHTS
+   2.1 You may use, reproduce, display, perform, modify, and distribute the
+       Software and Derivative Works in any medium for any purpose, including
+       commercial applications, without payment of royalties or fees.
+   2.2 You may create and distribute sublicenses to the Software provided that
+       each sublicense includes the terms of this License in full.
+
+3. ATTRIBUTION AND NOTICE REQUIREMENTS
+   3.1 Any public-facing user interface, documentation, or marketing material
+       for the Software or for a Derivative Work must display the project name
+       "POBIMOpenSplatting" in a reasonably prominent manner. This attribution
+       may appear in an "About" dialog, footer, credits screen, or equivalent
+       location.
+   3.2 You must retain this POBIMOpenSplatting_LICENSE.txt file unmodified in
+       any copy or distribution of the Software or a Derivative Work.
+   3.3 If You modify the Software, You must document the scope of the changes
+       in a notice distributed with the Software or accessible from it. A log
+       entry, changelog reference, or repository commit history is sufficient.
+
+4. TRADEMARKS AND BRANDING
+   4.1 This License does not grant permission to use the POBIM name, logos, or
+       trademarks except for the attribution requirement described in Section
+       3.1.
+
+5. WARRANTY DISCLAIMER
+   5.1 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+       OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+       MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT.
+       IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+       CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+       TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE
+       SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+6. LIMITATION OF LIABILITY
+   6.1 TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT WILL
+       POBIM OR ANY CONTRIBUTOR BE LIABLE TO YOU FOR ANY LOSS OF PROFITS,
+       REVENUE, OR DATA, OR FOR ANY INDIRECT, INCIDENTAL, SPECIAL, OR
+       CONSEQUENTIAL DAMAGES ARISING OUT OF OR RELATED TO THIS LICENSE OR THE
+       USE OR INABILITY TO USE THE SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY
+       OF SUCH DAMAGES.
+
+7. INDEMNIFICATION
+   7.1 You agree to indemnify, defend, and hold harmless POBIM and each
+       contributor from and against any claims or liabilities arising out of
+       Your use or distribution of the Software or Derivative Works.
+
+8. TERMINATION
+   8.1 This License and the rights granted hereunder will terminate
+       automatically if You fail to comply with any material term or condition
+       of this License. Upon termination, You must cease distribution and use
+       of the Software and erase all copies within Your control. Termination
+       does not limit any rights or remedies available to POBIM or
+       contributors.
+   8.2 Sections 3, 5, 6, 7, and 9 shall survive termination.
+
+9. GOVERNING LAW AND DISPUTES
+   9.1 This License will be governed by and construed in accordance with the
+       laws of Thailand, without regard to its conflict-of-law principles.
+   9.2 Any dispute arising out of or related to this License shall be subject
+       to the exclusive jurisdiction of the courts located in Bangkok,
+       Thailand.
+
+10. ENTIRE AGREEMENT
+    10.1 This License constitutes the entire agreement between the parties
+         concerning the subject matter hereof and supersedes any prior
+         agreements, understandings, or representations relating to the
+         Software. Any amendment must be in writing and signed by POBIM.
+
+By exercising any of the permissions granted above, You accept and agree to
+be bound by the terms of this POBIMOpenSplatting Community License.

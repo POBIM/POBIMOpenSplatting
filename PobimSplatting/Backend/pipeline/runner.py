@@ -1064,9 +1064,14 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
             # Performance optimizations
             '--Mapper.num_threads', str(os.cpu_count() or 8)  # Use all CPU cores
         ]
-        
+
+        # GPU-accelerated Bundle Adjustment (10-50x faster than CPU!)
         if has_cuda:
-            append_log_line(project_id, "🚀 GPU-enabled COLMAP detected")
+            cmd.extend([
+                '--Mapper.ba_use_gpu', '1',        # Enable GPU for bundle adjustment
+                '--Mapper.ba_gpu_index', '0'       # Use GPU 0
+            ])
+            append_log_line(project_id, "🚀 GPU-enabled COLMAP detected - Using GPU for Bundle Adjustment")
         else:
             append_log_line(project_id, "ℹ️ Using CPU-only COLMAP")
             

@@ -39,8 +39,8 @@ echo "✓ Database: $(du -h "$PROJECT_DIR/database.db" | cut -f1)"
 echo "✓ Images: $NUM_IMAGES"
 echo ""
 
-# Run mapper (WITHOUT ba_global_use_pba option)
-echo "🔄 Running COLMAP mapper..."
+# Run mapper with GPU-accelerated Bundle Adjustment
+echo "🔄 Running COLMAP mapper with GPU acceleration..."
 echo ""
 
 $COLMAP_BIN mapper \
@@ -52,7 +52,9 @@ $COLMAP_BIN mapper \
     --Mapper.max_num_models 30 \
     --Mapper.init_num_trials 225 \
     --Mapper.max_extra_param 1 \
-    --Mapper.num_threads 14
+    --Mapper.num_threads 14 \
+    --Mapper.ba_use_gpu 1 \
+    --Mapper.ba_gpu_index 0
 
 if [ $? -eq 0 ]; then
     echo ""

@@ -684,8 +684,8 @@ setup_python_backend() {
     
     # Create virtual environment
     if [ ! -d "venv" ]; then
-        print_info "Creating Python virtual environment..."
-        python3 -m venv venv
+        print_info "Creating Python virtual environment with Python 3.12..."
+        python3.12 -m venv venv
     else
         print_success "Virtual environment already exists"
     fi

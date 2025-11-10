@@ -823,8 +823,8 @@ export default function ProjectDetailPage() {
                 })()}
               </div>
 
-              {/* Mesh Export Panels - Show for completed or processing projects */}
-              {(project.status === 'completed' || project.status === 'error') && (
+              {/* Mesh Export Panels - Show for completed or failed projects */}
+              {(project.status === 'completed' || project.status === 'failed') && (
                 <div className="border-t border-gray-200 pt-6 space-y-6">
                   {/* List of exported meshes */}
                   <ExportedMeshesList projectId={projectId} />

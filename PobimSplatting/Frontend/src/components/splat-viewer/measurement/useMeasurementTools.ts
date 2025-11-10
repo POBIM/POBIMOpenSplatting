@@ -1538,7 +1538,7 @@ export function useMeasurementTools({
 
   const areaScreenData = useMemo<AreaScreenDatum[]>(() => {
     return areaPolygons
-      .map((polygon) => {
+      .map((polygon): AreaScreenDatum | null => {
         const worldPoints = polygon.pointsLocal
           .map((point, index) => {
             const nodeIndex = polygon.pointNodeIndices?.[index] ?? null;

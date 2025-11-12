@@ -115,6 +115,7 @@ export default function SplatViewer() {
     pickWorldPoint,
     pickPoint,
     projectWorldToScreen,
+    viewportKey,
     orbitState,
     setOrbitAngles,
     setOrbitDistance,
@@ -171,6 +172,7 @@ export default function SplatViewer() {
     modelToWorld,
     getPointWorldPosition,
     getPointLocalPosition,
+    viewportKey,
     storageKey: measurementStorageKey,
   });
 

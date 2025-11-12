@@ -133,6 +133,7 @@ interface UseSplatSceneResult {
   pickWorldPoint: (canvasX: number, canvasY: number) => Vec3 | null;
   pickPoint: (canvasX: number, canvasY: number) => PointPickResult | null;
   projectWorldToScreen: (position: Vec3) => ScreenProjection | null;
+  viewportKey: number;
   orbitState: OrbitState;
   setOrbitAngles: (azimuth: number, elevation: number, options?: { immediate?: boolean }) => void;
   setOrbitDistance: (distance: number, options?: { immediate?: boolean }) => void;
@@ -205,6 +206,7 @@ export function useSplatScene(plyUrl: string | null): UseSplatSceneResult {
   const hiddenPointsRef = useRef<Set<number>>(new Set());
   const splatResourceRef = useRef<any>(null);
   const selectedPointsRef = useRef<Set<number>>(new Set());
+  const viewportSizeRef = useRef<{ width: number; height: number }>({ width: 0, height: 0 });
 
   const defaultBackground = VIEWER_BACKGROUNDS[0].id;
   const backgroundRef = useRef<BackgroundId>(defaultBackground);
@@ -213,6 +215,7 @@ export function useSplatScene(plyUrl: string | null): UseSplatSceneResult {
   const axesVisibleRef = useRef(true);
   const [showGrid, setShowGrid] = useState(true);
   const [showAxes, setShowAxes] = useState(true);
+  const [viewportKey, setViewportKey] = useState(0);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -638,6 +641,12 @@ export function useSplatScene(plyUrl: string | null): UseSplatSceneResult {
           const width = Math.max(1, parent?.clientWidth ?? window.innerWidth);
           const height = Math.max(1, parent?.clientHeight ?? window.innerHeight);
           app.resizeCanvas(width, height);
+
+          const prev = viewportSizeRef.current;
+          if (prev.width !== width || prev.height !== height) {
+            viewportSizeRef.current = { width, height };
+            setViewportKey((value) => value + 1);
+          }
         };
 
         resizeToContainer();
@@ -1279,11 +1288,13 @@ export function useSplatScene(plyUrl: string | null): UseSplatSceneResult {
     const threshold = Math.max(pixelThreshold * avgScale, 1);
     const screenThresholdSq = threshold * threshold;
     const screenPenalty = 0.0005;
+    const scoreEpsilon = 1e-6;
 
     let bestScore = Number.POSITIVE_INFINITY;
     let bestWorld: Vec3 | null = null;
     let bestLocal: Vec3 | null = null;
     let bestIndex = -1;
+    let bestAlong = Number.POSITIVE_INFINITY;
 
     for (let i = 0; i < centers.length; i += 3) {
       const pointIndex = i / 3;
@@ -1329,8 +1340,9 @@ export function useSplatScene(plyUrl: string | null): UseSplatSceneResult {
 
       const score = radialDistSq + screenDistSq * screenPenalty;
 
-      if (score < bestScore) {
+      if (score + scoreEpsilon < bestScore || (Math.abs(score - bestScore) <= scoreEpsilon && along < bestAlong - scoreEpsilon)) {
         bestScore = score;
+        bestAlong = along;
         bestWorld = { x: wx, y: wy, z: wz };
         bestLocal = { x: lx, y: ly, z: lz };
         bestIndex = pointIndex;
@@ -1420,6 +1432,7 @@ export function useSplatScene(plyUrl: string | null): UseSplatSceneResult {
     pickWorldPoint,
     pickPoint,
     projectWorldToScreen,
+    viewportKey,
     orbitState,
     setOrbitAngles,
     setOrbitDistance,

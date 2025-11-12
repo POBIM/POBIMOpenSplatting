@@ -186,6 +186,7 @@ def get_vocab_tree_path(project_id=None):
         append_log_line(project_id, "📥 Downloading vocab tree for improved matching...")
 
     try:
+        import requests  # Import here to handle missing module gracefully
         import requests
         response = requests.get(app_config.VOCAB_TREE_URL, stream=True)
         response.raise_for_status()
@@ -207,6 +208,11 @@ def get_vocab_tree_path(project_id=None):
             append_log_line(project_id, f"✅ Vocab tree downloaded successfully ({total_size / 1024 / 1024:.1f}MB)")
 
         return str(vocab_tree_path)
+    except ImportError:
+        if project_id:
+            append_log_line(project_id, f"⚠️ Failed to download vocab tree: Missing 'requests' module - run: pip install requests")
+        logger.error(f"Failed to download vocab tree: Missing 'requests' module")
+        return None
     except Exception as e:
         if project_id:
             append_log_line(project_id, f"⚠️ Failed to download vocab tree: {str(e)}")
@@ -397,15 +403,16 @@ def get_colmap_config(num_images, project_id=None, quality_mode='balanced', cust
         append_log_line(project_id, f"Optimizing COLMAP config for {num_images} images (Quality: {quality_mode})")
 
     # Quality-based parameter scaling - NEW: Balanced = High quality baseline
+    # IMPROVED: Increased matches multiplier for high-feature-count images (75K+ features)
     quality_scales = {
         'fast': {'size': 0.6, 'features': 0.5, 'matches': 0.5, 'octaves': -1},
-        'balanced': {'size': 1.0, 'features': 1.0, 'matches': 2.0, 'octaves': 0},  # Use base directly (High quality)
-        'high': {'size': 1.0, 'features': 1.0, 'matches': 2.0, 'octaves': 0},  # Use base directly
-        'ultra': {'size': 1.2, 'features': 1.2, 'matches': 2.5, 'octaves': 0},  # Slightly higher than base
-        'professional': {'size': 1.5, 'features': 1.5, 'matches': 2.5, 'octaves': 0},  # 4K+ support (30,000 iterations)
-        'ultra_professional': {'size': 1.8, 'features': 1.8, 'matches': 3.0, 'octaves': 0},  # 4K+ ultra support (60,000 iterations)
-        'robust': {'size': 1.0, 'features': 1.0, 'matches': 2.5, 'octaves': 0},  # Base with more matches
-        'custom': {'size': 1.0, 'features': 1.0, 'matches': 2.0, 'octaves': 0}   # Use base, let user override
+        'balanced': {'size': 1.0, 'features': 1.0, 'matches': 2.5, 'octaves': 0},  # Increased from 2.0 to 2.5
+        'high': {'size': 1.0, 'features': 1.0, 'matches': 3.0, 'octaves': 0},  # Increased from 2.0 to 3.0
+        'ultra': {'size': 1.2, 'features': 1.2, 'matches': 3.5, 'octaves': 0},  # Increased from 2.5 to 3.5
+        'professional': {'size': 1.5, 'features': 1.5, 'matches': 4.0, 'octaves': 0},  # Increased from 2.5 to 4.0
+        'ultra_professional': {'size': 1.8, 'features': 1.8, 'matches': 4.5, 'octaves': 0},  # Increased from 3.0 to 4.5
+        'robust': {'size': 1.0, 'features': 1.0, 'matches': 3.5, 'octaves': 0},  # Increased from 2.5 to 3.5
+        'custom': {'size': 1.0, 'features': 1.0, 'matches': 3.0, 'octaves': 0}   # Increased from 2.0 to 3.0
     }
 
     scale = quality_scales.get(quality_mode, quality_scales['balanced'])
@@ -430,8 +437,9 @@ def get_colmap_config(num_images, project_id=None, quality_mode='balanced', cust
     first_octave = -1 if quality_mode in ['high', 'ultra', 'professional', 'ultra_professional'] else scale['octaves']
     num_octaves = base_octaves + (1 if quality_mode in ['ultra', 'professional', 'ultra_professional'] else 0)
 
-    # Quality-aware matching strategy
-    base_matches = 16384  # Base number of matches
+    # Quality-aware matching strategy with GPU memory consideration
+    # Auto-detect and limit based on feature count to prevent GPU OOM
+    base_matches = 40960  # Base value for feature matching (40K matches)
     max_num_matches = int(base_matches * scale['matches'])
 
     # Override with custom parameters if provided
@@ -440,19 +448,27 @@ def get_colmap_config(num_images, project_id=None, quality_mode='balanced', cust
             max_num_matches = custom_params['max_num_matches']
             if project_id:
                 append_log_line(project_id, f"🔧 Custom max_num_matches: {max_num_matches}")
+    
+    # CRITICAL: Prevent GPU OOM by capping max_num_matches based on expected feature count
+    # For images with 70K-80K features, max_num_matches should be <= 40K to avoid GPU memory issues
+    # This is especially important for CUDA-based feature matching
+    if max_num_matches > 65536:
+        if project_id:
+            append_log_line(project_id, f"⚠️ Reducing max_num_matches from {max_num_matches} to 40960 to prevent GPU memory overflow")
+        max_num_matches = 40960  # Safe limit for high-feature images
 
     # Matching strategy based on dataset size and quality requirements
     if quality_mode == 'robust':
         # Robust mode: Always use exhaustive for difficult datasets
         matcher_type = 'exhaustive'
-        max_num_matches = min(max_num_matches, 65536)
+        max_num_matches = min(max_num_matches, 40960)  # Cap for GPU safety
         matcher_params = {}
         if project_id:
             append_log_line(project_id, "🔧 Using ROBUST mode: Exhaustive matching for maximum coverage")
     elif quality_mode == 'ultra' and num_images <= 200:
         # Ultra quality: Use exhaustive for smaller datasets
         matcher_type = 'exhaustive'
-        max_num_matches = min(max_num_matches, 65536)  # Cap at 64k matches
+        max_num_matches = min(max_num_matches, 40960)  # Cap for GPU safety
         matcher_params = {}
     elif num_images <= 50:
         # Small: Use exhaustive for best coverage
@@ -965,6 +981,11 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
             # Debug logging for feature matching
             if any(keyword in line.lower() for keyword in ['matching', 'match', 'pair', 'block']):
                 append_log_line(project_id, f"[DEBUG] Feature matching: {line.strip()}")
+            
+            # Check for GPU memory errors and handle gracefully
+            if 'not enough gpu memory' in line.lower() or 'failed to create feature matcher' in line.lower():
+                append_log_line(project_id, f"⚠️ GPU Memory Error detected: {line.strip()}")
+                return  # Let error handling below take care of this
 
             # Enhanced patterns for feature matching
             patterns = [
@@ -1003,7 +1024,33 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
                         update_stage_detail(project_id, 'feature_matching', text=f'Matching pairs: {current}/{total}', subtext=None)
                     return
 
-        run_command_with_logs(project_id, cmd, line_handler=matching_line_handler)
+        # Try GPU matching first, fallback to CPU if OOM error occurs
+        try:
+            run_command_with_logs(project_id, cmd, line_handler=matching_line_handler)
+        except subprocess.CalledProcessError as e:
+            # Check if error is GPU memory related
+            if has_cuda and ('not enough gpu memory' in str(e).lower() or 
+                           'failed to create feature matcher' in str(e).lower()):
+                append_log_line(project_id, "⚠️ GPU feature matching failed due to memory constraints")
+                append_log_line(project_id, f"🔄 Retrying with CPU-based matching (reduced max_matches={colmap_config['max_num_matches'] // 2})...")
+                
+                # Retry with CPU and reduced max_num_matches
+                cmd_cpu = [
+                    colmap_exe, matcher_cmd,
+                    '--database_path', str(paths['database_path']),
+                    '--FeatureMatching.max_num_matches', str(colmap_config['max_num_matches'] // 2),
+                    '--FeatureMatching.use_gpu', '0'  # Force CPU
+                ]
+                
+                # Add matcher-specific parameters
+                for param, value in colmap_config['matcher_params'].items():
+                    cmd_cpu.extend([f'--{param}', value])
+                
+                run_command_with_logs(project_id, cmd_cpu, line_handler=matching_line_handler)
+                append_log_line(project_id, "✅ CPU-based matching completed successfully")
+            else:
+                # Re-raise if not GPU memory error
+                raise
 
         # Step 2: Vocab tree matcher (for loop closure and non-sequential images)
         if use_hybrid:

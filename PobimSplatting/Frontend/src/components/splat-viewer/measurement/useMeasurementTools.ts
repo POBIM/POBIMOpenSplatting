@@ -390,6 +390,7 @@ interface UseMeasurementToolsOptions {
   getPointWorldPosition?: (index: number) => Vec3 | null;
   getPointLocalPosition?: (index: number) => Vec3 | null;
   storageKey?: string | null;
+  viewportKey?: number;
 }
 
 export function useMeasurementTools({
@@ -402,6 +403,7 @@ export function useMeasurementTools({
   getPointWorldPosition,
   getPointLocalPosition: _getPointLocalPosition,
   storageKey,
+  viewportKey = 0,
 }: UseMeasurementToolsOptions): MeasurementTools {
   const [mode, setMode] = useState<MeasureMode | null>(null);
   const [measurementPoints, setMeasurementPoints] = useState<IndexedLocalPoint[]>([]);
@@ -1534,7 +1536,7 @@ export function useMeasurementTools({
         return screenDatum;
       })
       .filter((entry): entry is MeasurementScreenDatum => Boolean(entry));
-  }, [measurements, measurementScale, projectWorldToScreen, selectedElement, cameraUpdateKey, resolveWorldFromData]);
+  }, [measurements, measurementScale, projectWorldToScreen, selectedElement, cameraUpdateKey, viewportKey, resolveWorldFromData]);
 
   const areaScreenData = useMemo<AreaScreenDatum[]>(() => {
     return areaPolygons
@@ -1588,7 +1590,7 @@ export function useMeasurementTools({
         };
       })
       .filter((entry): entry is AreaScreenDatum => Boolean(entry));
-  }, [areaPolygons, measurementScale, projectWorldToScreen, selectedElement, cameraUpdateKey, resolveWorldFromData]);
+  }, [areaPolygons, measurementScale, projectWorldToScreen, selectedElement, cameraUpdateKey, viewportKey, resolveWorldFromData]);
 
   const measurementChainTotals = useMemo(() => {
     const nodeToMeasurements = new Map<string, Set<string>>();
@@ -1738,7 +1740,7 @@ export function useMeasurementTools({
         active,
       };
     }).filter((entry): entry is MeasurementOverlayState['axisGuides'][number] => Boolean(entry));
-  }, [isDistanceMode, basePoint, previewPoint, projectWorldToScreen, cameraUpdateKey]);
+  }, [isDistanceMode, basePoint, previewPoint, projectWorldToScreen, cameraUpdateKey, viewportKey]);
 
   const areaPreviewScreen = useMemo<AreaPreviewScreen | null>(() => {
     if (!isAreaMode) {
@@ -1781,7 +1783,7 @@ export function useMeasurementTools({
     const label = scaledArea !== null ? formatArea(scaledArea) : null;
 
     return { path, centroid, label };
-  }, [isAreaMode, areaPoints, previewPoint, projectWorldToScreen, measurementScale, cameraUpdateKey, resolveWorldPoint]);
+  }, [isAreaMode, areaPoints, previewPoint, projectWorldToScreen, measurementScale, cameraUpdateKey, viewportKey, resolveWorldPoint]);
 
   const selectedMeasurement = useMemo(() => {
     if (selectedElement?.type !== 'distance') {

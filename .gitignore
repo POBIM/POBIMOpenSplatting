@@ -105,3 +105,5 @@ quick-start.sh
 PobimSplatting/Backend/projects_db.json
 PobimSplatting/Backend/projects_db.json
 PobimSplatting/Backend/projects_db.json
+.env.local
+PobimSplatting/Frontend/package-lock.json

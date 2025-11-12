@@ -234,7 +234,8 @@ class VideoProcessor:
                 continue
 
             # Basic quality filtering (simplified)
-            if self._is_good_quality_frame(frame, prev_frame):
+            # RELAXED: More lenient quality check to preserve more frames for 3D reconstruction
+            if self._is_good_quality_frame(frame, prev_frame, quality_percent):
                 try:
                     # Convert BGR to RGB
                     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -328,9 +329,13 @@ class VideoProcessor:
         cap.release()
         return preview_frames
 
-    def _is_good_quality_frame(self, frame, prev_frame):
+    def _is_good_quality_frame(self, frame, prev_frame, quality_percent=100):
         """
         Simple quality assessment for 3D reconstruction frames
+        RELAXED thresholds to preserve more frames for better reconstruction coverage
+        
+        Args:
+            quality_percent: User-selected quality (100, 75, 50) - affects filtering strictness
         """
         try:
             # Resize frame for quality analysis to speed up processing on high-res videos
@@ -346,18 +351,27 @@ class VideoProcessor:
 
             gray = cv2.cvtColor(analysis_frame, cv2.COLOR_BGR2GRAY)
 
-            # Basic blur detection (adjusted threshold for high-res videos)
+            # RELAXED: Blur detection - much more lenient thresholds
+            # Lower quality settings are more tolerant of blur
             laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
-            blur_threshold = 50 if width > 1920 else 100
+            
+            if quality_percent == 100:
+                blur_threshold = 30 if width > 1920 else 50  # Relaxed from 50/100
+            elif quality_percent == 75:
+                blur_threshold = 20 if width > 1920 else 35  # Very relaxed
+            else:  # 50%
+                blur_threshold = 15 if width > 1920 else 25  # Extremely relaxed
+                
             if laplacian_var < blur_threshold:
                 return False
 
-            # Basic brightness check
+            # RELAXED: Brightness check - wider acceptable range
             mean_brightness = gray.mean()
-            if mean_brightness < 20 or mean_brightness > 235:
+            if mean_brightness < 10 or mean_brightness > 245:  # Relaxed from 20-235
                 return False
 
-            # Simple similarity check
+            # RELAXED: Similarity check - much more lenient
+            # Only reject frames that are EXTREMELY similar (e.g., static camera on tripod)
             if prev_frame is not None:
                 if width > 1920 or height > 1080:
                     prev_analysis = cv2.resize(prev_frame, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
@@ -366,7 +380,9 @@ class VideoProcessor:
 
                 prev_gray = cv2.cvtColor(prev_analysis, cv2.COLOR_BGR2GRAY)
                 diff = cv2.absdiff(gray, prev_gray)
-                if diff.mean() < 3:  # Too similar
+                
+                # RELAXED: Only reject if nearly identical (< 1 instead of < 3)
+                if diff.mean() < 1:  # Extremely similar frames only
                     return False
 
             return True

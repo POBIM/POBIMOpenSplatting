@@ -1,7 +1,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 
-import type { Vec3, ScreenProjection, CameraAxes, PointPickResult } from '../useSplatScene';
+import type { Vec3, ScreenProjection, CameraAxes, PointPickResult, OrbitState } from '../useSplatScene';
 
 export type SnapAxis = 'x' | 'y' | 'z';
 
@@ -385,6 +385,7 @@ interface UseMeasurementToolsOptions {
   pickPoint?: (canvasX: number, canvasY: number) => PointPickResult | null;
   projectWorldToScreen: (position: Vec3) => ScreenProjection | null;
   cameraAxes: CameraAxes | null;
+  orbitState: OrbitState | null;
   worldToModel: (world: Vec3) => Vec3 | null;
   modelToWorld: (local: Vec3) => Vec3 | null;
   getPointWorldPosition?: (index: number) => Vec3 | null;
@@ -398,6 +399,7 @@ export function useMeasurementTools({
   pickPoint,
   projectWorldToScreen,
   cameraAxes,
+  orbitState,
   worldToModel,
   modelToWorld,
   getPointWorldPosition,
@@ -939,7 +941,7 @@ export function useMeasurementTools({
   }, [storageKey, measurementNodes, measurements, measurementScale, areaPolygons]);
 
   const cameraUpdateKey = useMemo(() => {
-    if (!cameraAxes) {
+    if (!cameraAxes || !orbitState) {
       return 'none';
     }
     const { x, y, z } = cameraAxes;
@@ -953,8 +955,11 @@ export function useMeasurementTools({
       z.x.toFixed(4),
       z.y.toFixed(4),
       z.z.toFixed(4),
+      orbitState.distance.toFixed(4),
+      orbitState.azimuth.toFixed(4),
+      orbitState.elevation.toFixed(4),
     ].join('|');
-  }, [cameraAxes]);
+  }, [cameraAxes, orbitState]);
 
   const showMessage = useCallback((text: string | null, options?: { persistent?: boolean }) => {
     setMessageState(text);

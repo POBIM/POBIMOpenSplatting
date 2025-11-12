@@ -168,6 +168,7 @@ export default function SplatViewer() {
     pickPoint,
     projectWorldToScreen,
     cameraAxes,
+    orbitState,
     worldToModel,
     modelToWorld,
     getPointWorldPosition,

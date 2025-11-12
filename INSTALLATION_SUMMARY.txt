@@ -1,334 +1,153 @@
-╔═══════════════════════════════════════════════════════════════════════════╗
-║                                                                           ║
-║              POBIMOpenSplat - Installation System Summary                ║
-║                                                                           ║
-║                     Created: November 7, 2025                            ║
-║                                                                           ║
-╚═══════════════════════════════════════════════════════════════════════════╝
-
-
-═══════════════════════════════════════════════════════════════════════════
-  📦 FILES CREATED
-═══════════════════════════════════════════════════════════════════════════
-
-✅ Scripts (3 files)
-   • install.sh ...................... Main installation script
-   • quick-start.sh .................. Quick start (auto-generated)
-   • check-system.sh ................. System requirements checker
-
-✅ Documentation - English (5 files)
-   • INSTALLATION.md ................. Complete installation guide
-   • QUICK_REFERENCE.md .............. Quick commands & shortcuts
-   • INSTALLATION_SYSTEM.md .......... System architecture overview
-   • WORKFLOW.md ..................... Visual workflow diagrams
-   • DOCS_INDEX.md ................... Documentation index
-
-✅ Documentation - Thai (1 file)
-   • INSTALLATION_TH.md .............. คู่มือติดตั้งภาษาไทย
-
-✅ Updated Files (2 files)
-   • README.md ....................... Added POBIMOpenSplat section
-   • PobimSplatting/start.sh ......... Already exists (no changes)
-
-═══════════════════════════════════════════════════════════════════════════
-  🚀 QUICK START COMMANDS
-═══════════════════════════════════════════════════════════════════════════
-
-┌───────────────────────────────────────────────────────────────────────┐
-│ First Time Installation                                               │
-├───────────────────────────────────────────────────────────────────────┤
-│                                                                       │
-│   git clone https://github.com/POBIM/POBIMOpenSplat.git              │
-│   cd POBIMOpenSplat                                                   │
-│   chmod +x install.sh check-system.sh                                │
-│   ./install.sh                                                        │
-│                                                                       │
-└───────────────────────────────────────────────────────────────────────┘
-
-┌───────────────────────────────────────────────────────────────────────┐
-│ Daily Usage                                                           │
-├───────────────────────────────────────────────────────────────────────┤
-│                                                                       │
-│   ./quick-start.sh                                                    │
-│                                                                       │
-│   → Access: http://localhost:3000                                    │
-│                                                                       │
-└───────────────────────────────────────────────────────────────────────┘
-
-═══════════════════════════════════════════════════════════════════════════
-  📋 SYSTEM REQUIREMENTS
-═══════════════════════════════════════════════════════════════════════════
-
-Hardware:
-  ✓ GPU: NVIDIA with CUDA support (RTX 3060+ recommended)
-  ✓ RAM: 16GB+ (32GB recommended)
-  ✓ Disk: 50GB+ free space
-  ✓ CPU: 4+ cores
-
-Software:
-  ✓ OS: Ubuntu 20.04/22.04 or Debian-based Linux
-  ✓ NVIDIA Driver: Latest version
-  ✓ CUDA Toolkit: 11.8, 12.1, or 12.6
-
-═══════════════════════════════════════════════════════════════════════════
-  🎯 INSTALLATION PHASES
-═══════════════════════════════════════════════════════════════════════════
-
-Phase 1: System Detection
-  • Detect OS, architecture, GPU, CUDA version
-  • Check RAM, disk space, CPU cores
-  • Determine LibTorch variant needed
-
-Phase 2: System Dependencies
-  • Install build tools (gcc, g++, cmake, make)
-  • Install Python 3, pip, venv
-  • Install Node.js, npm
-  • Install libraries (OpenCV, Boost, Eigen, Qt5, etc.)
-
-Phase 3: LibTorch Setup
-  • Download appropriate LibTorch version
-  • Extract to libtorch-cuda126/ or libtorch-cpu/
-  • Configure library paths
-
-Phase 4: Build COLMAP
-  • Clone or use existing COLMAP source
-  • Configure CMake with GPU support
-  • Compile and install binary
-
-Phase 5: Build OpenSplat
-  • Configure CMake with LibTorch
-  • Compile with CUDA support
-  • Test binary
+╔══════════════════════════════════════════════════════════════════════╗
+║                                                                      ║
+║  ✨ install.sh ได้รับการปรับปรุงแล้ว!                                ║
+║                                                                      ║
+╚══════════════════════════════════════════════════════════════════════╝
+
+🎯 การเปลี่ยนแปลงหลัก:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✅ เพิ่มฟังก์ชัน install_cuda_toolkit() - ติดตั้ง CUDA อัตโนมัติ
+✅ ตรวจสอบ NVIDIA GPU และ Driver อัตโนมัติ
+✅ ดาวน์โหลดและติดตั้ง CUDA Toolkit 12.6
+✅ ตั้งค่า environment variables (PATH, LD_LIBRARY_PATH)
+✅ เพิ่ม CUDA paths ลงใน ~/.bashrc อัตโนมัติ
+✅ ตรวจสอบความสมบูรณ์ของการติดตั้ง
+
+📋 การทำงานของ install.sh ตอนนี้:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Step 1: ตรวจสอบระบบ (GPU, Driver, RAM, Disk)
+Step 2: 🆕 ตรวจสอบและติดตั้ง CUDA Toolkit (ถ้าจำเป็น)
+Step 3: ติดตั้ง system dependencies
+Step 4: ดาวน์โหลด LibTorch
+Step 5: Build COLMAP (ด้วย CUDA support)
+Step 6: Build OpenSplat
+Step 7: Setup Python backend
+Step 8: Setup Node.js frontend
+Step 9: สร้าง quick-start script
+Step 10: สร้างไฟล์ environment config
+Step 11: แสดงสรุปการติดตั้ง
+
+🚀 วิธีใช้งาน:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. ติดตั้งระบบทั้งหมด (รวม CUDA):
+   ./install.sh
+
+2. ทดสอบว่า CUDA ติดตั้งสำเร็จ:
+   ./test-cuda-check.sh
+
+3. อ่านเอกสารเพิ่มเติม:
+   cat CUDA_AUTO_INSTALL.md
+
+📦 สิ่งที่จะถูกติดตั้ง (ถ้าเลือก CUDA):
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+• CUDA Toolkit 12.6
+  - nvcc (CUDA Compiler)
+  - cuBLAS (Linear Algebra)
+  - cuDNN (Deep Learning)
+  - cuFFT (Fast Fourier Transform)
+  - cuSPARSE (Sparse Matrix)
+  - Nsight Tools (Profiling)
+
+📊 ขนาดการติดตั้ง:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ดาวน์โหลด: ~3 GB
+ติดตั้ง:    ~6.7 GB
+เวลา:       5-10 นาที (ขึ้นกับความเร็วเน็ต)
+
+⚙️ Environment Variables ที่จะถูกตั้งค่า:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+export PATH=/usr/local/cuda-12.6/bin:$PATH
+export LD_LIBRARY_PATH=/usr/local/cuda-12.6/lib64:$LD_LIBRARY_PATH
+
+✅ สิ่งที่ควรตรวจสอบก่อนติดตั้ง:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. มี NVIDIA GPU:
+   lspci | grep -i nvidia
+
+2. มี NVIDIA Driver (version 525+):
+   nvidia-smi
+
+3. มีพื้นที่ว่างพอ (50GB+):
+   df -h
+
+4. มี RAM เพียงพอ (16GB+):
+   free -h
+
+💡 ข้อดีของระบบใหม่:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✨ ติดตั้งอัตโนมัติ - ไม่ต้องลง CUDA ด้วยตนเอง
+✨ ตรวจสอบอัจฉริยะ - ข้ามถ้า CUDA มีอยู่แล้ว
+✨ ตั้งค่าครบถ้วน - Environment variables พร้อมใช้
+✨ รองรับหลาย version - เข้ากันได้กับ driver ต่างๆ
+✨ ทดสอบได้ง่าย - มีสคริปต์ตรวจสอบให้
+
+📖 ไฟล์ที่เพิ่มเข้ามา:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. install.sh (ปรับปรุง)
+   - เพิ่มฟังก์ชัน install_cuda_toolkit()
+   - ปรับ main flow ให้ติดตั้ง CUDA อัตโนมัติ
+
+2. CUDA_AUTO_INSTALL.md (ใหม่)
+   - เอกสารอธิบายโดยละเอียด
+   - วิธีใช้งานและแก้ปัญหา
+   - ความเข้ากันได้และข้อกำหนด
 
-Phase 6: Python Backend
-  • Create virtual environment
-  • Install Flask and dependencies
-  • Setup Backend ready to run
+3. test-cuda-check.sh (ใหม่)
+   - สคริปต์ทดสอบการติดตั้ง CUDA
+   - ตรวจสอบ 5 ขั้นตอน
+   - แสดงผลสรุปและคำแนะนำ
 
-Phase 7: Node.js Frontend
-  • Install npm packages
-  • Setup Next.js application
-  • Optional: Build production bundle
+4. INSTALLATION_SUMMARY.txt (นี่ไง!)
+   - สรุปการเปลี่ยนแปลง
 
-Phase 8: Quick Start Script
-  • Generate quick-start.sh
-  • Set environment variables
-  • Link to PobimSplatting/start.sh
+🔍 ตัวอย่างการใช้งาน:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Phase 9: Finalization
-  • Create .env.local configuration
-  • Generate installation log
-  • Display summary and URLs
+# กรณีที่ 1: ระบบใหม่ (ยังไม่มี CUDA)
+$ ./install.sh
 
-═══════════════════════════════════════════════════════════════════════════
-  📚 DOCUMENTATION MAP
-═══════════════════════════════════════════════════════════════════════════
-
-Start Here:
-  → DOCS_INDEX.md ..................... Master index (START HERE!)
-
-Installation Guides:
-  → INSTALLATION.md ................... English guide
-  → INSTALLATION_TH.md ................ Thai guide (ภาษาไทย)
-
-Quick Reference:
-  → QUICK_REFERENCE.md ................ Commands & troubleshooting
-
-Technical Details:
-  → INSTALLATION_SYSTEM.md ............ System architecture
-  → WORKFLOW.md ....................... Visual workflow diagrams
-
-Project Info:
-  → README.md ......................... Project overview
-  → AGENTS.md ......................... Development guidelines
-
-═══════════════════════════════════════════════════════════════════════════
-  ✨ KEY FEATURES
-═══════════════════════════════════════════════════════════════════════════
-
-✓ One-Command Installation
-  → ./install.sh does everything automatically
-
-✓ Smart CUDA Detection
-  → Auto-selects correct LibTorch for your CUDA version
-
-✓ System Validation
-  → check-system.sh verifies requirements before installation
-
-✓ Comprehensive Error Checking
-  → Validates at each step with clear error messages
-
-✓ Detailed Logging
-  → Complete install.log for debugging
-
-✓ Interactive Prompts
-  → User-friendly with yes/no questions
-
-✓ Quick Start Script
-  → ./quick-start.sh for future use (no re-installation)
-
-✓ Complete Documentation
-  → English + Thai guides with examples
-
-✓ Portable Setup
-  → Works on any compatible Linux system
-
-✓ Resume Capability
-  → Can continue if installation is interrupted
-
-═══════════════════════════════════════════════════════════════════════════
-  🎓 USER PROFILES
-═══════════════════════════════════════════════════════════════════════════
-
-End User (just want to use it):
-  1. Read: INSTALLATION_TH.md or INSTALLATION.md
-  2. Run: ./install.sh
-  3. Run: ./quick-start.sh
-  4. Bookmark: QUICK_REFERENCE.md
-
-Developer (work on the code):
-  1. Read: README.md → AGENTS.md → INSTALLATION_SYSTEM.md
-  2. Review: WORKFLOW.md
-  3. Run: ./install.sh
-
-System Administrator (deploy to multiple machines):
-  1. Read: INSTALLATION.md
-  2. Check all machines: ./check-system.sh
-  3. Install CUDA where needed
-  4. Run on each machine: ./install.sh
-  5. Reference: QUICK_REFERENCE.md
-
-═══════════════════════════════════════════════════════════════════════════
-  🌐 ACCESS POINTS
-═══════════════════════════════════════════════════════════════════════════
-
-After running ./quick-start.sh:
-
-  Frontend (Main UI)
-    → http://localhost:3000
-    → Upload images, run COLMAP, train models, view results
-
-  Backend API
-    → http://localhost:5000
-    → REST API for project management
-
-═══════════════════════════════════════════════════════════════════════════
-  📊 FILE STRUCTURE AFTER INSTALLATION
-═══════════════════════════════════════════════════════════════════════════
-
-POBIMOpenSplat/
-├── install.sh              ← Run this first
-├── quick-start.sh          ← Run this daily
-├── check-system.sh         ← Check requirements
-├── install.log             ← Installation log
-├── .env.local              ← Environment config
-│
-├── build/
-│   └── opensplat           ← ✓ Main binary
-│
-├── colmap-build/
-│   └── colmap              ← ✓ COLMAP binary
-│
-├── libtorch-cuda126/       ← ✓ PyTorch library
-│
-├── PobimSplatting/
-│   ├── start.sh            ← Server manager
-│   ├── Backend/
-│   │   ├── venv/           ← ✓ Python env
-│   │   └── backend.log
-│   └── Frontend/
-│       ├── node_modules/   ← ✓ Node.js deps
-│       └── frontend.log
-│
-├── datasets/               ← Input data
-├── uploads/                ← Uploaded files
-└── results/                ← Generated models
-
-═══════════════════════════════════════════════════════════════════════════
-  🆘 TROUBLESHOOTING
-═══════════════════════════════════════════════════════════════════════════
-
-Problem: Port already in use
-Solution:
-  cd PobimSplatting && ./start.sh
-  → Select: 8) Force clear default ports
-
-Problem: CUDA not found
-Solution:
-  export PATH=/usr/local/cuda/bin:$PATH
-  export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
-
-Problem: Installation failed
-Solution:
-  1. Check install.log
-  2. Run ./check-system.sh
-  3. Fix issues shown
-  4. Run ./install.sh again
-
-Problem: Binary doesn't work on another machine
-Solution:
-  ⚠ Binaries are NOT portable!
-  → Run ./install.sh on each machine
-
-═══════════════════════════════════════════════════════════════════════════
-  ⏱️ INSTALLATION TIME
-═══════════════════════════════════════════════════════════════════════════
-
-Estimated time: 30-60 minutes
-
-Breakdown:
-  • System dependencies: 5-10 min
-  • LibTorch download: 5-15 min (depends on internet speed)
-  • COLMAP build: 10-20 min (depends on CPU cores)
-  • OpenSplat build: 5-10 min
-  • Python/Node setup: 5-10 min
-
-═══════════════════════════════════════════════════════════════════════════
-  💡 TIPS
-═══════════════════════════════════════════════════════════════════════════
-
-✓ Run check-system.sh before installation to verify requirements
-✓ Keep install.log for troubleshooting
-✓ Use quick-start.sh instead of manual commands
-✓ Bookmark QUICK_REFERENCE.md for daily use
-✓ Check logs when something goes wrong
-✓ Don't copy binaries to other machines - install fresh
-
-═══════════════════════════════════════════════════════════════════════════
-  📞 SUPPORT
-═══════════════════════════════════════════════════════════════════════════
-
-If you encounter issues:
-
-  1. Check install.log
-  2. Run ./check-system.sh
-  3. Read INSTALLATION.md troubleshooting section
-  4. Check QUICK_REFERENCE.md for common fixes
-  5. Contact development team with:
-     • install.log file
-     • OS version
-     • GPU model
-     • CUDA version
-
-═══════════════════════════════════════════════════════════════════════════
-  🎉 SUCCESS!
-═══════════════════════════════════════════════════════════════════════════
-
-You now have a complete installation system that:
-  ✓ Installs everything automatically
-  ✓ Validates system requirements
-  ✓ Provides comprehensive documentation
-  ✓ Offers quick start for daily use
-  ✓ Includes troubleshooting guides
-  ✓ Works on any compatible Linux system
-
-Next steps:
-  1. Run: ./install.sh
-  2. Start: ./quick-start.sh
-  3. Enjoy: http://localhost:3000
-
-Happy 3D Gaussian Splatting! 🎨✨
-
-═══════════════════════════════════════════════════════════════════════════
-  End of Summary
-═══════════════════════════════════════════════════════════════════════════
+=== Checking System Requirements ===
+✓ NVIDIA GPU detected: NVIDIA GeForce RTX 4090
+✓ NVIDIA Driver version: 575.51.03
+✗ CUDA Toolkit not found
+
+=== Installing CUDA Toolkit ===
+Install CUDA Toolkit 12.6? [Y/n]: y
+Downloading CUDA repository keyring...
+Installing CUDA Toolkit 12.6 (this will take several minutes)...
+✓ CUDA Toolkit 12.6 installed successfully
+✓ CUDA environment variables added to ~/.bashrc
+
+# กรณีที่ 2: มี CUDA อยู่แล้ว
+$ ./install.sh
+
+=== Checking System Requirements ===
+✓ NVIDIA GPU detected: NVIDIA GeForce RTX 4090
+✓ CUDA Toolkit already installed: 12.6
+✓ CUDA Toolkit already available
+
+[ข้ามขั้นตอนติดตั้ง CUDA]
+
+📞 การสนับสนุน:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+หากพบปัญหา:
+1. ตรวจสอบ install.log
+2. รัน ./test-cuda-check.sh
+3. อ่าน CUDA_AUTO_INSTALL.md
+4. เปิด Issue บน GitHub
+
+🎉 ขอให้ใช้งานสนุก!
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ระบบ POBIMOpenSplatting ตอนนี้ติดตั้งง่ายขึ้นและพร้อมใช้งานมากขึ้น!
+

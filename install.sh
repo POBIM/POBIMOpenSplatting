@@ -5,13 +5,14 @@
 # =============================================================================
 # This script will:
 # 1. Check system requirements (GPU, CUDA, dependencies)
-# 2. Install required packages
-# 3. Download and setup LibTorch
-# 4. Build COLMAP
-# 5. Build OpenSplat
-# 6. Setup Python environments
-# 7. Setup Node.js frontend
-# 8. Create quick-start script
+# 2. Install CUDA Toolkit automatically if needed
+# 3. Install required system packages
+# 4. Download and setup LibTorch
+# 5. Build COLMAP with CUDA support
+# 6. Build OpenSplat
+# 7. Setup Python environments
+# 8. Setup Node.js frontend
+# 9. Create quick-start script
 # =============================================================================
 
 set -e  # Exit on error
@@ -220,6 +221,121 @@ check_system_requirements() {
         if ! prompt_yes_no "Continue anyway?" "n"; then
             exit 1
         fi
+    fi
+    
+    echo ""
+}
+
+# =============================================================================
+# Install CUDA Toolkit
+# =============================================================================
+
+install_cuda_toolkit() {
+    print_header "Installing CUDA Toolkit"
+    
+    # Check if nvcc is already available
+    if check_command nvcc; then
+        NVCC_VERSION=$(nvcc --version 2>/dev/null | grep "release" | awk '{print $5}' | cut -d',' -f1 || echo "unknown")
+        print_success "CUDA Toolkit already installed: $NVCC_VERSION"
+        return 0
+    fi
+    
+    # Check if nvidia-smi is available (driver must be installed first)
+    if ! check_command nvidia-smi; then
+        print_error "NVIDIA Driver not found. Please install NVIDIA driver first."
+        print_info "Install with: sudo apt-get install -y nvidia-driver-<version>"
+        print_info "Or visit: https://www.nvidia.com/Download/index.aspx"
+        return 1
+    fi
+    
+    # Get driver CUDA version
+    DRIVER_CUDA=$(nvidia-smi | grep "CUDA Version" | awk '{print $9}' | cut -d'.' -f1,2)
+    if [ -z "$DRIVER_CUDA" ]; then
+        print_warning "Cannot detect CUDA version from driver"
+        DRIVER_CUDA="12.6"
+    fi
+    
+    print_info "NVIDIA Driver supports CUDA up to: $DRIVER_CUDA"
+    print_info "Will install CUDA Toolkit 12.6 (compatible with driver)"
+    echo ""
+    
+    if ! prompt_yes_no "Install CUDA Toolkit 12.6?" "y"; then
+        print_warning "Skipping CUDA Toolkit installation"
+        return 0
+    fi
+    
+    # Check if we need sudo
+    if [ "$EUID" -ne 0 ]; then
+        SUDO="sudo"
+    else
+        SUDO=""
+    fi
+    
+    # For Ubuntu/Debian systems
+    if check_command apt-get; then
+        print_info "Downloading CUDA repository keyring..."
+        
+        # Download keyring
+        wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb -O /tmp/cuda-keyring.deb
+        
+        if [ $? -ne 0 ]; then
+            print_error "Failed to download CUDA keyring"
+            return 1
+        fi
+        
+        print_info "Installing CUDA repository keyring..."
+        $SUDO dpkg -i /tmp/cuda-keyring.deb
+        rm -f /tmp/cuda-keyring.deb
+        
+        print_info "Updating package lists..."
+        $SUDO apt-get update -qq
+        
+        print_info "Installing CUDA Toolkit 12.6 (this will take several minutes)..."
+        print_warning "Download size: ~3GB, Install size: ~6.7GB"
+        echo ""
+        
+        $SUDO apt-get install -y cuda-toolkit-12-6
+        
+        if [ $? -ne 0 ]; then
+            print_error "Failed to install CUDA Toolkit"
+            return 1
+        fi
+        
+        print_success "CUDA Toolkit 12.6 installed successfully"
+        
+        # Setup environment variables
+        CUDA_PATH="/usr/local/cuda-12.6"
+        
+        print_info "Setting up environment variables..."
+        
+        # Add to current session
+        export PATH="$CUDA_PATH/bin:$PATH"
+        export LD_LIBRARY_PATH="$CUDA_PATH/lib64:$LD_LIBRARY_PATH"
+        
+        # Add to .bashrc if not already there
+        if ! grep -q "CUDA Toolkit" "$HOME/.bashrc" 2>/dev/null; then
+            cat >> "$HOME/.bashrc" << 'EOF'
+
+# CUDA Toolkit
+export PATH=/usr/local/cuda-12.6/bin:$PATH
+export LD_LIBRARY_PATH=/usr/local/cuda-12.6/lib64:$LD_LIBRARY_PATH
+EOF
+            print_success "CUDA environment variables added to ~/.bashrc"
+        fi
+        
+        # Verify installation
+        if [ -f "$CUDA_PATH/bin/nvcc" ]; then
+            NVCC_VERSION=$("$CUDA_PATH/bin/nvcc" --version | grep "release" | awk '{print $5}' | cut -d',' -f1)
+            print_success "CUDA Toolkit $NVCC_VERSION is ready"
+            CUDA_VERSION="$NVCC_VERSION"
+        else
+            print_warning "CUDA installed but nvcc not found at expected location"
+        fi
+        
+    else
+        print_error "Automatic CUDA installation only supported on Ubuntu/Debian"
+        print_info "Please install CUDA manually from: https://developer.nvidia.com/cuda-downloads"
+        return 1
     fi
     
     echo ""
@@ -572,6 +688,12 @@ build_opensplat() {
     mkdir -p "$BUILD_DIR"
     cd "$BUILD_DIR"
     
+    # Clean CMake cache if it exists to avoid stale configuration
+    if [ -f "CMakeCache.txt" ]; then
+        print_info "Cleaning stale CMake cache..."
+        rm -f CMakeCache.txt
+    fi
+    
     print_info "Configuring OpenSplat with CMake..."
     
     # Auto-detect CUDA
@@ -636,6 +758,21 @@ build_opensplat() {
         return 1
     fi
     
+    # Ensure CUDA is in PATH for make
+    if [ -n "$CUDA_HOME" ]; then
+        print_info "Ensuring CUDA is in PATH for build process..."
+        export PATH="$CUDA_HOME/bin:$PATH"
+        export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$LD_LIBRARY_PATH"
+        
+        # Verify nvcc is accessible
+        if command -v nvcc &> /dev/null; then
+            NVCC_LOCATION=$(which nvcc)
+            print_success "nvcc found at: $NVCC_LOCATION"
+        else
+            print_warning "nvcc not found in PATH - build may fail"
+        fi
+    fi
+    
     print_info "Building OpenSplat (using $NUM_CORES cores)..."
     make -j"$NUM_CORES"
     
@@ -680,12 +817,97 @@ build_opensplat() {
 setup_python_backend() {
     print_header "Setting up Python Backend"
     
+    # Check if we need sudo
+    if [ "$EUID" -ne 0 ]; then
+        SUDO="sudo"
+    else
+        SUDO=""
+    fi
+    
+    # Check for Python 3.12
+    PYTHON_CMD=""
+    if command -v python3.12 &> /dev/null; then
+        PYTHON_CMD="python3.12"
+        PYTHON_VERSION=$(python3.12 --version)
+        print_success "Python 3.12 found: $PYTHON_VERSION"
+    elif command -v python3.11 &> /dev/null; then
+        PYTHON_CMD="python3.11"
+        PYTHON_VERSION=$(python3.11 --version)
+        print_warning "Python 3.12 not found, using Python 3.11 instead"
+        print_success "Python 3.11 found: $PYTHON_VERSION"
+    elif command -v python3 &> /dev/null; then
+        PYTHON_VERSION=$(python3 --version | awk '{print $2}')
+        PYTHON_MAJOR=$(echo $PYTHON_VERSION | cut -d'.' -f1)
+        PYTHON_MINOR=$(echo $PYTHON_VERSION | cut -d'.' -f2)
+        
+        if [ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -ge 10 ]; then
+            PYTHON_CMD="python3"
+            print_warning "Python 3.12 not found, using Python $PYTHON_VERSION"
+        else
+            print_error "Python 3.10+ required, found Python $PYTHON_VERSION"
+        fi
+    fi
+    
+    # Install Python 3.12 if not found and user wants it
+    if [ -z "$PYTHON_CMD" ] || [ "$PYTHON_CMD" != "python3.12" ]; then
+        echo ""
+        print_info "Python 3.12 is recommended for best compatibility"
+        
+        if prompt_yes_no "Install Python 3.12?" "y"; then
+            print_info "Installing Python 3.12..."
+            
+            if check_command apt-get; then
+                # Add deadsnakes PPA for Python 3.12
+                $SUDO apt-get update -qq
+                $SUDO apt-get install -y software-properties-common
+                $SUDO add-apt-repository -y ppa:deadsnakes/ppa
+                $SUDO apt-get update -qq
+                $SUDO apt-get install -y python3.12 python3.12-venv python3.12-dev
+                
+                if command -v python3.12 &> /dev/null; then
+                    PYTHON_CMD="python3.12"
+                    print_success "Python 3.12 installed successfully"
+                else
+                    print_error "Failed to install Python 3.12"
+                    if [ -n "$PYTHON_CMD" ]; then
+                        print_warning "Will continue with $PYTHON_CMD"
+                    else
+                        return 1
+                    fi
+                fi
+            else
+                print_error "Automatic Python 3.12 installation only supported on Ubuntu/Debian"
+                print_info "Please install Python 3.12 manually:"
+                print_info "  https://www.python.org/downloads/"
+                
+                if [ -n "$PYTHON_CMD" ]; then
+                    print_warning "Will continue with $PYTHON_CMD"
+                else
+                    return 1
+                fi
+            fi
+        else
+            if [ -z "$PYTHON_CMD" ]; then
+                print_error "Cannot continue without Python 3.10+"
+                return 1
+            fi
+            print_info "Continuing with $PYTHON_CMD"
+        fi
+    fi
+    
     cd "$BACKEND_DIR"
     
     # Create virtual environment
     if [ ! -d "venv" ]; then
-        print_info "Creating Python virtual environment with Python 3.12..."
-        python3.12 -m venv venv
+        print_info "Creating Python virtual environment with $PYTHON_CMD..."
+        $PYTHON_CMD -m venv venv
+        
+        if [ $? -ne 0 ]; then
+            print_error "Failed to create virtual environment"
+            print_info "Try installing: $SUDO apt-get install -y ${PYTHON_CMD}-venv"
+            return 1
+        fi
+        print_success "Virtual environment created"
     else
         print_success "Virtual environment already exists"
     fi
@@ -927,45 +1149,53 @@ main() {
     # Step 1: Check system
     check_system_requirements
     
-    # Step 2: Install system dependencies
+    # Step 2: Install CUDA Toolkit if needed
+    if check_command nvidia-smi && ! check_command nvcc; then
+        print_info "NVIDIA GPU detected but CUDA Toolkit not installed"
+        install_cuda_toolkit
+    elif check_command nvcc; then
+        print_success "CUDA Toolkit already available"
+    fi
+    
+    # Step 3: Install system dependencies
     if prompt_yes_no "Install system dependencies?" "y"; then
         install_system_dependencies
     fi
     
-    # Step 3: Setup LibTorch
+    # Step 4: Setup LibTorch
     setup_libtorch
     
-    # Step 4: Build COLMAP
+    # Step 5: Build COLMAP
     if prompt_yes_no "Build COLMAP?" "y"; then
         build_colmap
     fi
     
-    # Step 5: Build OpenSplat
+    # Step 6: Build OpenSplat
     if prompt_yes_no "Build OpenSplat?" "y"; then
         build_opensplat
     fi
     
-    # Step 6: Setup Python backend
+    # Step 7: Setup Python backend
     if [ -d "$BACKEND_DIR" ]; then
         if prompt_yes_no "Setup Python backend?" "y"; then
             setup_python_backend
         fi
     fi
     
-    # Step 7: Setup Node.js frontend
+    # Step 8: Setup Node.js frontend
     if [ -d "$FRONTEND_DIR" ]; then
         if prompt_yes_no "Setup Node.js frontend?" "y"; then
             setup_nodejs_frontend
         fi
     fi
     
-    # Step 8: Create quick start script
+    # Step 9: Create quick start script
     create_quick_start_script
     
-    # Step 9: Create environment config
+    # Step 10: Create environment config
     create_env_config
     
-    # Step 10: Summary
+    # Step 11: Summary
     print_summary
     
     # Ask to start now

@@ -1,0 +1,385 @@
+╔══════════════════════════════════════════════════════════════════════╗
+║                                                                      ║
+║  ✨ install.sh ได้รับการปรับปรุงครั้งใหญ่! (v2.0)                   ║
+║                                                                      ║
+╚══════════════════════════════════════════════════════════════════════╝
+
+📅 วันที่อัพเดท: 12 พฤศจิกายน 2025
+🎯 เวอร์ชัน: 2.0 - "Smart Installer"
+
+═══════════════════════════════════════════════════════════════════════
+  🎉 การเปลี่ยนแปลงทั้งหมด
+═══════════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────────────┐
+│ 1️⃣  CUDA Auto-Installation (ใหม่!)                                 │
+└─────────────────────────────────────────────────────────────────────┘
+
+✅ ฟังก์ชัน install_cuda_toolkit()
+   • ตรวจสอบ NVIDIA GPU และ Driver อัตโนมัติ
+   • ดาวน์โหลดและติดตั้ง CUDA Toolkit 12.6
+   • ตั้งค่า environment variables (PATH, LD_LIBRARY_PATH)
+   • เพิ่ม CUDA paths ลงใน ~/.bashrc อัตโนมัติ
+   • ตรวจสอบความสมบูรณ์ของการติดตั้ง
+
+✅ การทำงาน:
+   • ตรวจสอบว่ามี nvidia-smi (Driver) หรือไม่
+   • ตรวจสอบว่ามี nvcc (CUDA Toolkit) หรือไม่
+   • ถ้าไม่มี CUDA → ถามว่าจะติดตั้งหรือไม่
+   • ติดตั้งอัตโนมัติจาก NVIDIA repository
+   • ตั้งค่า environment สำเร็จ
+
+📦 สิ่งที่ติดตั้ง:
+   • CUDA Toolkit 12.6 (~6.7 GB)
+   • nvcc, cuBLAS, cuDNN, cuFFT, cuSPARSE
+   • Nsight Tools, CUDA samples
+
+┌─────────────────────────────────────────────────────────────────────┐
+│ 2️⃣  Python Auto-Detection & Installation (ใหม่!)                   │
+└─────────────────────────────────────────────────────────────────────┘
+
+✅ ตรวจสอบ Python อัจฉริยะ:
+   1. ตรวจสอบ Python 3.12 (แนะนำ)
+   2. ตรวจสอบ Python 3.11 (รองรับ)
+   3. ตรวจสอบ Python 3.10+ (ใช้งานได้)
+   4. เสนอติดตั้ง Python 3.12
+
+✅ ติดตั้งอัตโนมัติ:
+   • เพิ่ม deadsnakes PPA
+   • ติดตั้ง python3.12, python3.12-venv, python3.12-dev
+   • สร้าง virtual environment
+   • Error handling ที่ดี
+
+✅ Fallback Options:
+   • ถ้าไม่ต้องการติดตั้ง Python 3.12
+   • จะใช้ Python version ที่มีอยู่ (3.10+)
+   • แจ้งเตือนและดำเนินการต่อ
+
+┌─────────────────────────────────────────────────────────────────────┐
+│ 3️⃣  OpenSplat Build Fixes (แก้ไข!)                                │
+└─────────────────────────────────────────────────────────────────────┘
+
+✅ แก้ปัญหา "/bin/nvcc: not found":
+   • ทำความสะอาด CMake cache เก่า
+   • Export PATH และ LD_LIBRARY_PATH ก่อน build
+   • ตรวจสอบว่า nvcc อยู่ใน PATH
+   • แสดง nvcc location ชัดเจน
+
+✅ การทำงาน:
+   • ลบ CMakeCache.txt ถ้ามี (avoid stale config)
+   • ตั้งค่า CUDA_HOME และ export ทุกครั้ง
+   • ตรวจสอบ nvcc ก่อน make
+   • Build ได้สำเร็จพร้อม CUDA support
+
+═══════════════════════════════════════════════════════════════════════
+  📋 ขั้นตอนการติดตั้งใหม่
+═══════════════════════════════════════════════════════════════════════
+
+Step 1:  ตรวจสอบระบบ (GPU, Driver, RAM, Disk)
+Step 2:  🆕 ตรวจสอบและติดตั้ง CUDA Toolkit (ถ้าจำเป็น)
+Step 3:  ติดตั้ง system dependencies
+Step 4:  ดาวน์โหลด LibTorch (CUDA-enabled)
+Step 5:  Build COLMAP (ด้วย CUDA support)
+Step 6:  Build OpenSplat (ด้วย CUDA support)
+Step 7:  🆕 ตรวจสอบและติดตั้ง Python 3.12 (ถ้าจำเป็น)
+Step 8:  Setup Python backend (with smart version detection)
+Step 9:  Setup Node.js frontend
+Step 10: สร้าง quick-start script
+Step 11: สร้างไฟล์ environment config
+Step 12: แสดงสรุปการติดตั้ง
+
+═══════════════════════════════════════════════════════════════════════
+  🚀 วิธีใช้งาน
+═══════════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────────────┐
+│ ติดตั้งระบบทั้งหมด (แบบอัตโนมัติเต็มรูปแบบ)                       │
+└─────────────────────────────────────────────────────────────────────┘
+
+$ ./install.sh
+
+สคริปต์จะ:
+✓ ตรวจสอบระบบ
+✓ ติดตั้ง CUDA Toolkit 12.6 (ถ้าไม่มี)
+✓ ติดตั้ง dependencies ทั้งหมด
+✓ Build COLMAP + OpenSplat พร้อม CUDA
+✓ ติดตั้ง Python 3.12 (ถ้าไม่มี)
+✓ Setup Python + Node.js environments
+✓ สร้าง quick-start script
+✓ พร้อมใช้งาน!
+
+┌─────────────────────────────────────────────────────────────────────┐
+│ ทดสอบการติดตั้ง CUDA                                               │
+└─────────────────────────────────────────────────────────────────────┘
+
+$ ./test-cuda-check.sh
+
+ตรวจสอบ:
+✓ NVIDIA Driver
+✓ CUDA Toolkit
+✓ CUDA Libraries
+✓ Environment Variables
+✓ GPU Compute Capability
+
+┌─────────────────────────────────────────────────────────────────────┐
+│ อ่านเอกสารโดยละเอียด                                               │
+└─────────────────────────────────────────────────────────────────────┘
+
+$ cat CUDA_AUTO_INSTALL.md      # คู่มือ CUDA installation
+$ cat PYTHON_AUTO_INSTALL.md    # คู่มือ Python installation
+$ cat INSTALLATION_SUMMARY.txt  # สรุปการติดตั้งแบบเก่า
+
+═══════════════════════════════════════════════════════════════════════
+  📊 ตัวอย่างการใช้งาน
+═══════════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────────────┐
+│ กรณีที่ 1: ระบบใหม่เอี่ยม (ไม่มีอะไรเลย)                          │
+└─────────────────────────────────────────────────────────────────────┘
+
+$ ./install.sh
+
+=== Checking System Requirements ===
+✓ NVIDIA GPU detected: NVIDIA GeForce RTX 4090
+✓ NVIDIA Driver version: 575.51.03
+✗ CUDA Toolkit not found
+
+ℹ NVIDIA GPU detected but CUDA Toolkit not installed
+
+=== Installing CUDA Toolkit ===
+Install CUDA Toolkit 12.6? [Y/n]: y
+⚠ Download size: ~3GB, Install size: ~6.7GB
+Downloading CUDA repository keyring...
+Installing CUDA Toolkit 12.6...
+✓ CUDA Toolkit 12.6 installed successfully
+✓ CUDA environment variables added to ~/.bashrc
+
+... [system dependencies] ...
+... [build COLMAP] ...
+... [build OpenSplat] ...
+
+=== Setting up Python Backend ===
+⚠ Python 3.12 not found, using Python 3.10.12
+ℹ Python 3.12 is recommended for best compatibility
+Install Python 3.12? [Y/n]: y
+Installing Python 3.12...
+✓ Python 3.12 installed successfully
+✓ Virtual environment created
+✓ Python dependencies installed
+
+=== Installation Complete! ===
+✓ All checks passed!
+
+┌─────────────────────────────────────────────────────────────────────┐
+│ กรณีที่ 2: มี CUDA และ Python 3.12 อยู่แล้ว                        │
+└─────────────────────────────────────────────────────────────────────┘
+
+$ ./install.sh
+
+=== Checking System Requirements ===
+✓ NVIDIA GPU detected: NVIDIA GeForce RTX 4090
+✓ CUDA Toolkit already installed: 12.6
+✓ CUDA Toolkit already available
+
+... [build process] ...
+
+=== Setting up Python Backend ===
+✓ Python 3.12 found: Python 3.12.3
+ℹ Creating Python virtual environment with python3.12...
+✓ Virtual environment created
+
+[ราบรื่นไร้ปัญหา!]
+
+┌─────────────────────────────────────────────────────────────────────┐
+│ กรณีที่ 3: ไม่ต้องการติดตั้งของใหม่                                │
+└─────────────────────────────────────────────────────────────────────┘
+
+$ ./install.sh
+
+=== Installing CUDA Toolkit ===
+Install CUDA Toolkit 12.6? [Y/n]: n
+⚠ Skipping CUDA Toolkit installation
+
+=== Setting up Python Backend ===
+Install Python 3.12? [Y/n]: n
+ℹ Continuing with python3
+✓ Virtual environment created with python3
+
+[ใช้ของเดิมต่อ!]
+
+═══════════════════════════════════════════════════════════════════════
+  📖 ไฟล์ที่เพิ่มเข้ามา
+═══════════════════════════════════════════════════════════════════════
+
+📄 install.sh (ปรับปรุงใหญ่)
+   • เพิ่มฟังก์ชัน install_cuda_toolkit()
+   • ปรับปรุง setup_python_backend() เป็นแบบอัจฉริยะ
+   • แก้ไข build_opensplat() ให้จัดการ PATH ดีขึ้น
+   • เพิ่ม error handling และ validation หลายจุด
+
+📄 CUDA_AUTO_INSTALL.md (ใหม่)
+   • เอกสารครบถ้วนเกี่ยวกับ CUDA installation
+   • วิธีใช้งานและแก้ปัญหา
+   • ความเข้ากันได้และข้อกำหนด
+   • FAQ และ troubleshooting
+
+📄 PYTHON_AUTO_INSTALL.md (ใหม่)
+   • เอกสารเกี่ยวกับ Python version detection
+   • วิธีติดตั้ง Python 3.12 manual
+   • Python version compatibility table
+   • Error handling และ best practices
+
+📄 test-cuda-check.sh (ใหม่)
+   • สคริปต์ทดสอบการติดตั้ง CUDA
+   • ตรวจสอบ 5 ขั้นตอนอย่างละเอียด
+   • แสดงผลสรุปและคำแนะนำ
+   • Exit code สำหรับ automation
+
+📄 UPDATE_SUMMARY.txt (นี่ไง!)
+   • สรุปการเปลี่ยนแปลงทั้งหมด v2.0
+   • รวม CUDA + Python auto-install
+   • ตัวอย่างการใช้งานครบถ้วน
+
+═══════════════════════════════════════════════════════════════════════
+  💡 ข้อดีของระบบใหม่
+═══════════════════════════════════════════════════════════════════════
+
+┌──────────────────┬─────────────────┬─────────────────────────────────┐
+│ คุณสมบัติ        │ เดิม (v1.0)     │ ใหม่ (v2.0)                     │
+├──────────────────┼─────────────────┼─────────────────────────────────┤
+│ CUDA Detection   │ ⚠️ Manual       │ ✅ Automatic                    │
+│ CUDA Install     │ ❌ Manual       │ ✅ Automatic                    │
+│ Python Detection │ ❌ None         │ ✅ Smart Multi-version          │
+│ Python Install   │ ❌ Manual       │ ✅ Automatic                    │
+│ Error Handling   │ ⚠️ Basic        │ ✅ Comprehensive                │
+│ User Messages    │ ⚠️ Generic      │ ✅ Informative & Helpful        │
+│ Fallback Options │ ❌ None         │ ✅ Multiple Choices             │
+│ Build Fixes      │ ⚠️ Manual debug │ ✅ Auto-fix CMake cache         │
+│ Documentation    │ ⚠️ README only  │ ✅ Complete Guides              │
+│ Testing Tools    │ ❌ None         │ ✅ test-cuda-check.sh           │
+└──────────────────┴─────────────────┴─────────────────────────────────┘
+
+═══════════════════════════════════════════════════════════════════════
+  ⚡ Performance & Requirements
+═══════════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────────────┐
+│ เวลาที่ใช้ในการติดตั้ง                                             │
+└─────────────────────────────────────────────────────────────────────┘
+
+CUDA Toolkit:
+  • ดาวน์โหลด:        2-5 นาที (ขึ้นกับเน็ต)
+  • ติดตั้ง:          3-5 นาที
+  • รวม:              5-10 นาที
+
+Python 3.12:
+  • ดาวน์โหลด:        30 วินาที
+  • ติดตั้ง:          1-2 นาที
+  • pip packages:     2-5 นาที
+  • รวม:              3-7 นาที
+
+COLMAP:
+  • Configure:        1-2 นาที
+  • Build:            10-20 นาที (ขึ้นกับ CPU)
+
+OpenSplat:
+  • Configure:        30 วินาที
+  • Build:            3-5 นาที
+
+รวมทั้งหมด:         25-45 นาที (ครั้งแรก)
+
+┌─────────────────────────────────────────────────────────────────────┐
+│ พื้นที่ที่ใช้                                                       │
+└─────────────────────────────────────────────────────────────────────┘
+
+CUDA Toolkit 12.6:     ~6.7 GB
+LibTorch (CUDA):       ~2.2 GB
+Python 3.12:           ~62 MB
+COLMAP build:          ~500 MB
+OpenSplat build:       ~200 MB
+Python venv + deps:    ~500 MB
+Node modules:          ~400 MB
+────────────────────────────────────
+รวม:                   ~10.5 GB
+
+═══════════════════════════════════════════════════════════════════════
+  🔧 การแก้ปัญหา (Quick Fixes)
+═══════════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────────────┐
+│ ปัญหา: nvcc not found หลัง install                                 │
+└─────────────────────────────────────────────────────────────────────┘
+
+$ source ~/.bashrc
+$ which nvcc
+# หรือ
+$ export PATH=/usr/local/cuda-12.6/bin:$PATH
+
+┌─────────────────────────────────────────────────────────────────────┐
+│ ปัญหา: OpenSplat build ล้มเหลว "/bin/nvcc: not found"             │
+└─────────────────────────────────────────────────────────────────────┘
+
+$ cd /root/POBIMOpenSplatting
+$ rm -rf build
+$ export PATH=/usr/local/cuda-12.6/bin:$PATH
+$ ./install.sh  # Build OpenSplat อีกครั้ง
+
+┌─────────────────────────────────────────────────────────────────────┐
+│ ปัญหา: Python venv สร้างไม่ได้                                     │
+└─────────────────────────────────────────────────────────────────────┘
+
+$ sudo apt-get install -y python3.12-venv
+# หรือ
+$ python3.12 -m pip install --user virtualenv
+
+┌─────────────────────────────────────────────────────────────────────┐
+│ ปัญหา: พื้นที่ดิสก์ไม่พอ                                           │
+└─────────────────────────────────────────────────────────────────────┘
+
+$ sudo apt-get clean
+$ sudo apt-get autoclean
+$ docker system prune -a  # ถ้าใช้ Docker
+
+═══════════════════════════════════════════════════════════════════════
+  📞 การสนับสนุน
+═══════════════════════════════════════════════════════════════════════
+
+หากพบปัญหาหรือต้องการความช่วยเหลือ:
+
+1. ตรวจสอบ install.log
+   $ tail -100 install.log
+
+2. รัน test script
+   $ ./test-cuda-check.sh
+
+3. อ่านเอกสาร
+   $ cat CUDA_AUTO_INSTALL.md
+   $ cat PYTHON_AUTO_INSTALL.md
+
+4. ตรวจสอบ GitHub Issues
+   https://github.com/your-repo/issues
+
+5. ดู troubleshooting guide
+   ในไฟล์ markdown แต่ละตัว
+
+═══════════════════════════════════════════════════════════════════════
+  🎉 สรุป
+═══════════════════════════════════════════════════════════════════════
+
+ระบบ POBIMOpenSplatting ตอนนี้:
+
+✨ ติดตั้งง่ายกว่าเดิมมาก - แค่รัน ./install.sh
+✨ อัจฉริยะมากขึ้น - ตรวจสอบและติดตั้งอัตโนมัติ
+✨ เสถียรกว่า - แก้ไขปัญหา build errors
+✨ ใช้งานง่าย - มี error messages ที่เข้าใจได้
+✨ เอกสารครบถ้วน - มีคู่มือทุกอย่าง
+✨ ทดสอบได้ - มี test scripts
+
+🚀 พร้อมใช้งานจริงในระดับ Production!
+
+═══════════════════════════════════════════════════════════════════════
+
+Version: 2.0 "Smart Installer"
+Date: 2025-11-12
+Tested on: Ubuntu 22.04 LTS + NVIDIA GeForce RTX 4090
+

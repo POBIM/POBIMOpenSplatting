@@ -356,11 +356,11 @@ def select_best_sparse_model(sparse_path, project_id=None):
     return best_model
 
 
-def get_colmap_config(num_images, project_id=None, quality_mode='balanced', custom_params=None):
-    """Configure COLMAP parameters based on image count and quality requirements"""
+def get_colmap_config(num_images, project_id=None, quality_mode='balanced', custom_params=None, vram_size=8):
+    """Configure COLMAP parameters based on image count, quality requirements, and GPU VRAM size"""
 
     if project_id:
-        append_log_line(project_id, f"Optimizing COLMAP config for {num_images} images (Quality: {quality_mode})")
+        append_log_line(project_id, f"Optimizing COLMAP config for {num_images} images (Quality: {quality_mode}, VRAM: {vram_size}GB)")
 
     # Quality-based parameter scaling - NEW: Balanced = High quality baseline
     # IMPROVED: Increased matches multiplier for high-feature-count images (75K+ features)
@@ -398,8 +398,17 @@ def get_colmap_config(num_images, project_id=None, quality_mode='balanced', cust
     num_octaves = base_octaves + (1 if quality_mode in ['ultra', 'professional', 'ultra_professional'] else 0)
 
     # Quality-aware matching strategy with GPU memory consideration
-    # Auto-detect and limit based on feature count to prevent GPU OOM
-    base_matches = 40960  # Base value for feature matching (40K matches)
+    # Conservative base matches - avoid GPU OOM while maximizing quality
+    vram_base_matches = {
+        8: 40960,   # 40K base (safe for 8GB)
+        16: 61440,  # 60K base (conservative for 16GB - 1.5x of 8GB)
+        24: 81920   # 80K base (2x of 8GB for 24GB)
+    }
+    base_matches = vram_base_matches.get(vram_size, 40960)
+    
+    if project_id:
+        append_log_line(project_id, f"🎮 GPU Config: {vram_size}GB VRAM → base_matches={base_matches}")
+    
     max_num_matches = int(base_matches * scale['matches'])
 
     # Override with custom parameters if provided
@@ -409,26 +418,32 @@ def get_colmap_config(num_images, project_id=None, quality_mode='balanced', cust
             if project_id:
                 append_log_line(project_id, f"🔧 Custom max_num_matches: {max_num_matches}")
     
-    # CRITICAL: Prevent GPU OOM by capping max_num_matches based on expected feature count
-    # For images with 70K-80K features, max_num_matches should be <= 40K to avoid GPU memory issues
-    # This is especially important for CUDA-based feature matching
-    if max_num_matches > 65536:
+    # VRAM-aware safety cap to prevent GPU OOM
+    # Conservative caps based on real-world usage
+    vram_caps = {
+        8: 102400,   # 100K max for 8GB (safe limit)
+        16: 153600,  # 150K max for 16GB (conservative - ~60K base × 2.5)
+        24: 204800   # 200K max for 24GB (2x of 100K)
+    }
+    vram_cap = vram_caps.get(vram_size, 102400)
+    
+    if max_num_matches > vram_cap:
         if project_id:
-            append_log_line(project_id, f"⚠️ Reducing max_num_matches from {max_num_matches} to 40960 to prevent GPU memory overflow")
-        max_num_matches = 40960  # Safe limit for high-feature images
+            append_log_line(project_id, f"⚠️ Capping max_num_matches from {max_num_matches} to {vram_cap} for {vram_size}GB VRAM safety")
+        max_num_matches = vram_cap
 
     # Matching strategy based on dataset size and quality requirements
     if quality_mode == 'robust':
         # Robust mode: Always use exhaustive for difficult datasets
         matcher_type = 'exhaustive'
-        max_num_matches = min(max_num_matches, 40960)  # Cap for GPU safety
+        max_num_matches = min(max_num_matches, vram_cap)  # VRAM-aware cap for GPU safety
         matcher_params = {}
         if project_id:
             append_log_line(project_id, "🔧 Using ROBUST mode: Exhaustive matching for maximum coverage")
     elif quality_mode == 'ultra' and num_images <= 200:
         # Ultra quality: Use exhaustive for smaller datasets
         matcher_type = 'exhaustive'
-        max_num_matches = min(max_num_matches, 40960)  # Cap for GPU safety
+        max_num_matches = min(max_num_matches, vram_cap)  # VRAM-aware cap for GPU safety
         matcher_params = {}
     elif num_images <= 50:
         # Small: Use exhaustive for best coverage
@@ -760,6 +775,7 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
 
         # Get optimized COLMAP configuration with quality mode
         quality_mode = config.get('quality_mode', 'balanced')
+        vram_size = config.get('vram_size', 8)  # Get GPU VRAM size (default 8GB)
 
         # Extract custom parameters if in custom mode
         custom_params = None
@@ -779,7 +795,7 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
                 'init_num_trials': config.get('init_num_trials')
             }
 
-        colmap_config = get_colmap_config(num_images, project_id, quality_mode, custom_params)
+        colmap_config = get_colmap_config(num_images, project_id, quality_mode, custom_params, vram_size)
 
         # 1. Feature Extraction
         update_state(project_id, 'feature_extraction', status='running')

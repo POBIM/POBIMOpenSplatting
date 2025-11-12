@@ -4,7 +4,7 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 60000,
+  timeout: 600000,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -135,6 +135,7 @@ export const api = {
     if (config.target_fps) formData.append('target_fps', config.target_fps.toString());
     if (config.quality !== undefined) formData.append('quality', config.quality.toString());
     if (config.preview_count) formData.append('preview_count', config.preview_count.toString());
+    if (config.vram_size !== undefined) formData.append('vram_size', config.vram_size.toString());
 
     // Custom parameters - send each parameter individually
     if (config.quality_mode === 'custom') {

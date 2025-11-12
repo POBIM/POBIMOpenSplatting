@@ -216,6 +216,7 @@ export function useSplatScene(plyUrl: string | null): UseSplatSceneResult {
   const [showGrid, setShowGrid] = useState(true);
   const [showAxes, setShowAxes] = useState(true);
   const [viewportKey, setViewportKey] = useState(0);
+  const [transformVersion, setTransformVersion] = useState(0);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -869,7 +870,7 @@ export function useSplatScene(plyUrl: string | null): UseSplatSceneResult {
     const worldVec = new pc.Vec3();
     worldMatrix.transformPoint(localVec, worldVec);
     return { x: worldVec.x, y: worldVec.y, z: worldVec.z };
-  }, []);
+  }, [transformVersion]);
 
   const worldToModel = useCallback((point: Vec3) => {
     const pc = pcRef.current;
@@ -890,7 +891,7 @@ export function useSplatScene(plyUrl: string | null): UseSplatSceneResult {
     const localVec = new pc.Vec3();
     invMatrix.transformPoint(worldVec, localVec);
     return { x: localVec.x, y: localVec.y, z: localVec.z };
-  }, []);
+  }, [transformVersion]);
 
   const getPointWorldPosition = useCallback(
     (index: number) => {

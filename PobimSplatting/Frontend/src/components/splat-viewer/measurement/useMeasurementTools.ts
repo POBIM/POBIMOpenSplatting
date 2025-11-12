@@ -1536,7 +1536,7 @@ export function useMeasurementTools({
         return screenDatum;
       })
       .filter((entry): entry is MeasurementScreenDatum => Boolean(entry));
-  }, [measurements, measurementScale, projectWorldToScreen, selectedElement, cameraUpdateKey, viewportKey, resolveWorldFromData]);
+  }, [measurements, measurementScale, projectWorldToScreen, selectedElement, cameraUpdateKey, viewportKey, resolveWorldFromData, getPointWorldPosition, modelToWorld]);
 
   const areaScreenData = useMemo<AreaScreenDatum[]>(() => {
     return areaPolygons
@@ -1590,7 +1590,7 @@ export function useMeasurementTools({
         };
       })
       .filter((entry): entry is AreaScreenDatum => Boolean(entry));
-  }, [areaPolygons, measurementScale, projectWorldToScreen, selectedElement, cameraUpdateKey, viewportKey, resolveWorldFromData]);
+  }, [areaPolygons, measurementScale, projectWorldToScreen, selectedElement, cameraUpdateKey, viewportKey, resolveWorldFromData, getPointWorldPosition, modelToWorld]);
 
   const measurementChainTotals = useMemo(() => {
     const nodeToMeasurements = new Map<string, Set<string>>();
@@ -1783,7 +1783,7 @@ export function useMeasurementTools({
     const label = scaledArea !== null ? formatArea(scaledArea) : null;
 
     return { path, centroid, label };
-  }, [isAreaMode, areaPoints, previewPoint, projectWorldToScreen, measurementScale, cameraUpdateKey, viewportKey, resolveWorldPoint]);
+  }, [isAreaMode, areaPoints, previewPoint, projectWorldToScreen, measurementScale, cameraUpdateKey, viewportKey, resolveWorldPoint, getPointWorldPosition, modelToWorld]);
 
   const selectedMeasurement = useMemo(() => {
     if (selectedElement?.type !== 'distance') {

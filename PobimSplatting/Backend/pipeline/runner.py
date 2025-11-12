@@ -174,50 +174,10 @@ def get_colmap_executable():
     return 'colmap'  # fallback to system COLMAP
 
 
-def get_vocab_tree_path(project_id=None):
-    """Get vocab tree path, download if needed"""
-    vocab_tree_path = app_config.VOCAB_TREE_FOLDER / app_config.VOCAB_TREE_FILENAME
+# Vocab tree matching disabled - COLMAP switched from flann to faiss format in May 2025
+# Legacy vocab trees are incompatible with current COLMAP version
+# Sequential matching provides sufficient coverage for most datasets
 
-    if vocab_tree_path.exists():
-        return str(vocab_tree_path)
-
-    # Download vocab tree
-    if project_id:
-        append_log_line(project_id, "📥 Downloading vocab tree for improved matching...")
-
-    try:
-        import requests  # Import here to handle missing module gracefully
-        import requests
-        response = requests.get(app_config.VOCAB_TREE_URL, stream=True)
-        response.raise_for_status()
-
-        total_size = int(response.headers.get('content-length', 0))
-        downloaded = 0
-
-        with open(vocab_tree_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
-                    downloaded += len(chunk)
-                    if project_id and total_size > 0:
-                        progress = int((downloaded / total_size) * 100)
-                        if progress % 10 == 0:  # Log every 10%
-                            append_log_line(project_id, f"📥 Downloading vocab tree: {progress}% ({downloaded / 1024 / 1024:.1f}MB / {total_size / 1024 / 1024:.1f}MB)")
-
-        if project_id:
-            append_log_line(project_id, f"✅ Vocab tree downloaded successfully ({total_size / 1024 / 1024:.1f}MB)")
-
-        return str(vocab_tree_path)
-    except ImportError:
-        if project_id:
-            append_log_line(project_id, f"⚠️ Failed to download vocab tree: Missing 'requests' module - run: pip install requests")
-        logger.error(f"Failed to download vocab tree: Missing 'requests' module")
-        return None
-    except Exception as e:
-        if project_id:
-            append_log_line(project_id, f"⚠️ Failed to download vocab tree: {str(e)}")
-        logger.error(f"Failed to download vocab tree: {str(e)}")
-        return None
 
 
 def select_best_sparse_model(sparse_path, project_id=None):
@@ -626,8 +586,9 @@ def get_colmap_config(num_images, project_id=None, quality_mode='balanced', cust
             if 'max_num_orientations' in custom_params and custom_params['max_num_orientations'] is not None:
                 append_log_line(project_id, f"🔧 Custom max_num_orientations: {custom_params['max_num_orientations']}")
 
-    # Hybrid matching configuration - Use vocab tree for better loop closure
-    use_vocab_tree = num_images >= 30  # Enable vocab tree for 30+ images
+    # Vocab tree matching disabled due to format incompatibility
+    # Sequential/exhaustive matching provides sufficient coverage
+    use_vocab_tree = False
 
     config = {
         # Feature extraction - Enhanced
@@ -639,11 +600,10 @@ def get_colmap_config(num_images, project_id=None, quality_mode='balanced', cust
         # Enhanced SIFT parameters
         'sift_params': sift_params,
 
-        # Matching - Quality aware with hybrid approach
+        # Matching - Quality aware
         'matcher_type': matcher_type,
         'max_num_matches': max_num_matches,
         'matcher_params': matcher_params,
-        'use_vocab_tree': use_vocab_tree,  # Hybrid: sequential + vocab tree
 
         # Reconstruction - High quality settings
         'min_num_matches': min_num_matches,
@@ -952,19 +912,14 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
         else:
             append_log_line(project_id, "⚠️ COLMAP CUDA support not detected; falling back to CPU mode for matching")
 
-        # Hybrid matching: Use both sequential and vocab tree for better coverage
-        use_hybrid = colmap_config.get('use_vocab_tree', False)
-
-        if use_hybrid:
-            append_log_line(project_id, "🔗 Using HYBRID matcher (sequential + vocab tree) for improved loop closure")
-        else:
-            append_log_line(project_id, f"🔗 Using {colmap_config['matcher_type']} matcher")
+        # Use sequential matcher only (vocab tree disabled due to format incompatibility)
+        append_log_line(project_id, f"🔗 Using {colmap_config['matcher_type']} matcher")
 
         matching_progress = {'current': 0, 'total': 0}
 
-        # Step 1: Sequential matcher (fast, for nearby images)
+        # Run sequential/exhaustive matcher
         matcher_cmd = f'{colmap_config["matcher_type"]}_matcher'
-        append_log_line(project_id, f"📍 Step 1/2: Running {colmap_config['matcher_type']} matcher for nearby images...")
+        append_log_line(project_id, f"� Running {colmap_config['matcher_type']} matcher...")
 
         cmd = [
             colmap_exe, matcher_cmd,
@@ -1052,29 +1007,8 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
                 # Re-raise if not GPU memory error
                 raise
 
-        # Step 2: Vocab tree matcher (for loop closure and non-sequential images)
-        if use_hybrid:
-            vocab_tree_path = get_vocab_tree_path(project_id)
-
-            if vocab_tree_path:
-                append_log_line(project_id, "📍 Step 2/2: Running vocab tree matcher for loop closure...")
-                update_stage_detail(project_id, 'feature_matching', text='Running vocab tree matching...', subtext='Finding similar images')
-
-                vocab_cmd = [
-                    colmap_exe, 'vocab_tree_matcher',
-                    '--database_path', str(paths['database_path']),
-                    '--VocabTreeMatching.vocab_tree_path', vocab_tree_path,
-                    '--FeatureMatching.max_num_matches', str(colmap_config['max_num_matches']),
-                    '--FeatureMatching.use_gpu', '1' if has_cuda else '0',
-                    '--VocabTreeMatching.num_images', str(min(100, num_images)),  # Match top 100 similar images
-                ]
-
-                run_command_with_logs(project_id, vocab_cmd, line_handler=matching_line_handler)
-                append_log_line(project_id, "✅ Vocab tree matching completed")
-            else:
-                append_log_line(project_id, "⚠️ Vocab tree not available, skipping Step 2/2")
-        else:
-            append_log_line(project_id, "ℹ️ Vocab tree matching skipped (dataset too small or disabled)")
+        # Vocab tree matching is disabled (format incompatibility with current COLMAP)
+        # Sequential/exhaustive matching provides sufficient coverage
 
         update_state(project_id, 'feature_matching', status='completed', progress=100)
         current = matching_progress['current'] or matching_progress['total']

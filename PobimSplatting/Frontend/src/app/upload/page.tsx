@@ -21,8 +21,7 @@ export default function UploadPage() {
     max_frames: 100,
     target_fps: 2.0,
     quality: 100,
-    preview_count: 10,
-    vram_size: 8  // GPU VRAM size in GB (8, 16, or 24)
+    preview_count: 10
   });
 
   // Custom parameters - starts with High quality (7000 iter) baseline
@@ -315,32 +314,6 @@ export default function UploadPage() {
                   <p className="text-xs text-gray-500 mt-1">
                     {config.quality_mode === 'custom' ? 'Fine-tune all parameters' : getQualityInfo(config.quality_mode).desc}
                   </p>
-                </div>
-              </div>
-
-              {/* GPU VRAM Selection */}
-              <div className="bg-blue-50 rounded-2xl p-6 border border-blue-200">
-                <div className="flex items-start space-x-3">
-                  <Info className="h-5 w-5 text-blue-600 mt-0.5 flex-shrink-0" />
-                  <div className="flex-1">
-                    <label className="block text-sm font-semibold text-blue-900 mb-2">
-                      🎮 GPU VRAM Configuration
-                    </label>
-                    <select
-                      value={config.vram_size}
-                      onChange={(e) => setConfig({...config, vram_size: parseInt(e.target.value)})}
-                      className="input mb-2"
-                    >
-                      <option value={8}>💚 8 GB VRAM - Standard (Recommended for RTX 3060, RX 6700)</option>
-                      <option value={16}>💙 16 GB VRAM - High Performance (RTX 4060 Ti, RTX 3080 Ti)</option>
-                      <option value={24}>💜 24 GB VRAM - Ultra Performance (RTX 4090, RTX 3090, A5000)</option>
-                    </select>
-                    <p className="text-xs text-blue-700">
-                      {config.vram_size === 8 && '⚡ ค่าเริ่มต้น: max_num_matches ≈ 40K-100K (ปลอดภัยสำหรับ GPU ทั่วไป)'}
-                      {config.vram_size === 16 && '🚀 ประสิทธิภาพสูง: max_num_matches ≈ 60K-150K (สมดุลระหว่างความเร็วและคุณภาพ)'}
-                      {config.vram_size === 24 && '⚡ สุดยอดประสิทธิภาพ: max_num_matches ≈ 80K-200K (คุณภาพสูงสุด ไม่มี warning)'}
-                    </p>
-                  </div>
                 </div>
               </div>
 

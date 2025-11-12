@@ -119,7 +119,6 @@ def upload_files():
         'camera_model': request.form.get('camera_model', 'SIMPLE_RADIAL'),
         'matcher_type': request.form.get('matcher_type', 'sequential'),
         'quality_mode': quality_mode,
-        'vram_size': int(request.form.get('vram_size', 8)),  # GPU VRAM in GB (8, 16, or 24)
 
         # Frame extraction configuration for videos
         'extraction_mode': request.form.get('extraction_mode', 'frames'),  # 'frames' or 'fps'

@@ -37,6 +37,8 @@ export default function ProjectCard({ project, onDelete, onDownload }: ProjectCa
         return <CheckCircle className="h-5 w-5" style={{ color: 'var(--success-icon)' }} />;
       case 'failed':
         return <AlertCircle className="h-5 w-5" style={{ color: 'var(--error-icon)' }} />;
+      case 'cancelled':
+        return <AlertCircle className="h-5 w-5" style={{ color: 'var(--warning-text)' }} />;
       default:
         return null;
     }
@@ -65,6 +67,7 @@ export default function ProjectCard({ project, onDelete, onDownload }: ProjectCa
             project.status === 'processing' ? 'status-processing' :
             project.status === 'completed' ? 'status-completed' :
             project.status === 'failed' ? 'status-failed' :
+            project.status === 'cancelled' ? 'status-cancelled' :
             'bg-gray-100 text-gray-600'
           }`}>
             {project.status.toUpperCase()}

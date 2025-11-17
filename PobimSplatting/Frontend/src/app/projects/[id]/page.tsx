@@ -45,6 +45,9 @@ const STAGE_WEIGHT_MAP = PIPELINE_STAGES.reduce((acc, stage) => {
 
 const MAX_LOG_LINES = 10000; // Keep all logs for full visibility
 
+const isErrorStatus = (status?: string | null): boolean =>
+  status === 'failed' || status === 'cancelled';
+
 const normalizeProgressStates = (states: any[] = []) =>
   PIPELINE_STAGES.map(stage => {
     const found = states.find(s => s.key === stage.key);
@@ -419,7 +422,7 @@ export default function ProjectDetailPage() {
 
   const openRetryModal = () => {
     // Find the first failed or incomplete stage as default
-    const failedStage = stages.find(s => s.status === 'failed');
+    const failedStage = stages.find(s => isErrorStatus(s.status));
     const lastCompletedStage = stages.filter(s => s.status === 'completed').pop();
 
     if (failedStage) {
@@ -469,6 +472,8 @@ export default function ProjectDetailPage() {
         return <CheckCircle className="h-8 w-8" style={{ color: 'var(--success-icon)' }} />;
       case 'failed':
         return <XCircle className="h-8 w-8" style={{ color: 'var(--error-icon)' }} />;
+      case 'cancelled':
+        return <AlertTriangle className="h-8 w-8" style={{ color: 'var(--warning-text)' }} />;
       default:
         return <Clock className="h-8 w-8 text-gray-500" />;
     }
@@ -481,6 +486,8 @@ export default function ProjectDetailPage() {
       return <Loader className="h-5 w-5 text-blue-500 animate-spin" />;
     } else if (stage.status === 'failed') {
       return <XCircle className="h-5 w-5 text-red-500" />;
+    } else if (stage.status === 'cancelled') {
+      return <AlertTriangle className="h-5 w-5 text-amber-500" />;
     } else {
       return <Clock className="h-5 w-5 text-gray-400" />;
     }
@@ -495,6 +502,7 @@ export default function ProjectDetailPage() {
   };
 
   const overallProgress = calculateWeightedProgress(stages);
+  const canRetryProject = isErrorStatus(project?.status);
 
   if (loading) {
     return (
@@ -642,7 +650,7 @@ export default function ProjectDetailPage() {
                       </button>
                     </>
                   )}
-                  {project.status === 'failed' && (
+                  {canRetryProject && (
                     <button
                       onClick={openRetryModal}
                       className="inline-flex items-center px-4 py-2 text-sm font-medium rounded-lg text-white bg-black hover:bg-gray-800 transition-colors"
@@ -674,6 +682,14 @@ export default function ProjectDetailPage() {
                     {PIPELINE_STAGES.map((stageConfig) => {
                       const stage = stages.find(s => s.key === stageConfig.key) || { key: stageConfig.key, status: 'pending', progress: 0 };
                       const progress = getStageProgress(stage);
+                      const isCompleted = stage.status === 'completed';
+                      const isRunning = stage.status === 'running';
+                      const isFailed = stage.status === 'failed';
+                      const isCancelled = stage.status === 'cancelled';
+                      const isStageError = isFailed || isCancelled;
+                      const errorBorderColor = isCancelled ? 'var(--warning-border)' : 'var(--error-border)';
+                      const errorBgColor = isCancelled ? 'var(--warning-bg)' : 'var(--error-bg)';
+                      const errorIconColor = isCancelled ? 'var(--warning-text)' : 'var(--error-icon)';
 
                       return (
                         <div key={stageConfig.key} className="flex flex-col items-center group relative" style={{ width: `${100 / PIPELINE_STAGES.length}%` }}>
@@ -683,37 +699,41 @@ export default function ProjectDetailPage() {
                             className={`relative z-10 w-10 h-10 rounded-full flex items-center justify-center transition-all border-2 hover:scale-110 cursor-pointer ${
                               expandedStage === stageConfig.key ? 'ring-2 ring-offset-2' : ''
                             } ${
-                              stage.status === 'completed' ? '' :
-                              stage.status === 'running' ? 'bg-white' :
-                              stage.status === 'failed' ? 'bg-white' :
+                              isCompleted ? '' :
+                              isRunning ? 'bg-white' :
+                              isStageError ? 'bg-white' :
                               'bg-white border-gray-200'
                             }`}
                             style={{
-                              ...(stage.status === 'completed' ? {
+                              ...(isCompleted ? {
                                 backgroundColor: 'var(--success-icon)',
                                 borderColor: 'var(--success-icon)'
                               } : {}),
-                              ...(stage.status === 'running' ? {
+                              ...(isRunning ? {
                                 borderColor: 'var(--processing-border)',
                                 backgroundColor: 'var(--processing-bg)'
                               } : {}),
-                              ...(stage.status === 'failed' ? {
-                                borderColor: 'var(--error-border)',
-                                backgroundColor: 'var(--error-bg)'
+                              ...(isStageError ? {
+                                borderColor: errorBorderColor,
+                                backgroundColor: errorBgColor
                               } : {}),
                               ...(expandedStage === stageConfig.key ? {
-                                ringColor: stage.status === 'completed' ? 'var(--success-border)' :
-                                          stage.status === 'failed' ? 'var(--error-border)' :
+                                ringColor: isCompleted ? 'var(--success-border)' :
+                                          isStageError ? errorBorderColor :
                                           'var(--processing-border)'
                               } : {})
                             }}
                           >
-                            {stage.status === 'completed' ? (
+                            {isCompleted ? (
                               <CheckCircle className="h-5 w-5 text-white" />
-                            ) : stage.status === 'running' ? (
+                            ) : isRunning ? (
                               <Loader className="h-5 w-5 animate-spin" style={{ color: 'var(--processing-text)' }} />
-                            ) : stage.status === 'failed' ? (
-                              <XCircle className="h-5 w-5" style={{ color: 'var(--error-icon)' }} />
+                            ) : isStageError ? (
+                              isCancelled ? (
+                                <AlertTriangle className="h-5 w-5" style={{ color: errorIconColor }} />
+                              ) : (
+                                <XCircle className="h-5 w-5" style={{ color: errorIconColor }} />
+                              )
                             ) : (
                               <div className="w-2 h-2 rounded-full bg-gray-300" />
                             )}
@@ -722,8 +742,10 @@ export default function ProjectDetailPage() {
                           {/* Stage Label */}
                           <div className="mt-4 text-center px-1 max-w-[120px]">
                             <p className={`text-xs leading-tight ${
-                              stage.status === 'running' ? 'font-medium text-black' :
-                              stage.status === 'completed' ? 'text-gray-600' :
+                              isRunning ? 'font-medium text-black' :
+                              isCompleted ? 'text-gray-600' :
+                              isCancelled ? 'text-amber-600 font-medium' :
+                              isStageError ? 'text-red-500 font-medium' :
                               'text-gray-400'
                             }`}>
                               {stageConfig.label}
@@ -740,6 +762,8 @@ export default function ProjectDetailPage() {
                   const stageConfig = PIPELINE_STAGES.find(s => s.key === expandedStage);
                   const stage = stages.find(s => s.key === expandedStage) || { key: expandedStage, status: 'pending', progress: 0 };
                   const progress = getStageProgress(stage);
+                  const stageErrored = isErrorStatus(stage.status);
+                  const stageCancelled = stage.status === 'cancelled';
 
                   return (
                     <div className="mt-6 border border-gray-200 rounded-xl p-6 bg-gray-50 animate-in slide-in-from-top duration-200">
@@ -751,7 +775,8 @@ export default function ProjectDetailPage() {
                             <p className="text-sm text-gray-500 mt-1">
                               {stage.status === 'completed' ? '✓ Completed' :
                                stage.status === 'running' ? `⏳ In progress (${progress}%)` :
-                               stage.status === 'failed' ? '✗ Failed' :
+                               stageCancelled ? '⚠️ Cancelled' :
+                               stageErrored ? '✗ Failed' :
                                '○ Pending'}
                             </p>
                           </div>
@@ -805,14 +830,28 @@ export default function ProjectDetailPage() {
                           </div>
                         )}
 
-                        {/* Error message if failed */}
-                        {stage.status === 'failed' && stage.error && (
+                        {/* Error or cancellation state */}
+                        {stageErrored && (
                           <div className="border-t border-gray-200 pt-4">
-                            <div className="flex items-start space-x-2 p-3 bg-red-50 border border-red-200 rounded-lg">
-                              <AlertTriangle className="h-5 w-5 text-red-600 flex-shrink-0 mt-0.5" />
+                            <div
+                              className={`flex items-start space-x-2 p-3 rounded-lg ${
+                                stageCancelled ? 'bg-amber-50 border border-amber-200' : 'bg-red-50 border border-red-200'
+                              }`}
+                            >
+                              <AlertTriangle
+                                className={`h-5 w-5 flex-shrink-0 mt-0.5 ${
+                                  stageCancelled ? 'text-amber-600' : 'text-red-600'
+                                }`}
+                              />
                               <div>
-                                <p className="text-sm font-medium text-red-800">Error</p>
-                                <p className="text-sm text-red-600 mt-1">{stage.error}</p>
+                                <p className={`text-sm font-medium ${stageCancelled ? 'text-amber-800' : 'text-red-800'}`}>
+                                  {stageCancelled ? 'Processing cancelled' : 'Error'}
+                                </p>
+                                <p className={`text-sm mt-1 ${stageCancelled ? 'text-amber-700' : 'text-red-600'}`}>
+                                  {stageCancelled
+                                    ? 'งานถูกยกเลิกแล้ว สามารถกด Retry เพื่อเริ่มจากขั้นนี้ใหม่ได้'
+                                    : stage.error || 'ขั้นตอนนี้เกิดข้อผิดพลาด ตรวจสอบ log แล้วลอง Retry อีกครั้ง'}
+                                </p>
                               </div>
                             </div>
                           </div>
@@ -924,7 +963,8 @@ export default function ProjectDetailPage() {
               {PIPELINE_STAGES.map((stage) => {
                 const stageState = stages.find(s => s.key === stage.key);
                 const isCompleted = stageState?.status === 'completed';
-                const isFailed = stageState?.status === 'failed';
+                const isErrored = isErrorStatus(stageState?.status);
+                const isCancelledStage = stageState?.status === 'cancelled';
 
                 return (
                   <label
@@ -955,10 +995,14 @@ export default function ProjectDetailPage() {
                             Completed
                           </span>
                         )}
-                        {isFailed && (
-                          <span className="text-xs text-red-500 flex items-center">
-                            <XCircle className="h-3 w-3 mr-1" />
-                            Failed
+                        {isErrored && (
+                          <span className={`text-xs flex items-center ${isCancelledStage ? 'text-amber-600' : 'text-red-500'}`}>
+                            {isCancelledStage ? (
+                              <AlertTriangle className="h-3 w-3 mr-1" />
+                            ) : (
+                              <XCircle className="h-3 w-3 mr-1" />
+                            )}
+                            {isCancelledStage ? 'Cancelled' : 'Failed'}
                           </span>
                         )}
                       </div>

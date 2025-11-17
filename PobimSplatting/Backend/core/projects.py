@@ -248,52 +248,75 @@ def unregister_process(project_id: str) -> None:
         active_processes.pop(project_id, None)
 
 
+def _mark_project_cancelled(project_id: str, *, reason: Optional[str] = None) -> bool:
+    """
+    Update in-memory and on-disk state to reflect a cancelled project.
+    """
+    message = "⚠️ Processing cancelled by user"
+    if reason:
+        message = f"{message} ({reason})"
+
+    with status_lock:
+        project = processing_status.get(project_id)
+        if not project:
+            return False
+
+        timestamp = datetime.now().isoformat()
+        project["status"] = "cancelled"
+        project["end_time"] = timestamp
+
+        for state in project.get("progress_states", []):
+            if state.get("status") == "running":
+                state["status"] = "cancelled"
+                state["completed_at"] = timestamp
+
+        save_projects_db()
+
+    append_log_line(project_id, message)
+    return True
+
+
 def cancel_processing(project_id: str) -> bool:
     """
     Cancel the active processing for a project.
     Returns True if a process was found and terminated, False otherwise.
     """
-    import signal
-    
     with status_lock:
         process = active_processes.get(project_id)
-        
-        if not process:
-            logger.warning(f"No active process found for project {project_id}")
-            return False
-        
+        project_state = processing_status.get(project_id)
+
+    if not process:
+        if project_state and project_state.get("status") == "processing":
+            logger.warning(
+                "No active process found for project %s; falling back to stale state reset",
+                project_id,
+            )
+            return _mark_project_cancelled(
+                project_id,
+                reason="no running process found",
+            )
+
+        logger.warning("No active process found for project %s", project_id)
+        return False
+
+    try:
+        # Try graceful termination first
+        process.terminate()
+
+        # Wait a bit for graceful shutdown
         try:
-            # Try graceful termination first
-            process.terminate()
-            
-            # Wait a bit for graceful shutdown
-            try:
-                process.wait(timeout=5)
-            except Exception:
-                # Force kill if still running
-                process.kill()
-                process.wait()
-            
-            # Update project status
-            if project_id in processing_status:
-                processing_status[project_id]["status"] = "cancelled"
-                processing_status[project_id]["end_time"] = datetime.now().isoformat()
-                
-                # Mark current running stage as cancelled
-                for state in processing_status[project_id].get("progress_states", []):
-                    if state.get("status") == "running":
-                        state["status"] = "cancelled"
-                        state["completed_at"] = datetime.now().isoformat()
-                
-                append_log_line(project_id, "⚠️ Processing cancelled by user")
-                save_projects_db()
-            
-            # Clean up process reference
-            unregister_process(project_id)
-            
-            logger.info(f"Successfully cancelled processing for project {project_id}")
-            return True
-            
-        except Exception as exc:
-            logger.error(f"Failed to cancel process for {project_id}: {exc}")
-            return False
+            process.wait(timeout=5)
+        except Exception:
+            # Force kill if still running
+            process.kill()
+            process.wait()
+
+        _mark_project_cancelled(project_id)
+        logger.info("Successfully cancelled processing for project %s", project_id)
+        return True
+
+    except Exception as exc:
+        logger.error("Failed to cancel process for %s: %s", project_id, exc)
+        return False
+    finally:
+        unregister_process(project_id)

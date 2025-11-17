@@ -32,7 +32,7 @@ export interface Project {
     created_at: string;
     updated_at: string;
   };
-  status: 'uploading' | 'processing' | 'completed' | 'failed' | 'pending';
+  status: 'uploading' | 'processing' | 'completed' | 'failed' | 'pending' | 'cancelled';
   progress: number;
   input_type: 'images' | 'video' | 'mixed';
   file_count: number;

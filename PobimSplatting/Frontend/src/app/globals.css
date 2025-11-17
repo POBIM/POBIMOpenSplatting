@@ -113,4 +113,11 @@ body {
     color: var(--error-text);
     border: 1px solid var(--error-border);
   }
+
+  .status-cancelled {
+    @apply px-3 py-1 rounded-full text-xs font-medium;
+    background-color: var(--warning-bg);
+    color: var(--warning-text);
+    border: 1px solid var(--warning-border);
+  }
 }

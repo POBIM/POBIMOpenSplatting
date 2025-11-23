@@ -180,25 +180,17 @@ export default function SplatViewer() {
   const {
     mode: measureMode,
     isDistanceMode,
-    isAreaMode,
     toggleDistanceMode,
-    toggleAreaMode,
     clearAll,
     overlayState,
     message: measurementMessage,
     messageOffsetWithPanel,
     selectedDistanceLabel,
-    selectedDistanceChainLabel,
     selectedDistanceId,
     selectedAxisComponents,
     selectedMeasurementSegment,
-    selectedAreaLabel,
-    selectedAreaPerimeterLabel,
-    selectedAreaId,
     selectDistance,
-    selectArea,
     handleDeleteMeasurement,
-    handleDeleteArea,
     openRescaleDialog,
     rescaleDialog,
     setMessage: setMeasurementMessage,
@@ -378,7 +370,7 @@ export default function SplatViewer() {
   }, [projectId, transformLoaded]);
 
   const hasFloatingPanel = messageOffsetWithPanel;
-  const hasMeasurements = overlayState.measurementScreenData.length > 0 || overlayState.areaScreenData.length > 0;
+  const hasMeasurements = overlayState.measurementScreenData.length > 0;
 
   const applyModelTransform = useCallback(
     (nextPosition: Vec3, nextRotation: Vec3, options?: { persist?: boolean }) => {
@@ -530,42 +522,33 @@ export default function SplatViewer() {
 
   const handleAlignModelToAxis = useCallback(() => {
     if (!selectedMeasurementSegment) {
-      setMeasurementMessage('กรุณาเลือกเส้นวัดเพื่อใช้งานจัดแนว', { persistent: false });
+      setMeasurementMessage('กรุณาเลือกเส้นวัดเพื่อใช้งานจัดแนว');
       return;
     }
 
-    const startWorld =
-      selectedMeasurementSegment.startNodeIndex != null
-        ? getPointWorldPosition(selectedMeasurementSegment.startNodeIndex) ??
-          modelToWorld(selectedMeasurementSegment.startLocal)
-        : modelToWorld(selectedMeasurementSegment.startLocal);
-    const endWorld =
-      selectedMeasurementSegment.endNodeIndex != null
-        ? getPointWorldPosition(selectedMeasurementSegment.endNodeIndex) ??
-          modelToWorld(selectedMeasurementSegment.endLocal)
-        : modelToWorld(selectedMeasurementSegment.endLocal);
+    const startWorld = modelToWorld(selectedMeasurementSegment.start);
+    const endWorld = modelToWorld(selectedMeasurementSegment.end);
     if (!startWorld || !endWorld) {
-      setMeasurementMessage('ไม่สามารถคำนวณการจัดแนวได้', { persistent: false });
+      setMeasurementMessage('ไม่สามารถคำนวณการจัดแนวได้');
       return;
     }
 
     const rotation = computeAlignmentRotation(startWorld, endWorld, alignmentAxis);
 
     if (!rotation) {
-      setMeasurementMessage('ไม่สามารถคำนวณการจัดแนวได้', { persistent: false });
+      setMeasurementMessage('ไม่สามารถคำนวณการจัดแนวได้');
       return;
     }
 
     applyModelRotation(rotation);
-    setMeasurementMessage('จัดแนวโมเดลตามเส้นที่เลือกแล้ว', { persistent: false });
+    setMeasurementMessage('จัดแนวโมเดลตามเส้นที่เลือกแล้ว');
   }, [
     selectedMeasurementSegment,
-    computeAlignmentRotation,
     alignmentAxis,
+    computeAlignmentRotation,
     setMeasurementMessage,
     applyModelRotation,
     modelToWorld,
-    getPointWorldPosition,
   ]);
 
   const toggleFullscreen = useCallback(() => {
@@ -582,10 +565,8 @@ export default function SplatViewer() {
   const exitMeasurementMode = useCallback(() => {
     if (isDistanceMode) {
       toggleDistanceMode();
-    } else if (isAreaMode) {
-      toggleAreaMode();
     }
-  }, [isDistanceMode, isAreaMode, toggleDistanceMode, toggleAreaMode]);
+  }, [isDistanceMode, toggleDistanceMode]);
 
   // ESC key exits measurement mode
   useEffect(() => {
@@ -668,7 +649,7 @@ export default function SplatViewer() {
               viewerExitArmRef.current.armed = false;
               viewerExitArmRef.current.timer = null;
             }, 1800);
-            setMeasurementMessage('กด ESC อีกครั้งเพื่อกลับ', { persistent: false });
+            setMeasurementMessage('กด ESC อีกครั้งเพื่อกลับ');
             break;
           }
           if (viewerExitArmRef.current.timer) {
@@ -816,10 +797,8 @@ export default function SplatViewer() {
           onToggleAxes={setAxesVisible}
           measurementControls={{
             isDistanceMode,
-            isAreaMode,
             hasMeasurements,
             onToggleDistance: toggleDistanceMode,
-            onToggleArea: toggleAreaMode,
             onClearAll: clearAll,
             disabled: pointEditorActive,
           }}
@@ -939,16 +918,10 @@ export default function SplatViewer() {
           <MeasurementOverlay
             overlayState={overlayState}
             selectedDistanceLabel={selectedDistanceLabel}
-            selectedDistanceChainLabel={selectedDistanceChainLabel}
             selectedDistanceId={selectedDistanceId}
             selectedAxisComponents={selectedAxisComponents}
-            selectedAreaLabel={selectedAreaLabel}
-            selectedAreaPerimeterLabel={selectedAreaPerimeterLabel}
-            selectedAreaId={selectedAreaId}
             onSelectDistance={selectDistance}
-            onSelectArea={selectArea}
             onDeleteMeasurement={handleDeleteMeasurement}
-            onDeleteArea={handleDeleteArea}
             onOpenRescaleDialog={openRescaleDialog}
           />
 

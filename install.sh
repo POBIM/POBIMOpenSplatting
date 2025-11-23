@@ -388,13 +388,14 @@ install_system_dependencies() {
         wget
         curl
         pkg-config
-        
+        unzip
+
         # Python
         python3
         python3-pip
         python3-dev
         python3-venv
-        
+
         # Libraries for COLMAP
         libboost-all-dev
         libeigen3-dev
@@ -409,10 +410,10 @@ install_system_dependencies() {
         libqt5opengl5-dev
         libcgal-dev
         libceres-dev
-        
+
         # OpenCV
         libopencv-dev
-        
+
         # Additional utilities
         lsof
         psmisc
@@ -449,12 +450,59 @@ install_system_dependencies() {
 }
 
 # =============================================================================
+# Ensure Unzip is Available
+# =============================================================================
+
+ensure_unzip() {
+    # Check if unzip is already installed
+    if check_command unzip; then
+        return 0
+    fi
+
+    print_warning "unzip command not found"
+
+    # Check if we need sudo
+    if [ "$EUID" -ne 0 ]; then
+        SUDO="sudo"
+    else
+        SUDO=""
+    fi
+
+    # Try to install unzip
+    if check_command apt-get; then
+        print_info "Attempting to install unzip..."
+        if $SUDO apt-get install -y unzip 2>/dev/null; then
+            print_success "unzip installed successfully"
+            return 0
+        else
+            print_warning "Could not install unzip automatically (sudo may be required)"
+        fi
+    elif check_command dnf; then
+        print_info "Attempting to install unzip..."
+        if $SUDO dnf install -y unzip 2>/dev/null; then
+            print_success "unzip installed successfully"
+            return 0
+        fi
+    elif check_command yum; then
+        print_info "Attempting to install unzip..."
+        if $SUDO yum install -y unzip 2>/dev/null; then
+            print_success "unzip installed successfully"
+            return 0
+        fi
+    fi
+
+    # If unzip installation failed, we'll use Python as fallback
+    print_info "Will use Python zipfile module as fallback"
+    return 1
+}
+
+# =============================================================================
 # Setup LibTorch
 # =============================================================================
 
 setup_libtorch() {
     print_header "Setting up LibTorch"
-    
+
     # Determine LibTorch version based on CUDA
     if [ -z "$CUDA_VERSION" ]; then
         LIBTORCH_VARIANT="cpu"
@@ -474,10 +522,10 @@ setup_libtorch() {
         LIBTORCH_DIR="$PROJECT_ROOT/libtorch-cuda121"
         LIBTORCH_URL="https://download.pytorch.org/libtorch/cu121/libtorch-cxx11-abi-shared-with-deps-2.1.0%2Bcu121.zip"
     fi
-    
+
     print_info "LibTorch variant: $LIBTORCH_VARIANT"
     print_info "Install directory: $LIBTORCH_DIR"
-    
+
     if [ -d "$LIBTORCH_DIR" ]; then
         print_success "LibTorch already exists at $LIBTORCH_DIR"
         if ! prompt_yes_no "Re-download LibTorch?" "n"; then
@@ -485,17 +533,36 @@ setup_libtorch() {
         fi
         rm -rf "$LIBTORCH_DIR"
     fi
-    
+
     print_info "Downloading LibTorch (this may take a while)..."
     LIBTORCH_ZIP="libtorch-${LIBTORCH_VARIANT}.zip"
-    
+
     wget --progress=bar:force:noscroll -O "$LIBTORCH_ZIP" "$LIBTORCH_URL"
-    
+
     print_info "Extracting LibTorch..."
-    unzip -q "$LIBTORCH_ZIP"
+
+    # Ensure unzip is available (will try to install or use Python fallback)
+    ensure_unzip
+
+    if check_command unzip; then
+        # Use unzip if available
+        unzip -q "$LIBTORCH_ZIP"
+    else
+        # Fallback to Python zipfile module
+        print_info "Using Python to extract archive..."
+        python3 -c "import zipfile; zipfile.ZipFile('$LIBTORCH_ZIP').extractall('.')"
+
+        if [ $? -ne 0 ]; then
+            print_error "Failed to extract LibTorch archive"
+            print_info "Please install unzip: sudo apt-get install unzip"
+            rm -f "$LIBTORCH_ZIP"
+            return 1
+        fi
+    fi
+
     mv libtorch "$LIBTORCH_DIR"
     rm "$LIBTORCH_ZIP"
-    
+
     print_success "LibTorch setup complete"
     echo ""
 }

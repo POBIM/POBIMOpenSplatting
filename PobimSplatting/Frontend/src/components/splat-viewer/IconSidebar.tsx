@@ -11,7 +11,6 @@ import {
   Palette,
   RotateCcw,
   Ruler,
-  Square,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import {
@@ -44,10 +43,8 @@ interface IconSidebarProps {
   cameraControlsOpen: boolean;
   measurementControls?: {
     isDistanceMode: boolean;
-    isAreaMode: boolean;
     hasMeasurements: boolean;
     onToggleDistance: () => void;
-    onToggleArea: () => void;
     onClearAll: () => void;
     disabled?: boolean;
   };
@@ -210,14 +207,7 @@ export function IconSidebar({
                 active={measurementControls.isDistanceMode}
                 disabled={measurementControls.disabled}
               />
-              <IconButton
-                icon={Square}
-                label="Area tool"
-                onClick={measurementControls.onToggleArea}
-                active={measurementControls.isAreaMode}
-                disabled={measurementControls.disabled}
-              />
-              {(measurementControls.isDistanceMode || measurementControls.isAreaMode || measurementControls.hasMeasurements) && (
+              {(measurementControls.isDistanceMode || measurementControls.hasMeasurements) && (
                 <button
                   type="button"
                   className="inline-flex h-10 w-full items-center justify-center rounded-xl border border-gray-200 bg-white px-3 text-xs font-medium text-gray-600 transition-all hover:border-black hover:bg-black hover:text-white disabled:cursor-not-allowed disabled:border-gray-200 disabled:text-gray-400 disabled:hover:bg-white disabled:hover:text-gray-400"

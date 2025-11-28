@@ -127,8 +127,16 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
                 raise ValueError(f"Need at least 10 images, but only have {total_images}")
 
         # Continue with COLMAP and OpenSplat pipeline from the appropriate stage
-        if start_index <= stage_order.index('feature_extraction'):
-            run_colmap_pipeline(project_id, paths, config, processing_start_time, time_estimate, time_estimator)
+        # COLMAP stages: feature_extraction, feature_matching, sparse_reconstruction, model_conversion
+        colmap_stages = ['feature_extraction', 'feature_matching', 'sparse_reconstruction', 'model_conversion']
+        
+        if from_stage in colmap_stages:
+            # Start from a specific COLMAP stage
+            append_log_line(project_id, f"🔄 Resuming from stage: {from_stage}")
+            run_colmap_pipeline(project_id, paths, config, processing_start_time, time_estimate, time_estimator, from_stage=from_stage)
+        elif start_index <= stage_order.index('feature_extraction'):
+            # Start from beginning of COLMAP pipeline
+            run_colmap_pipeline(project_id, paths, config, processing_start_time, time_estimate, time_estimator, from_stage='feature_extraction')
         elif start_index <= stage_order.index('gaussian_splatting'):
             # Start from gaussian splatting (skip COLMAP stages)
             # First, ensure we select the best sparse model, rename to 0/, and clean up inferior ones
@@ -387,25 +395,29 @@ def get_colmap_config(num_images, project_id=None, quality_mode='balanced', cust
     max_image_size = int(base_max_image_size * scale['size'])
     max_num_features = int(base_max_num_features * scale['features'])
 
-    # Override with custom parameters if provided (custom mode)
-    if custom_params and quality_mode == 'custom':
+    # Override with custom parameters if provided (custom mode or retry with params)
+    if custom_params:
         if 'max_num_features' in custom_params and custom_params['max_num_features'] is not None:
-            max_num_features = custom_params['max_num_features']
+            max_num_features = int(custom_params['max_num_features'])
             if project_id:
                 append_log_line(project_id, f"🔧 Custom max_num_features: {max_num_features}")
+        if 'max_image_size' in custom_params and custom_params['max_image_size'] is not None:
+            max_image_size = int(custom_params['max_image_size'])
+            if project_id:
+                append_log_line(project_id, f"🔧 Custom max_image_size: {max_image_size}")
 
     first_octave = -1 if quality_mode in ['high', 'ultra', 'professional', 'ultra_professional'] else scale['octaves']
     num_octaves = base_octaves + (1 if quality_mode in ['ultra', 'professional', 'ultra_professional'] else 0)
 
     # Quality-aware matching strategy with GPU memory consideration
     # Auto-detect and limit based on feature count to prevent GPU OOM
-    base_matches = 44960  # Base value for feature matching (40K matches)
+    base_matches = 45960  # Base value for feature matching (40K matches)
     max_num_matches = int(base_matches * scale['matches'])
 
     # Override with custom parameters if provided
-    if custom_params and quality_mode == 'custom':
+    if custom_params:
         if 'max_num_matches' in custom_params and custom_params['max_num_matches'] is not None:
-            max_num_matches = custom_params['max_num_matches']
+            max_num_matches = int(custom_params['max_num_matches'])
             if project_id:
                 append_log_line(project_id, f"🔧 Custom max_num_matches: {max_num_matches}")
     
@@ -414,21 +426,21 @@ def get_colmap_config(num_images, project_id=None, quality_mode='balanced', cust
     # This is especially important for CUDA-based feature matching
     if max_num_matches > 65536:
         if project_id:
-            append_log_line(project_id, f"⚠️ Reducing max_num_matches from {max_num_matches} to 44960 to prevent GPU memory overflow")
-        max_num_matches = 44960  # Safe limit for high-feature images
+            append_log_line(project_id, f"⚠️ Reducing max_num_matches from {max_num_matches} to 45960 to prevent GPU memory overflow")
+        max_num_matches = 45960  # Safe limit for high-feature images
 
     # Matching strategy based on dataset size and quality requirements
     if quality_mode == 'robust':
         # Robust mode: Always use exhaustive for difficult datasets
         matcher_type = 'exhaustive'
-        max_num_matches = min(max_num_matches, 44960)  # Cap for GPU safety
+        max_num_matches = min(max_num_matches, 45960)  # Cap for GPU safety
         matcher_params = {}
         if project_id:
             append_log_line(project_id, "🔧 Using ROBUST mode: Exhaustive matching for maximum coverage")
     elif quality_mode == 'ultra' and num_images <= 200:
         # Ultra quality: Use exhaustive for smaller datasets
         matcher_type = 'exhaustive'
-        max_num_matches = min(max_num_matches, 44960)  # Cap for GPU safety
+        max_num_matches = min(max_num_matches, 45960)  # Cap for GPU safety
         matcher_params = {}
     elif num_images <= 50:
         # Small: Use exhaustive for best coverage
@@ -742,8 +754,373 @@ def get_opensplat_config(quality_mode='balanced', num_images=100, custom_params=
     return base_config
 
 
-def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_estimate, time_estimator):
-    """Run real COLMAP + OpenSplat pipeline."""
+def get_colmap_config_for_pipeline(paths, config, project_id=None):
+    """
+    Helper to get COLMAP configuration and common setup for pipeline stages.
+    Returns (num_images, colmap_config, colmap_exe, has_cuda)
+    """
+    images_path = paths['images_path']
+    num_images = len([f for f in os.listdir(images_path)
+                     if f.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.tiff'))])
+    
+    quality_mode = config.get('quality_mode', 'balanced')
+    
+    # Always extract custom parameters from config (for retry with updated settings)
+    custom_params = {
+        # SIFT Feature Parameters
+        'peak_threshold': config.get('peak_threshold'),
+        'edge_threshold': config.get('edge_threshold'),
+        'max_num_orientations': config.get('max_num_orientations'),
+        # Feature Extraction
+        'max_num_features': config.get('max_num_features'),
+        'max_image_size': config.get('max_image_size'),
+        # Feature Matching
+        'max_num_matches': config.get('max_num_matches'),
+        'sequential_overlap': config.get('sequential_overlap'),
+        # Mapper (Reconstruction)
+        'min_num_matches': config.get('min_num_matches'),
+        'max_num_models': config.get('max_num_models'),
+        'init_num_trials': config.get('init_num_trials')
+    }
+    
+    # Filter out None values to keep only explicitly set parameters
+    custom_params = {k: v for k, v in custom_params.items() if v is not None}
+    
+    # Pass custom_params only if there are any non-None values
+    colmap_config = get_colmap_config(
+        num_images, 
+        project_id, 
+        quality_mode, 
+        custom_params if custom_params else None
+    )
+    colmap_exe = get_colmap_executable()
+    
+    # Check if COLMAP has CUDA support
+    colmap_info = subprocess.run([colmap_exe, '-h'], capture_output=True, text=True)
+    has_cuda = 'with CUDA' in (colmap_info.stdout or '')
+    
+    return num_images, colmap_config, colmap_exe, has_cuda
+
+
+def run_feature_extraction_stage(project_id, paths, config, colmap_config=None):
+    """Run COLMAP Feature Extraction stage only."""
+    num_images, colmap_cfg, colmap_exe, has_cuda = get_colmap_config_for_pipeline(paths, config, project_id)
+    if colmap_config:
+        colmap_cfg = colmap_config
+    
+    update_state(project_id, 'feature_extraction', status='running')
+    update_stage_detail(project_id, 'feature_extraction', text=f'Images processed: 0/{num_images}', subtext=None)
+    append_log_line(project_id, "🔄 Running COLMAP Feature Extraction...")
+    append_log_line(project_id, f"📊 Using optimized settings for {num_images} images")
+    
+    if has_cuda:
+        append_log_line(project_id, "🚀 Using GPU-accelerated COLMAP for feature extraction")
+    else:
+        append_log_line(project_id, "⚠️ COLMAP CUDA support not detected; falling back to CPU mode")
+    
+    cmd = [
+        colmap_exe, 'feature_extractor',
+        '--database_path', str(paths['database_path']),
+        '--image_path', str(paths['images_path']),
+        '--ImageReader.camera_model', config['camera_model'],
+        '--ImageReader.single_camera', '1',
+        '--FeatureExtraction.use_gpu', '1' if has_cuda else '0',
+        '--SiftExtraction.max_image_size', str(colmap_cfg['max_image_size']),
+        '--SiftExtraction.max_num_features', str(colmap_cfg['max_num_features']),
+        '--SiftExtraction.first_octave', str(colmap_cfg['first_octave']),
+        '--SiftExtraction.num_octaves', str(colmap_cfg['num_octaves'])
+    ]
+    
+    # Add enhanced SIFT parameters for high quality modes
+    sift_params = colmap_cfg.get('sift_params', {})
+    for param, value in sift_params.items():
+        if value is not None:
+            cmd.extend([f'--SiftExtraction.{param}', str(value)])
+    
+    progress_tracker = {'count': 0}
+    
+    def feature_line_handler(line):
+        if num_images == 0:
+            return
+        
+        if any(keyword in line.lower() for keyword in ['processing', 'processed', 'image', 'file', 'features']):
+            append_log_line(project_id, f"[DEBUG] Feature extraction: {line.strip()}")
+        
+        patterns = [
+            r'Processing image \[(\d+)/(\d+)\]',
+            r'Processed file \[(\d+)/(\d+)\]',
+            r'Processing image (\d+)/(\d+)',
+            r'Processed image (\d+)/(\d+)',
+            r'Processing\s+(\d+)\s*\/\s*(\d+)',
+            r'Extracting.*\s(\d+)\s*/\s*(\d+)',
+            r'Image\s+(\d+)\s*\/\s*(\d+)',
+            r'(\d+)\s*/\s*(\d+)\s*images?',
+            r'Features\s+(\d+)\s*\/\s*(\d+)',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, line, re.IGNORECASE)
+            if match:
+                current = int(match.group(1))
+                total = int(match.group(2))
+                if total != num_images:
+                    total = num_images
+                if current > total:
+                    current = total
+                percent = int((current / total) * 100)
+                details = {
+                    'text': f'Images processed: {current}/{total}',
+                    'current_item': current,
+                    'total_items': total,
+                    'item_name': f'Image {current}'
+                }
+                emit_stage_progress(project_id, 'feature_extraction', percent, details)
+                update_state(project_id, 'feature_extraction', progress=min(percent, 99), details=details)
+                update_stage_detail(project_id, 'feature_extraction', text=f'Images processed: {current}/{total}', subtext=None)
+                return
+        
+        if any(keyword in line.lower() for keyword in ['processed', 'processing']):
+            progress_tracker['count'] += 1
+            processed = min(progress_tracker['count'], num_images)
+            percent = int((processed / num_images) * 100)
+            details = {
+                'text': f'Images processed: {processed}/{num_images}',
+                'current_item': processed,
+                'total_items': num_images,
+                'item_name': f'Image {processed}'
+            }
+            emit_stage_progress(project_id, 'feature_extraction', percent, details)
+            update_state(project_id, 'feature_extraction', progress=min(percent, 99), details=details)
+            update_stage_detail(project_id, 'feature_extraction', text=f'Images processed: {processed}/{num_images}', subtext=None)
+    
+    run_command_with_logs(project_id, cmd, line_handler=feature_line_handler)
+    
+    update_state(project_id, 'feature_extraction', status='completed', progress=100)
+    update_stage_detail(project_id, 'feature_extraction', text=f'Images processed: {num_images}/{num_images}', subtext='Feature extraction complete')
+    append_log_line(project_id, "✅ COLMAP Feature Extraction completed")
+    
+    return colmap_cfg
+
+
+def run_feature_matching_stage(project_id, paths, config, colmap_config=None):
+    """Run COLMAP Feature Matching stage only."""
+    num_images, colmap_cfg, colmap_exe, has_cuda = get_colmap_config_for_pipeline(paths, config, project_id)
+    if colmap_config:
+        colmap_cfg = colmap_config
+    
+    update_state(project_id, 'feature_matching', status='running')
+    update_stage_detail(project_id, 'feature_matching', text='Matching pairs: 0/0', subtext=None)
+    append_log_line(project_id, "🔄 Running COLMAP Feature Matching...")
+    
+    if has_cuda:
+        append_log_line(project_id, "🚀 Using GPU-accelerated COLMAP for feature matching")
+    else:
+        append_log_line(project_id, "⚠️ COLMAP CUDA support not detected; falling back to CPU mode for matching")
+    
+    append_log_line(project_id, f"🔗 Using {colmap_cfg['matcher_type']} matcher")
+    
+    matching_progress = {'current': 0, 'total': 0}
+    
+    matcher_cmd = f'{colmap_cfg["matcher_type"]}_matcher'
+    append_log_line(project_id, f"🔧 Running {colmap_cfg['matcher_type']} matcher...")
+    
+    cmd = [
+        colmap_exe, matcher_cmd,
+        '--database_path', str(paths['database_path']),
+        '--FeatureMatching.max_num_matches', str(colmap_cfg['max_num_matches']),
+        '--FeatureMatching.use_gpu', '1' if has_cuda else '0'
+    ]
+    
+    for param, value in colmap_cfg['matcher_params'].items():
+        cmd.extend([f'--{param}', value])
+    
+    def matching_line_handler(line):
+        if any(keyword in line.lower() for keyword in ['matching', 'match', 'pair', 'block']):
+            append_log_line(project_id, f"[DEBUG] Feature matching: {line.strip()}")
+        
+        if 'not enough gpu memory' in line.lower() or 'failed to create feature matcher' in line.lower():
+            append_log_line(project_id, f"⚠️ GPU Memory Error detected: {line.strip()}")
+            return
+        
+        patterns = [
+            r'Matching block \[(\d+)/(\d+)\]',
+            r'Matching image \[(\d+)/(\d+)\]',
+            r'Matching pair \[(\d+)/(\d+)\]',
+            r'Processing pair (\d+)/(\d+)',
+            r'Matching\s+(\d+)\s*\/\s*(\d+)',
+            r'(\d+)/(\d+)\s+matches',
+            r'Pair\s+(\d+)\s*\/\s*(\d+)',
+            r'\[(\d+)/(\d+)\]',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, line, re.IGNORECASE)
+            if match:
+                current = int(match.group(1))
+                total = int(match.group(2))
+                matching_progress['current'] = current
+                matching_progress['total'] = total
+                
+                if total > 0:
+                    percent = int((min(current, total) / total) * 100)
+                    details = {
+                        'text': f'Matching pairs: {current}/{total}',
+                        'current_item': current,
+                        'total_items': total,
+                        'item_name': f'Pair {current}'
+                    }
+                    emit_stage_progress(project_id, 'feature_matching', percent, details)
+                    update_state(project_id, 'feature_matching', progress=min(percent, 99), details=details)
+                    update_stage_detail(project_id, 'feature_matching', text=f'Matching pairs: {current}/{total}', subtext=None)
+                return
+    
+    try:
+        run_command_with_logs(project_id, cmd, line_handler=matching_line_handler)
+    except subprocess.CalledProcessError as e:
+        if has_cuda and ('not enough gpu memory' in str(e).lower() or 
+                       'failed to create feature matcher' in str(e).lower()):
+            append_log_line(project_id, "⚠️ GPU feature matching failed due to memory constraints")
+            append_log_line(project_id, f"🔄 Retrying with CPU-based matching (reduced max_matches={colmap_cfg['max_num_matches'] // 2})...")
+            
+            cmd_cpu = [
+                colmap_exe, matcher_cmd,
+                '--database_path', str(paths['database_path']),
+                '--FeatureMatching.max_num_matches', str(colmap_cfg['max_num_matches'] // 2),
+                '--FeatureMatching.use_gpu', '0'
+            ]
+            
+            for param, value in colmap_cfg['matcher_params'].items():
+                cmd_cpu.extend([f'--{param}', value])
+            
+            run_command_with_logs(project_id, cmd_cpu, line_handler=matching_line_handler)
+            append_log_line(project_id, "✅ CPU-based matching completed successfully")
+        else:
+            raise
+    
+    update_state(project_id, 'feature_matching', status='completed', progress=100)
+    current = matching_progress['current'] or matching_progress['total']
+    total_pairs = matching_progress['total'] or matching_progress['current']
+    if total_pairs:
+        update_stage_detail(project_id, 'feature_matching', text=f'Matching pairs: {min(current, total_pairs)}/{total_pairs}', subtext='Feature matching complete')
+    else:
+        update_stage_detail(project_id, 'feature_matching', text='Feature matching complete', subtext=None)
+    append_log_line(project_id, "✅ COLMAP Feature Matching completed")
+    
+    return colmap_cfg
+
+
+def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=None):
+    """Run COLMAP Sparse Reconstruction stage only."""
+    num_images, colmap_cfg, colmap_exe, has_cuda = get_colmap_config_for_pipeline(paths, config, project_id)
+    if colmap_config:
+        colmap_cfg = colmap_config
+    
+    update_state(project_id, 'sparse_reconstruction', status='running')
+    update_stage_detail(project_id, 'sparse_reconstruction', text=f'Images registered: 0/{num_images}', subtext=None)
+    append_log_line(project_id, "🔄 Running Sparse Reconstruction...")
+    append_log_line(project_id, f"🏗️ Optimized mapper settings for {num_images} images")
+    
+    cmd = [
+        colmap_exe, 'mapper',
+        '--database_path', str(paths['database_path']),
+        '--image_path', str(paths['images_path']),
+        '--output_path', str(paths['sparse_path']),
+        '--Mapper.min_num_matches', str(colmap_cfg['min_num_matches']),
+        '--Mapper.min_model_size', str(colmap_cfg['min_model_size']),
+        '--Mapper.max_num_models', str(colmap_cfg['max_num_models']),
+        '--Mapper.init_num_trials', str(colmap_cfg['init_num_trials']),
+        '--Mapper.max_extra_param', str(colmap_cfg['max_extra_param']),
+        '--Mapper.num_threads', str(os.cpu_count() or 8)
+    ]
+    
+    if has_cuda:
+        cmd.extend([
+            '--Mapper.ba_use_gpu', '1',
+            '--Mapper.ba_gpu_index', '0'
+        ])
+        append_log_line(project_id, "🚀 GPU-enabled COLMAP detected - Using GPU for Bundle Adjustment")
+    else:
+        append_log_line(project_id, "ℹ️ Using CPU-only COLMAP")
+    
+    append_log_line(project_id, f"🔧 Using {os.cpu_count() or 8} CPU threads for mapper")
+    
+    sparse_tracker = {'registered': 0}
+    
+    def sparse_line_handler(line):
+        if num_images == 0:
+            return
+        
+        if any(keyword in line.lower() for keyword in ['registering', 'registered', 'reconstruction', 'bundle', 'mapper']):
+            append_log_line(project_id, f"[DEBUG] Sparse reconstruction: {line.strip()}")
+        
+        patterns = [
+            r'Registering image #(\d+)',
+            r'Registered image #(\d+)',
+            r'Processing image (\d+)/(\d+)',
+            r'Reconstruction: (\d+)/(\d+)',
+            r'Bundle adjustment: (\d+) images',
+            r'Image #(\d+)',
+            r'(\d+) images registered',
+            r'Registering\s+(\d+)\s*/\s*(\d+)',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, line, re.IGNORECASE)
+            if match:
+                if len(match.groups()) == 2:
+                    current = int(match.group(1))
+                    total = int(match.group(2))
+                    if total != num_images:
+                        total = num_images
+                    if current > total:
+                        current = total
+                else:
+                    sparse_tracker['registered'] += 1
+                    current = min(sparse_tracker['registered'], num_images)
+                    total = num_images
+                
+                percent = int((current / total) * 100)
+                details = {
+                    'text': f'Images registered: {current}/{total}',
+                    'current_item': current,
+                    'total_items': total,
+                    'item_name': f'Image {current}'
+                }
+                emit_stage_progress(project_id, 'sparse_reconstruction', percent, details)
+                update_state(project_id, 'sparse_reconstruction', progress=min(percent, 99), details=details)
+                update_stage_detail(project_id, 'sparse_reconstruction', text=f'Images registered: {current}/{total}', subtext=None)
+                return
+    
+    run_command_with_logs(project_id, cmd, line_handler=sparse_line_handler)
+    
+    update_state(project_id, 'sparse_reconstruction', status='completed', progress=100)
+    registered = sparse_tracker['registered'] if sparse_tracker['registered'] else num_images
+    update_stage_detail(project_id, 'sparse_reconstruction', text=f'Images registered: {min(registered, num_images)}/{num_images}', subtext='Sparse reconstruction complete')
+    append_log_line(project_id, "✅ Sparse Reconstruction completed")
+    
+    return colmap_cfg
+
+
+def run_model_conversion_stage(project_id, paths):
+    """Run Model Conversion stage (select best sparse model)."""
+    update_state(project_id, 'model_conversion', status='running')
+    update_stage_detail(project_id, 'model_conversion', text='Organizing sparse model...', subtext=None)
+    append_log_line(project_id, "🔄 Organizing Model Structure...")
+    
+    sparse_model_path = select_best_sparse_model(paths['sparse_path'], project_id)
+    
+    if not sparse_model_path:
+        raise Exception("No sparse reconstruction found")
+    
+    update_state(project_id, 'model_conversion', status='completed', progress=100)
+    update_stage_detail(project_id, 'model_conversion', text='Model organization complete', subtext=None)
+    append_log_line(project_id, "✅ Model Organization completed")
+    
+    return sparse_model_path
+
+
+def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_estimate, time_estimator, from_stage='feature_extraction'):
+    """Run real COLMAP + OpenSplat pipeline from specified stage."""
     try:
         # Set up environment variables for libtorch and headless operation
         libtorch_path = Path('../libtorch')
@@ -781,359 +1158,25 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
 
         colmap_config = get_colmap_config(num_images, project_id, quality_mode, custom_params)
 
-        # 1. Feature Extraction
-        update_state(project_id, 'feature_extraction', status='running')
-        update_stage_detail(project_id, 'feature_extraction', text=f'Images processed: 0/{num_images}', subtext=None)
-        append_log_line(project_id, "🔄 Running COLMAP Feature Extraction...")
-        append_log_line(project_id, f"📊 Using optimized settings for {num_images} images")
+        # Define COLMAP stage order for from_stage logic
+        colmap_stages = ['feature_extraction', 'feature_matching', 'sparse_reconstruction', 'model_conversion']
+        start_index = colmap_stages.index(from_stage) if from_stage in colmap_stages else 0
 
-        colmap_exe = get_colmap_executable()
+        # 1. Feature Extraction (skip if starting from later stage)
+        if start_index <= colmap_stages.index('feature_extraction'):
+            colmap_config = run_feature_extraction_stage(project_id, paths, config, colmap_config)
 
-        # Check if COLMAP has CUDA support
-        colmap_info = subprocess.run([colmap_exe, '-h'], capture_output=True, text=True)
-        has_cuda = 'with CUDA' in (colmap_info.stdout or '')
+        # 2. Feature Matching (skip if starting from later stage)
+        if start_index <= colmap_stages.index('feature_matching'):
+            colmap_config = run_feature_matching_stage(project_id, paths, config, colmap_config)
 
-        if has_cuda:
-            append_log_line(project_id, "🚀 Using GPU-accelerated COLMAP for feature extraction")
-        else:
-            append_log_line(project_id, "⚠️ COLMAP CUDA support not detected; falling back to CPU mode")
+        # 3. Sparse Reconstruction (skip if starting from later stage)
+        if start_index <= colmap_stages.index('sparse_reconstruction'):
+            colmap_config = run_sparse_reconstruction_stage(project_id, paths, config, colmap_config)
 
-        cmd = [
-            colmap_exe, 'feature_extractor',
-            '--database_path', str(paths['database_path']),
-            '--image_path', str(paths['images_path']),
-            '--ImageReader.camera_model', config['camera_model'],
-            '--ImageReader.single_camera', '1',
-            '--FeatureExtraction.use_gpu', '1' if has_cuda else '0',  # Use GPU only if CUDA available
-            '--SiftExtraction.max_image_size', str(colmap_config['max_image_size']),
-            '--SiftExtraction.max_num_features', str(colmap_config['max_num_features']),
-            '--SiftExtraction.first_octave', str(colmap_config['first_octave']),
-            '--SiftExtraction.num_octaves', str(colmap_config['num_octaves'])
-        ]
-
-        # Add enhanced SIFT parameters for high quality modes
-        sift_params = colmap_config.get('sift_params', {})
-        for param, value in sift_params.items():
-            if value is not None:  # Only add if value is not None
-                cmd.extend([f'--SiftExtraction.{param}', str(value)])
-
-        progress_tracker = {'count': 0}
-
-        def feature_line_handler(line):
-            if num_images == 0:
-                return
-
-            # Debug logging for feature extraction
-            if any(keyword in line.lower() for keyword in ['processing', 'processed', 'image', 'file', 'features']):
-                append_log_line(project_id, f"[DEBUG] Feature extraction: {line.strip()}")
-
-            # Enhanced pattern matching for COLMAP feature extraction
-            patterns = [
-                r'Processing image \[(\d+)/(\d+)\]',    # COLMAP format
-                r'Processed file \[(\d+)/(\d+)\]',       # Alternative format
-                r'Processing image (\d+)/(\d+)',         # Simple format
-                r'Processed image (\d+)/(\d+)',          # Simple format
-                r'Processing\s+(\d+)\s*\/\s*(\d+)',      # Generic processing
-                r'Extracting.*\s(\d+)\s*/\s*(\d+)',      # Extracting format
-                r'Image\s+(\d+)\s*\/\s*(\d+)',           # Image format
-                r'(\d+)\s*/\s*(\d+)\s*images?',          # X/Y images format
-                r'Features\s+(\d+)\s*\/\s*(\d+)',        # Features format
-            ]
-
-            for pattern in patterns:
-                match = re.search(pattern, line, re.IGNORECASE)
-                if match:
-                    current = int(match.group(1))
-                    total = int(match.group(2))
-
-                    # Ensure we don't exceed the known number of images
-                    if total != num_images:
-                        total = num_images
-                    if current > total:
-                        current = total
-
-                    percent = int((current / total) * 100)
-
-                    # Real-time update with detailed progress
-                    details = {
-                        'text': f'Images processed: {current}/{total}',
-                        'current_item': current,
-                        'total_items': total,
-                        'item_name': f'Image {current}'
-                    }
-
-                    # Emit real-time progress via WebSocket
-                    emit_stage_progress(project_id, 'feature_extraction', percent, details)
-
-                    update_state(project_id, 'feature_extraction', progress=min(percent, 99), details=details)
-                    update_stage_detail(project_id, 'feature_extraction', text=f'Images processed: {current}/{total}', subtext=None)
-                    return
-
-            # Fallback for older counting method
-            if any(keyword in line.lower() for keyword in ['processed', 'processing']):
-                progress_tracker['count'] += 1
-                processed = progress_tracker['count']
-                if processed > num_images:
-                    processed = num_images
-                percent = int((processed / num_images) * 100)
-
-                details = {
-                    'text': f'Images processed: {processed}/{num_images}',
-                    'current_item': processed,
-                    'total_items': num_images,
-                    'item_name': f'Image {processed}'
-                }
-
-                # Emit real-time progress via WebSocket
-                emit_stage_progress(project_id, 'feature_extraction', percent, details)
-
-                update_state(project_id, 'feature_extraction', progress=min(percent, 99), details=details)
-                update_stage_detail(project_id, 'feature_extraction', text=f'Images processed: {processed}/{num_images}', subtext=None)
-
-        run_command_with_logs(project_id, cmd, line_handler=feature_line_handler)
-
-        update_state(project_id, 'feature_extraction', status='completed', progress=100)
-        update_stage_detail(project_id, 'feature_extraction', text=f'Images processed: {num_images}/{num_images}', subtext='Feature extraction complete')
-        append_log_line(project_id, "✅ COLMAP Feature Extraction completed")
-
-        # 2. Feature Matching (Hybrid Approach)
-        update_state(project_id, 'feature_matching', status='running')
-        update_stage_detail(project_id, 'feature_matching', text='Matching pairs: 0/0', subtext=None)
-        append_log_line(project_id, "🔄 Running COLMAP Feature Matching...")
-
-        colmap_exe = get_colmap_executable()
-
-        # Check if COLMAP has CUDA support
-        colmap_info = subprocess.run([colmap_exe, '-h'], capture_output=True, text=True)
-        has_cuda = 'with CUDA' in (colmap_info.stdout or '')
-
-        if has_cuda:
-            append_log_line(project_id, "🚀 Using GPU-accelerated COLMAP for feature matching")
-        else:
-            append_log_line(project_id, "⚠️ COLMAP CUDA support not detected; falling back to CPU mode for matching")
-
-        # Use sequential matcher only (vocab tree disabled due to format incompatibility)
-        append_log_line(project_id, f"🔗 Using {colmap_config['matcher_type']} matcher")
-
-        matching_progress = {'current': 0, 'total': 0}
-
-        # Run sequential/exhaustive matcher
-        matcher_cmd = f'{colmap_config["matcher_type"]}_matcher'
-        append_log_line(project_id, f"� Running {colmap_config['matcher_type']} matcher...")
-
-        cmd = [
-            colmap_exe, matcher_cmd,
-            '--database_path', str(paths['database_path']),
-            '--FeatureMatching.max_num_matches', str(colmap_config['max_num_matches']),
-            '--FeatureMatching.use_gpu', '1' if has_cuda else '0'
-        ]
-
-        # Add matcher-specific parameters
-        for param, value in colmap_config['matcher_params'].items():
-            cmd.extend([f'--{param}', value])
-
-        def matching_line_handler(line):
-            # Debug logging for feature matching
-            if any(keyword in line.lower() for keyword in ['matching', 'match', 'pair', 'block']):
-                append_log_line(project_id, f"[DEBUG] Feature matching: {line.strip()}")
-            
-            # Check for GPU memory errors and handle gracefully
-            if 'not enough gpu memory' in line.lower() or 'failed to create feature matcher' in line.lower():
-                append_log_line(project_id, f"⚠️ GPU Memory Error detected: {line.strip()}")
-                return  # Let error handling below take care of this
-
-            # Enhanced patterns for feature matching
-            patterns = [
-                r'Matching block \[(\d+)/(\d+)\]',     # Block matching
-                r'Matching image \[(\d+)/(\d+)\]',     # Image matching
-                r'Matching pair \[(\d+)/(\d+)\]',      # Pair matching
-                r'Processing pair (\d+)/(\d+)',        # Simple pair
-                r'Matching\s+(\d+)\s*\/\s*(\d+)',      # Generic matching
-                r'(\d+)/(\d+)\s+matches',               # Match results
-                r'Pair\s+(\d+)\s*\/\s*(\d+)',          # Pair format
-                r'\[(\d+)/(\d+)\]',                     # Bracket format
-            ]
-
-            for pattern in patterns:
-                match = re.search(pattern, line, re.IGNORECASE)
-                if match:
-                    current = int(match.group(1))
-                    total = int(match.group(2))
-                    matching_progress['current'] = current
-                    matching_progress['total'] = total
-
-                    if total > 0:
-                        percent = int((min(current, total) / total) * 100)
-
-                        details = {
-                            'text': f'Matching pairs: {current}/{total}',
-                            'current_item': current,
-                            'total_items': total,
-                            'item_name': f'Pair {current}'
-                        }
-
-                        # Emit real-time progress via WebSocket
-                        emit_stage_progress(project_id, 'feature_matching', percent, details)
-
-                        update_state(project_id, 'feature_matching', progress=min(percent, 99), details=details)
-                        update_stage_detail(project_id, 'feature_matching', text=f'Matching pairs: {current}/{total}', subtext=None)
-                    return
-
-        # Try GPU matching first, fallback to CPU if OOM error occurs
-        try:
-            run_command_with_logs(project_id, cmd, line_handler=matching_line_handler)
-        except subprocess.CalledProcessError as e:
-            # Check if error is GPU memory related
-            if has_cuda and ('not enough gpu memory' in str(e).lower() or 
-                           'failed to create feature matcher' in str(e).lower()):
-                append_log_line(project_id, "⚠️ GPU feature matching failed due to memory constraints")
-                append_log_line(project_id, f"🔄 Retrying with CPU-based matching (reduced max_matches={colmap_config['max_num_matches'] // 2})...")
-                
-                # Retry with CPU and reduced max_num_matches
-                cmd_cpu = [
-                    colmap_exe, matcher_cmd,
-                    '--database_path', str(paths['database_path']),
-                    '--FeatureMatching.max_num_matches', str(colmap_config['max_num_matches'] // 2),
-                    '--FeatureMatching.use_gpu', '0'  # Force CPU
-                ]
-                
-                # Add matcher-specific parameters
-                for param, value in colmap_config['matcher_params'].items():
-                    cmd_cpu.extend([f'--{param}', value])
-                
-                run_command_with_logs(project_id, cmd_cpu, line_handler=matching_line_handler)
-                append_log_line(project_id, "✅ CPU-based matching completed successfully")
-            else:
-                # Re-raise if not GPU memory error
-                raise
-
-        # Vocab tree matching is disabled (format incompatibility with current COLMAP)
-        # Sequential/exhaustive matching provides sufficient coverage
-
-        update_state(project_id, 'feature_matching', status='completed', progress=100)
-        current = matching_progress['current'] or matching_progress['total']
-        total_pairs = matching_progress['total'] or matching_progress['current']
-        if total_pairs:
-            update_stage_detail(project_id, 'feature_matching', text=f'Matching pairs: {min(current, total_pairs)}/{total_pairs}', subtext='Feature matching complete')
-        else:
-            update_stage_detail(project_id, 'feature_matching', text='Feature matching complete', subtext=None)
-        append_log_line(project_id, "✅ COLMAP Feature Matching completed")
-
-        # 3. Sparse Reconstruction
-        update_state(project_id, 'sparse_reconstruction', status='running')
-        update_stage_detail(project_id, 'sparse_reconstruction', text=f'Images registered: 0/{num_images}', subtext=None)
-        append_log_line(project_id, "🔄 Running Sparse Reconstruction...")
-        append_log_line(project_id, f"🏗️ Optimized mapper settings for {num_images} images")
-
-        colmap_exe = get_colmap_executable()
-        
-        # GPU-accelerated Bundle Adjustment settings
-        # Check if COLMAP supports GPU bundle adjustment
-        colmap_info = subprocess.run([colmap_exe, '-h'], capture_output=True, text=True)
-        has_cuda = 'with CUDA' in (colmap_info.stdout or '')
-        
-        cmd = [
-            colmap_exe, 'mapper',
-            '--database_path', str(paths['database_path']),
-            '--image_path', str(paths['images_path']),
-            '--output_path', str(paths['sparse_path']),
-            '--Mapper.min_num_matches', str(colmap_config['min_num_matches']),
-            '--Mapper.min_model_size', str(colmap_config['min_model_size']),
-            '--Mapper.max_num_models', str(colmap_config['max_num_models']),
-            '--Mapper.init_num_trials', str(colmap_config['init_num_trials']),
-            '--Mapper.max_extra_param', str(colmap_config['max_extra_param']),
-            # Performance optimizations
-            '--Mapper.num_threads', str(os.cpu_count() or 8)  # Use all CPU cores
-        ]
-
-        # GPU-accelerated Bundle Adjustment (10-50x faster than CPU!)
-        if has_cuda:
-            cmd.extend([
-                '--Mapper.ba_use_gpu', '1',        # Enable GPU for bundle adjustment
-                '--Mapper.ba_gpu_index', '0'       # Use GPU 0
-            ])
-            append_log_line(project_id, "🚀 GPU-enabled COLMAP detected - Using GPU for Bundle Adjustment")
-        else:
-            append_log_line(project_id, "ℹ️ Using CPU-only COLMAP")
-            
-        append_log_line(project_id, f"🔧 Using {os.cpu_count() or 8} CPU threads for mapper")
-
-        sparse_tracker = {'registered': 0}
-
-        def sparse_line_handler(line):
-            if num_images == 0:
-                return
-
-            # Debug logging for sparse reconstruction
-            if any(keyword in line.lower() for keyword in ['registering', 'registered', 'reconstruction', 'bundle', 'mapper']):
-                append_log_line(project_id, f"[DEBUG] Sparse reconstruction: {line.strip()}")
-
-            # Enhanced patterns for sparse reconstruction
-            patterns = [
-                r'Registering image #(\d+)',              # Direct registration
-                r'Registered image #(\d+)',               # Registration complete
-                r'Processing image (\d+)/(\d+)',          # With progress
-                r'Reconstruction: (\d+)/(\d+)',           # Reconstruction progress
-                r'Bundle adjustment: (\d+) images',       # Bundle adjustment
-                r'Image #(\d+)',                          # Simple image format
-                r'(\d+) images registered',               # Summary format
-                r'Registering\s+(\d+)\s*/\s*(\d+)',       # Generic registering
-            ]
-
-            for pattern in patterns:
-                match = re.search(pattern, line, re.IGNORECASE)
-                if match:
-                    if len(match.groups()) == 2:  # Progress format
-                        current = int(match.group(1))
-                        total = int(match.group(2))
-                        if total != num_images:
-                            total = num_images
-                        if current > total:
-                            current = total
-                    else:  # Single number format
-                        sparse_tracker['registered'] += 1
-                        current = sparse_tracker['registered']
-                        total = num_images
-                        if current > total:
-                            current = total
-
-                    percent = int((current / total) * 100)
-
-                    details = {
-                        'text': f'Images registered: {current}/{total}',
-                        'current_item': current,
-                        'total_items': total,
-                        'item_name': f'Image {current}'
-                    }
-
-                    # Emit real-time progress via WebSocket
-                    emit_stage_progress(project_id, 'sparse_reconstruction', percent, details)
-
-                    update_state(project_id, 'sparse_reconstruction', progress=min(percent, 99), details=details)
-                    update_stage_detail(project_id, 'sparse_reconstruction', text=f'Images registered: {current}/{total}', subtext=None)
-                    return
-
-        run_command_with_logs(project_id, cmd, line_handler=sparse_line_handler)
-
-        update_state(project_id, 'sparse_reconstruction', status='completed', progress=100)
-        registered = sparse_tracker['registered'] if sparse_tracker['registered'] else num_images
-        update_stage_detail(project_id, 'sparse_reconstruction', text=f'Images registered: {min(registered, num_images)}/{num_images}', subtext='Sparse reconstruction complete')
-        append_log_line(project_id, "✅ Sparse Reconstruction completed")
-
-        # Select the best reconstruction model (with most registered images)
-        # This also renames it to 0/ and deletes inferior models
-        update_state(project_id, 'model_conversion', status='running')
-        update_stage_detail(project_id, 'model_conversion', text='Organizing sparse model...', subtext=None)
-        append_log_line(project_id, "🔄 Organizing Model Structure...")
-
-        sparse_model_path = select_best_sparse_model(paths['sparse_path'], project_id)
-
-        if not sparse_model_path:
-            raise Exception("No sparse reconstruction found")
-
-        update_state(project_id, 'model_conversion', status='completed', progress=100)
-        update_stage_detail(project_id, 'model_conversion', text='Model organization complete', subtext=None)
-        append_log_line(project_id, "✅ Model Organization completed")
+        # 4. Model Conversion (skip if starting from later stage)
+        if start_index <= colmap_stages.index('model_conversion'):
+            run_model_conversion_stage(project_id, paths)
 
         # 5. Enhanced OpenSplat Training
         update_state(project_id, 'gaussian_splatting', status='running')

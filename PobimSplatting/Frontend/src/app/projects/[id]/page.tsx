@@ -99,9 +99,19 @@ export default function ProjectDetailPage() {
   const [selectedRetryStage, setSelectedRetryStage] = useState<string>('ingest');
   const [showLogSidebar, setShowLogSidebar] = useState(true);
   const [retryParams, setRetryParams] = useState({
+    // Gaussian Splatting params
     quality_mode: '',
     iterations: '',
     learning_rate: '',
+    // COLMAP Feature Extraction params
+    max_num_features: '',
+    max_image_size: '',
+    // COLMAP Feature Matching params
+    max_num_matches: '',
+    sequential_overlap: '',
+    // COLMAP Sparse Reconstruction params
+    min_num_matches: '',
+    max_num_models: '',
   });
   const [expandedStage, setExpandedStage] = useState<string | null>(null);
   const [showColmapModal, setShowColmapModal] = useState(false);
@@ -374,11 +384,43 @@ export default function ProjectDetailPage() {
       // Build params object for retry
       const params: any = {};
 
+      // Add quality_mode for all stages (affects COLMAP and OpenSplat config)
+      if (retryParams.quality_mode) {
+        params.quality_mode = retryParams.quality_mode;
+      }
+
+      // Add parameters if retrying from COLMAP Feature Extraction stage
+      if (fromStage === 'feature_extraction') {
+        if (retryParams.max_num_features) {
+          params.max_num_features = parseInt(retryParams.max_num_features);
+        }
+        if (retryParams.max_image_size) {
+          params.max_image_size = parseInt(retryParams.max_image_size);
+        }
+      }
+
+      // Add parameters if retrying from COLMAP Feature Matching stage
+      if (fromStage === 'feature_matching') {
+        if (retryParams.max_num_matches) {
+          params.max_num_matches = parseInt(retryParams.max_num_matches);
+        }
+        if (retryParams.sequential_overlap) {
+          params.sequential_overlap = parseInt(retryParams.sequential_overlap);
+        }
+      }
+
+      // Add parameters if retrying from COLMAP Sparse Reconstruction stage
+      if (fromStage === 'sparse_reconstruction') {
+        if (retryParams.min_num_matches) {
+          params.min_num_matches = parseInt(retryParams.min_num_matches);
+        }
+        if (retryParams.max_num_models) {
+          params.max_num_models = parseInt(retryParams.max_num_models);
+        }
+      }
+
       // Add parameters if retrying from gaussian_splatting stage
       if (fromStage === 'gaussian_splatting') {
-        if (retryParams.quality_mode) {
-          params.quality_mode = retryParams.quality_mode;
-        }
         if (retryParams.iterations) {
           params.iterations = parseInt(retryParams.iterations);
         }
@@ -394,6 +436,12 @@ export default function ProjectDetailPage() {
         quality_mode: '',
         iterations: '',
         learning_rate: '',
+        max_num_features: '',
+        max_image_size: '',
+        max_num_matches: '',
+        sequential_overlap: '',
+        min_num_matches: '',
+        max_num_models: '',
       });
       await loadProject();
     } catch (err) {
@@ -1068,6 +1116,199 @@ export default function ProjectDetailPage() {
                 </div>
                 <p className="text-xs text-gray-500 mt-3">
                   💡 ทิ้งค่าว่างเพื่อใช้ค่าเดิมต่อ หรือกรอกค่าใหม่เพื่อปรับเปลี่ยน
+                </p>
+              </div>
+            )}
+
+            {/* Feature Extraction Parameters Form */}
+            {selectedRetryStage === 'feature_extraction' && (
+              <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-xl">
+                <h4 className="text-sm font-semibold text-black mb-3 flex items-center">
+                  <Settings className="h-4 w-4 mr-2" />
+                  ปรับค่า Feature Extraction (ทิ้งว่างเพื่อใช้ค่าเดิม)
+                </h4>
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                      Quality Mode
+                    </label>
+                    <select
+                      value={retryParams.quality_mode}
+                      onChange={(e) => setRetryParams({...retryParams, quality_mode: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                    >
+                      <option value="">ใช้ค่าเดิม</option>
+                      <option value="fast">Fast</option>
+                      <option value="balanced">Balanced</option>
+                      <option value="high">High</option>
+                      <option value="ultra">Ultra</option>
+                      <option value="professional">Professional</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                      Max Num Features (จำนวน features สูงสุดต่อภาพ)
+                    </label>
+                    <input
+                      type="number"
+                      placeholder="เช่น 32768"
+                      value={retryParams.max_num_features}
+                      onChange={(e) => setRetryParams({...retryParams, max_num_features: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                    />
+                    <p className="text-xs text-gray-400 mt-1">ค่าเริ่มต้น: 32768 (สำหรับภาพ 4K)</p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                      Max Image Size (ขนาดภาพสูงสุด pixels)
+                    </label>
+                    <input
+                      type="number"
+                      placeholder="เช่น 4160"
+                      value={retryParams.max_image_size}
+                      onChange={(e) => setRetryParams({...retryParams, max_image_size: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                    />
+                    <p className="text-xs text-gray-400 mt-1">ค่าเริ่มต้น: 4160</p>
+                  </div>
+                </div>
+                <p className="text-xs text-gray-500 mt-3">
+                  💡 การเพิ่ม features จะช่วยให้ได้ผลลัพธ์ดีขึ้น แต่ใช้เวลานานขึ้น
+                </p>
+              </div>
+            )}
+
+            {/* Feature Matching Parameters Form */}
+            {selectedRetryStage === 'feature_matching' && (
+              <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-xl">
+                <h4 className="text-sm font-semibold text-black mb-3 flex items-center">
+                  <Settings className="h-4 w-4 mr-2" />
+                  ปรับค่า Feature Matching (ทิ้งว่างเพื่อใช้ค่าเดิม)
+                </h4>
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                      Quality Mode
+                    </label>
+                    <select
+                      value={retryParams.quality_mode}
+                      onChange={(e) => setRetryParams({...retryParams, quality_mode: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                    >
+                      <option value="">ใช้ค่าเดิม</option>
+                      <option value="fast">Fast</option>
+                      <option value="balanced">Balanced</option>
+                      <option value="high">High</option>
+                      <option value="ultra">Ultra</option>
+                      <option value="robust">Robust (สำหรับ dataset ยาก)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                      Max Num Matches (จำนวน matches สูงสุด)
+                    </label>
+                    <input
+                      type="number"
+                      placeholder="เช่น 45960"
+                      value={retryParams.max_num_matches}
+                      onChange={(e) => setRetryParams({...retryParams, max_num_matches: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                    />
+                    <p className="text-xs text-gray-400 mt-1">ค่าเริ่มต้น: 45960 (ปลอดภัยสำหรับ GPU)</p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                      Sequential Overlap (จำนวนภาพที่ match กัน)
+                    </label>
+                    <input
+                      type="number"
+                      placeholder="เช่น 20"
+                      value={retryParams.sequential_overlap}
+                      onChange={(e) => setRetryParams({...retryParams, sequential_overlap: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                    />
+                    <p className="text-xs text-gray-400 mt-1">ค่าเริ่มต้น: 20 (เพิ่มเพื่อ coverage ดีขึ้น)</p>
+                  </div>
+                </div>
+                <p className="text-xs text-gray-500 mt-3">
+                  💡 หาก GPU หน่วยความจำเต็ม ลอง max_num_matches ลดลง
+                </p>
+              </div>
+            )}
+
+            {/* Sparse Reconstruction Parameters Form */}
+            {selectedRetryStage === 'sparse_reconstruction' && (
+              <div className="mb-6 p-4 bg-purple-50 border border-purple-200 rounded-xl">
+                <h4 className="text-sm font-semibold text-black mb-3 flex items-center">
+                  <Settings className="h-4 w-4 mr-2" />
+                  ปรับค่า Sparse Reconstruction (ทิ้งว่างเพื่อใช้ค่าเดิม)
+                </h4>
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                      Quality Mode
+                    </label>
+                    <select
+                      value={retryParams.quality_mode}
+                      onChange={(e) => setRetryParams({...retryParams, quality_mode: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                    >
+                      <option value="">ใช้ค่าเดิม</option>
+                      <option value="fast">Fast</option>
+                      <option value="balanced">Balanced</option>
+                      <option value="high">High</option>
+                      <option value="ultra">Ultra</option>
+                      <option value="robust">Robust (สำหรับ dataset ยาก)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                      Min Num Matches (จำนวน matches ขั้นต่ำในการ register)
+                    </label>
+                    <input
+                      type="number"
+                      placeholder="เช่น 8"
+                      value={retryParams.min_num_matches}
+                      onChange={(e) => setRetryParams({...retryParams, min_num_matches: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                    />
+                    <p className="text-xs text-gray-400 mt-1">ค่าเริ่มต้น: 8 (ลดลงเพื่อ register ภาพมากขึ้น)</p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                      Max Num Models (จำนวน models สูงสุดที่สร้าง)
+                    </label>
+                    <input
+                      type="number"
+                      placeholder="เช่น 50"
+                      value={retryParams.max_num_models}
+                      onChange={(e) => setRetryParams({...retryParams, max_num_models: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                    />
+                    <p className="text-xs text-gray-400 mt-1">ค่าเริ่มต้น: 50 (เพิ่มเพื่อลองหลาย models)</p>
+                  </div>
+                </div>
+                <p className="text-xs text-gray-500 mt-3">
+                  💡 ลด min_num_matches เพื่อช่วยให้ภาพที่ยากถูก register ได้
+                </p>
+              </div>
+            )}
+
+            {/* Model Conversion - No params needed */}
+            {selectedRetryStage === 'model_conversion' && (
+              <div className="mb-6 p-4 bg-gray-50 border border-gray-200 rounded-xl">
+                <h4 className="text-sm font-semibold text-black mb-3 flex items-center">
+                  <Info className="h-4 w-4 mr-2" />
+                  Model Conversion
+                </h4>
+                <p className="text-sm text-gray-600">
+                  ขั้นตอนนี้จะเลือก sparse model ที่ดีที่สุดโดยอัตโนมัติ ไม่มีพารามิเตอร์ให้ปรับ
                 </p>
               </div>
             )}

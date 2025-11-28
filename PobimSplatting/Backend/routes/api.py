@@ -503,10 +503,28 @@ def retry_project(project_id):
         if new_params:
             append_log_line(project_id, "🔧 Updating configuration with new parameters")
 
-            # Update training parameters if provided
+            # Update OpenSplat training parameters if provided
             for param_key in ['iterations', 'densify_grad_threshold', 'refine_every', 'warmup_length',
                             'ssim_weight', 'learning_rate', 'position_lr_init', 'position_lr_final',
                             'feature_lr', 'opacity_lr', 'scaling_lr', 'rotation_lr', 'percent_dense']:
+                if param_key in new_params and new_params[param_key] is not None:
+                    config[param_key] = new_params[param_key]
+                    append_log_line(project_id, f"  • {param_key}: {new_params[param_key]}")
+
+            # Update COLMAP Feature Extraction parameters if provided
+            for param_key in ['max_num_features', 'max_image_size', 'peak_threshold', 'edge_threshold']:
+                if param_key in new_params and new_params[param_key] is not None:
+                    config[param_key] = new_params[param_key]
+                    append_log_line(project_id, f"  • {param_key}: {new_params[param_key]}")
+
+            # Update COLMAP Feature Matching parameters if provided
+            for param_key in ['max_num_matches', 'sequential_overlap']:
+                if param_key in new_params and new_params[param_key] is not None:
+                    config[param_key] = new_params[param_key]
+                    append_log_line(project_id, f"  • {param_key}: {new_params[param_key]}")
+
+            # Update COLMAP Sparse Reconstruction parameters if provided
+            for param_key in ['min_num_matches', 'max_num_models', 'init_num_trials']:
                 if param_key in new_params and new_params[param_key] is not None:
                     config[param_key] = new_params[param_key]
                     append_log_line(project_id, f"  • {param_key}: {new_params[param_key]}")

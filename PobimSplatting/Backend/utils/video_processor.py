@@ -104,7 +104,7 @@ class VideoProcessor:
 
         return validation_result
 
-    def extract_frames(self, video_path, output_dir, extraction_config=None):
+    def extract_frames(self, video_path, output_dir, extraction_config=None, progress_callback=None):
         """
         Extract frames from video with quality settings
 
@@ -119,6 +119,8 @@ class VideoProcessor:
                     'quality': 100 | 75 | 50 (percentage, default 100),
                     'preview_count': int (number of frames to preview, default 10)
                 }
+            progress_callback: Optional callback function(current_frame, total_expected, frame_path)
+                Called after each frame is extracted for progress tracking
 
         Returns:
             List of extracted frame paths
@@ -275,6 +277,19 @@ class VideoProcessor:
                     extracted_frames.append(str(frame_path))
                     saved_count += 1
                     prev_frame = frame.copy()
+
+                    # Calculate expected total frames for progress
+                    if mode == 'frames':
+                        expected_total = max_frames if max_frames else total_frames // frame_interval
+                    else:
+                        expected_total = total_frames // frame_interval
+                    
+                    # Call progress callback if provided
+                    if progress_callback:
+                        try:
+                            progress_callback(saved_count, expected_total, str(frame_path))
+                        except Exception as cb_err:
+                            logger.warning(f"Progress callback error: {cb_err}")
 
                     if saved_count % 10 == 0:  # Log every 10 frames
                         logger.info(f"Extracted {saved_count} frames so far...")

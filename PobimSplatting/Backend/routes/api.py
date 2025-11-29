@@ -377,8 +377,8 @@ def get_frame_previews(project_id):
     if not images_path.exists():
         return jsonify({'frames': [], 'message': 'No frames extracted yet'})
 
-    # Get first N frames for preview
-    frame_files = sorted(images_path.glob('frame_*.jpg'))[:20]  # Get up to 20 frames
+    # Get all frame files for preview (no limit)
+    frame_files = sorted(images_path.glob('frame_*.jpg'))
 
     frames = []
     for frame_file in frame_files:
@@ -388,7 +388,7 @@ def get_frame_previews(project_id):
             'url': f'/api/frame_preview/{project_id}/{frame_file.name}'
         })
 
-    return jsonify({'frames': frames, 'count': len(list(images_path.glob('frame_*.jpg')))})
+    return jsonify({'frames': frames, 'count': len(frames)})
 
 
 @api_bp.route('/frame_preview/<project_id>/<filename>')

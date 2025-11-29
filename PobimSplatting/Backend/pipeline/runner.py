@@ -57,12 +57,34 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
         if start_index <= stage_order.index('ingest'):
             with project_store.status_lock:
                 update_state(project_id, 'ingest', status='running')
-            update_stage_detail(project_id, 'ingest', text='Preparing upload...', subtext=None)
+            
+            # Count uploaded files for progress tracking
+            total_files = len(video_files) + len(image_files)
+            
+            # Show initial progress with file counts
+            update_stage_detail(project_id, 'ingest', 
+                              text=f'Files received: {total_files}', 
+                              subtext=f'{len(image_files)} images, {len(video_files)} videos')
+            emit_stage_progress(project_id, 'ingest', 10, {
+                'text': f'Files received: {total_files}',
+                'current_item': total_files,
+                'total_items': total_files,
+                'item_name': 'Preparing...'
+            })
 
             append_log_line(project_id, f"🚀 Starting {config.get('quality_mode', 'balanced').title()} Quality Processing")
             append_log_line(project_id, f"📊 Dataset: {num_total_images} images, {len(video_files)} videos")
             append_log_line(project_id, f"⏱️  Estimated time: {time_estimator.format_time_display(time_estimate.total_seconds)}")
             append_log_line(project_id, f"🎯 GPU: {time_estimator.detect_gpu()}")
+            
+            # Update progress after logging info
+            update_state(project_id, 'ingest', progress=50)
+            emit_stage_progress(project_id, 'ingest', 50, {
+                'text': f'Initializing: {total_files} files',
+                'current_item': total_files,
+                'total_items': total_files,
+                'item_name': 'Initializing pipeline...'
+            })
 
         # Video extraction stage
         total_extracted_frames = 0
@@ -73,6 +95,10 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
                 update_stage_detail(project_id, 'video_extraction', text=f'Videos processed: 0/{total_videos}', subtext='Frames extracted: 0')
                 append_log_line(project_id, f"📹 Processing {total_videos} video file(s)...")
 
+                # Calculate expected total frames for all videos
+                expected_frames_per_video = config.get('max_frames', 100)
+                total_expected_frames = expected_frames_per_video * total_videos
+                
                 for i, video_path in enumerate(video_files):
                     append_log_line(project_id, f"Extracting frames from: {Path(video_path).name}")
 
@@ -91,10 +117,34 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
                             'preview_count': config.get('preview_count', 10)
                         }
 
+                    # Create progress callback for frame-by-frame updates
+                    def frame_progress_callback(current_frame, expected_total, frame_path):
+                        nonlocal total_extracted_frames
+                        # Calculate overall progress across all videos
+                        frames_from_prev_videos = i * expected_frames_per_video
+                        overall_frames = frames_from_prev_videos + current_frame
+                        overall_progress = int((overall_frames / total_expected_frames) * 100)
+                        
+                        # Update progress every 5 frames to avoid excessive updates
+                        if current_frame % 5 == 0 or current_frame == expected_total:
+                            emit_stage_progress(project_id, 'video_extraction', min(overall_progress, 99), {
+                                'text': f'Video {i + 1}/{total_videos}: Frame {current_frame}/{expected_total}',
+                                'current_item': overall_frames,
+                                'total_items': total_expected_frames,
+                                'item_name': f'Frame {current_frame}'
+                            })
+                            update_stage_detail(
+                                project_id,
+                                'video_extraction',
+                                text=f'Video {i + 1}/{total_videos}: Frame {current_frame}/{expected_total}',
+                                subtext=f'Total extracted: {frames_from_prev_videos + current_frame}'
+                            )
+
                     extracted = video_processor.extract_frames(
                         video_path,
                         paths['images_path'],
-                        extraction_config=extraction_config
+                        extraction_config=extraction_config,
+                        progress_callback=frame_progress_callback
                     )
 
                     total_extracted_frames += len(extracted)

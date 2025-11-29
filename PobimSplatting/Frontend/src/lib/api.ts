@@ -114,7 +114,7 @@ export const api = {
   },
 
   // Upload
-  upload: async (files: File[], config: any) => {
+  upload: async (files: File[], config: any, onProgress?: (loaded: number, total: number) => void) => {
     const formData = new FormData();
 
     // Add files
@@ -178,6 +178,11 @@ export const api = {
     const response = await apiClient.post('/api/upload', formData, {
       headers: {
         'Content-Type': 'multipart/form-data',
+      },
+      onUploadProgress: (progressEvent) => {
+        if (onProgress && progressEvent.total) {
+          onProgress(progressEvent.loaded, progressEvent.total);
+        }
       },
     });
     return response.data;

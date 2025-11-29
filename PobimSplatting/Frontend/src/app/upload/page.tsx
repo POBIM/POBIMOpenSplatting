@@ -11,6 +11,9 @@ export default function UploadPage() {
   const [files, setFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadedBytes, setUploadedBytes] = useState(0);
+  const [uploadSpeed, setUploadSpeed] = useState(0);
+  const [uploadStartTime, setUploadStartTime] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [config, setConfig] = useState({
     project_name: '',
@@ -114,14 +117,14 @@ export default function UploadPage() {
     setUploading(true);
     setError(null);
     setUploadProgress(0);
+    setUploadedBytes(0);
+    setUploadSpeed(0);
+    setUploadStartTime(Date.now());
 
-    let progressInterval: ReturnType<typeof setInterval> | null = null;
+    let lastLoaded = 0;
+    let lastTime = Date.now();
 
     try {
-      // Simulate upload progress while backend processes the form data
-      progressInterval = setInterval(() => {
-        setUploadProgress(prev => Math.min(prev + 10, 90));
-      }, 200);
 
       // Add custom parameters to config if custom mode is selected
       const uploadConfig = {
@@ -157,8 +160,25 @@ export default function UploadPage() {
         })
       };
 
-      const result = await api.upload(files, uploadConfig);
+      const result = await api.upload(files, uploadConfig, (loaded, total) => {
+        // Update progress percentage
+        const progress = Math.round((loaded / total) * 100);
+        setUploadProgress(progress);
+        setUploadedBytes(loaded);
+        
+        // Calculate upload speed (bytes per second)
+        const now = Date.now();
+        const timeDiff = (now - lastTime) / 1000; // seconds
+        if (timeDiff > 0.5) { // Update speed every 0.5 seconds
+          const bytesDiff = loaded - lastLoaded;
+          const speed = bytesDiff / timeDiff;
+          setUploadSpeed(speed);
+          lastLoaded = loaded;
+          lastTime = now;
+        }
+      });
       setUploadProgress(100);
+      setUploadedBytes(totalSize);
 
       console.log('Upload result:', result);
 
@@ -173,10 +193,9 @@ export default function UploadPage() {
       setError(err instanceof Error ? err.message : 'Upload failed');
       setUploading(false);
       setUploadProgress(0);
-    } finally {
-      if (progressInterval) {
-        clearInterval(progressInterval);
-      }
+      setUploadedBytes(0);
+      setUploadSpeed(0);
+      setUploadStartTime(null);
     }
   };
 
@@ -797,13 +816,34 @@ export default function UploadPage() {
 
             {uploading ? (
               <div className="space-y-3">
-                <div className="w-full bg-gray-100 rounded-full h-2">
+                <div className="w-full bg-gray-100 rounded-full h-3">
                   <div
-                    className="bg-black h-2 rounded-full transition-all duration-300"
+                    className="bg-gradient-to-r from-blue-500 to-blue-600 h-3 rounded-full transition-all duration-300 relative"
                     style={{ width: `${uploadProgress}%` }}
-                  />
+                  >
+                    {uploadProgress > 5 && (
+                      <span className="absolute inset-0 flex items-center justify-center text-[10px] font-medium text-white">
+                        {uploadProgress}%
+                      </span>
+                    )}
+                  </div>
                 </div>
-                <p className="text-sm text-gray-600 text-center">Uploading... {uploadProgress}%</p>
+                <div className="flex justify-between items-center text-sm text-gray-600">
+                  <span>
+                    📤 {formatFileSize(uploadedBytes)} / {formatFileSize(totalSize)}
+                  </span>
+                  <span>
+                    {uploadSpeed > 0 ? `⚡ ${formatFileSize(uploadSpeed)}/s` : '⏳ Starting...'}
+                  </span>
+                </div>
+                <p className="text-xs text-gray-500 text-center">
+                  {uploadProgress < 100 
+                    ? uploadSpeed > 0 
+                      ? `Estimated time: ~${Math.ceil((totalSize - uploadedBytes) / uploadSpeed)}s remaining`
+                      : 'Calculating speed...'
+                    : '✅ Upload complete! Processing will start automatically...'
+                  }
+                </p>
               </div>
             ) : (
               <div className="flex space-x-4 justify-center">

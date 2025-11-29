@@ -194,7 +194,7 @@ export default function ProjectDetailPage() {
     try {
       const data = await api.getFramePreviews(projectId);
       if (data.frames && data.frames.length > 0) {
-        setFramePreview(data.frames.slice(0, 10));
+        setFramePreview(data.frames); // Show all preview images
       } else {
         setFramePreview([]);
       }
@@ -921,23 +921,13 @@ export default function ProjectDetailPage() {
                 </div>
               )}
 
-              {/* Frame Preview Section - Compact */}
-              {framePreview.length > 0 && (() => {
-                // Select 10 evenly-spaced frames from the total
-                const totalFrames = framePreview.length;
-                const numToShow = Math.min(10, totalFrames);
-                const selectedFrames = totalFrames <= 10
-                  ? framePreview
-                  : Array.from({ length: numToShow }, (_, i) => {
-                      const index = Math.floor((i * (totalFrames - 1)) / (numToShow - 1));
-                      return framePreview[index];
-                    });
-
-                return (
-                  <div className="border-t border-gray-200 pt-6">
-                    <h3 className="text-sm font-medium text-black mb-4">Frame Preview ({selectedFrames.length} of {totalFrames})</h3>
+              {/* Frame Preview Section - Show All Images */}
+              {framePreview.length > 0 && (
+                <div className="border-t border-gray-200 pt-6">
+                  <h3 className="text-sm font-medium text-black mb-4">Frame Preview ({framePreview.length} images)</h3>
+                  <div className="max-h-96 overflow-y-auto">
                     <div className="grid grid-cols-5 gap-3">
-                      {selectedFrames.map((frame, index) => (
+                      {framePreview.map((frame, index) => (
                         <div key={index} className="relative group flex-shrink-0">
                           <img
                             src={frame.url}
@@ -945,12 +935,15 @@ export default function ProjectDetailPage() {
                             className="w-full h-24 object-cover rounded-lg border border-gray-200 hover:border-gray-400 transition-all"
                             loading="lazy"
                           />
+                          <div className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity">
+                            {index + 1}
+                          </div>
                         </div>
                       ))}
                     </div>
                   </div>
-                );
-              })()}
+                </div>
+              )}
             </div>
           </div>
         </div>

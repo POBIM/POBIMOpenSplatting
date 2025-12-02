@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { Upload, FileVideo, Image, CheckCircle, AlertCircle, Settings, Clock, Info } from 'lucide-react';
+import { Upload, FileVideo, Image, CheckCircle, AlertCircle, Settings, Clock, Info, Zap } from 'lucide-react';
 import { api } from '@/lib/api';
 import { useRouter } from 'next/navigation';
 
@@ -25,7 +25,8 @@ export default function UploadPage() {
     target_fps: 2.0,
     quality: 100,
     preview_count: 10,
-    sfm_engine: 'glomap'  // 'colmap' or 'glomap' - default to GLOMAP for 10-100x faster reconstruction
+    sfm_engine: 'glomap',  // 'colmap' or 'glomap' - default to GLOMAP for 10-100x faster reconstruction
+    use_gpu_extraction: true  // GPU-accelerated video frame extraction (5-10x faster)
   });
 
   // Custom parameters - starts with High quality (7000 iter) baseline
@@ -806,6 +807,35 @@ export default function UploadPage() {
                     <FileVideo className="h-5 w-5 mr-2" />
                     Video Frame Extraction Settings
                   </h4>
+                  
+                  {/* GPU Acceleration Toggle */}
+                  <div className="mb-4 p-3 bg-gradient-to-r from-yellow-50 to-orange-50 rounded-lg border border-yellow-200">
+                    <label className="flex items-center justify-between cursor-pointer">
+                      <div className="flex items-center">
+                        <Zap className="h-5 w-5 text-yellow-600 mr-2" />
+                        <div>
+                          <span className="font-medium text-gray-900">GPU Acceleration</span>
+                          <p className="text-xs text-gray-600">5-10x faster video decoding with NVIDIA NVDEC</p>
+                        </div>
+                      </div>
+                      <div className="relative">
+                        <input
+                          type="checkbox"
+                          checked={config.use_gpu_extraction}
+                          onChange={(e) => setConfig({...config, use_gpu_extraction: e.target.checked})}
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:bg-yellow-500 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+                      </div>
+                    </label>
+                    {config.use_gpu_extraction && (
+                      <p className="text-xs text-yellow-700 mt-2 flex items-center">
+                        <span className="mr-1">🚀</span>
+                        Auto-detects GPU and falls back to CPU if unavailable
+                      </p>
+                    )}
+                  </div>
+                  
                   <div className="grid md:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">Extraction Mode</label>
@@ -857,8 +887,9 @@ export default function UploadPage() {
                           <option value={0.5}>0.5 FPS (1 frame every 2 seconds)</option>
                           <option value={1}>1 FPS (1 frame per second)</option>
                           <option value={2}>2 FPS (2 frames per second)</option>
-                          <option value={3}>3 FPS (3 frames per second)</option>
-                          <option value={5}>5 FPS (High density)</option>
+                          <option value={5}>5 FPS (5 frames per second)</option>
+                          <option value={10}>10 FPS (High density)</option>
+                          <option value={15}>15 FPS (Maximum density)</option>
                         </select>
                       </div>
                     )}

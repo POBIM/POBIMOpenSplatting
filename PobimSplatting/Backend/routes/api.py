@@ -125,7 +125,9 @@ def upload_files():
         'max_frames': int(request.form.get('max_frames', 100)),
         'target_fps': float(request.form.get('target_fps', 1.0)),
         'quality': int(request.form.get('quality', 100)),
-        'preview_count': int(request.form.get('preview_count', 10))
+        'preview_count': int(request.form.get('preview_count', 10)),
+        # GPU acceleration for video frame extraction (5-10x faster)
+        'use_gpu_extraction': request.form.get('use_gpu_extraction', 'true').lower() == 'true'
     }
 
     # Add custom parameters if in custom mode

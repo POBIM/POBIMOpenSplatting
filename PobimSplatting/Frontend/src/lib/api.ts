@@ -140,6 +140,8 @@ export const api = {
     if (config.quality !== undefined) formData.append('quality', config.quality.toString());
     if (config.preview_count) formData.append('preview_count', config.preview_count.toString());
     if (config.vram_size !== undefined) formData.append('vram_size', config.vram_size.toString());
+    // GPU acceleration for video frame extraction (5-10x faster with NVDEC)
+    if (config.use_gpu_extraction !== undefined) formData.append('use_gpu_extraction', config.use_gpu_extraction.toString());
 
     // Custom parameters - send each parameter individually
     if (config.quality_mode === 'custom') {

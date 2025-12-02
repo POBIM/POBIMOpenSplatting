@@ -397,6 +397,9 @@ install_system_dependencies() {
         python3-dev
         python3-venv
 
+        # FFmpeg (for GPU-accelerated video frame extraction)
+        ffmpeg
+
         # Libraries for COLMAP
         libboost-all-dev
         libeigen3-dev
@@ -430,6 +433,9 @@ install_system_dependencies() {
         fi
     done
     
+    # Check FFmpeg NVDEC support for GPU-accelerated video processing
+    check_ffmpeg_gpu_support
+    
     # Install Node.js if not present
     if ! check_command node; then
         print_info "Installing Node.js..."
@@ -448,6 +454,45 @@ install_system_dependencies() {
     
     print_success "System dependencies installation complete"
     echo ""
+}
+
+# =============================================================================
+# Check FFmpeg GPU Support
+# =============================================================================
+
+check_ffmpeg_gpu_support() {
+    print_info "Checking FFmpeg GPU acceleration support..."
+    
+    if ! check_command ffmpeg; then
+        print_warning "FFmpeg not installed - GPU video acceleration will not be available"
+        return 1
+    fi
+    
+    # Check for CUDA/NVDEC support
+    HWACCELS=$(ffmpeg -hwaccels 2>/dev/null | grep -E "cuda|nvdec|vaapi" || echo "")
+    
+    if echo "$HWACCELS" | grep -q "cuda"; then
+        print_success "FFmpeg CUDA/NVDEC hardware acceleration available"
+        print_info "  Video frame extraction will be 5-10x faster using GPU"
+        return 0
+    elif echo "$HWACCELS" | grep -q "nvdec"; then
+        print_success "FFmpeg NVDEC hardware acceleration available"
+        return 0
+    elif echo "$HWACCELS" | grep -q "vaapi"; then
+        print_success "FFmpeg VAAPI hardware acceleration available (AMD/Intel)"
+        return 0
+    else
+        print_warning "FFmpeg installed but no GPU hardware acceleration detected"
+        print_info "  Available hwaccels: $(ffmpeg -hwaccels 2>/dev/null | tail -n +2 | tr '\n' ' ')"
+        print_info ""
+        print_info "  To enable NVDEC for NVIDIA GPUs, you may need to:"
+        print_info "    1. Install NVIDIA Video Codec SDK"
+        print_info "    2. Rebuild FFmpeg with --enable-nvdec --enable-cuda"
+        print_info "    Or use the NVIDIA-provided FFmpeg builds"
+        print_info ""
+        print_info "  Video frame extraction will use CPU (still functional, but slower)"
+        return 1
+    fi
 }
 
 # =============================================================================

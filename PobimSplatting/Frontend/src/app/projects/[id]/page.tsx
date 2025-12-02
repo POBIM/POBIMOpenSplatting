@@ -24,7 +24,10 @@ import {
   Image,
   Info,
   Zap,
-  AlertTriangle
+  AlertTriangle,
+  ChevronLeft,
+  ChevronRight,
+  X
 } from 'lucide-react';
 
 // Function to get stage labels based on SfM engine
@@ -126,6 +129,8 @@ export default function ProjectDetailPage() {
   const [showColmapModal, setShowColmapModal] = useState(false);
   const [colmapCommand, setColmapCommand] = useState<string>('');
   const [colmapWorkingDir, setColmapWorkingDir] = useState<string>('');
+  const [showImagePreview, setShowImagePreview] = useState(false);
+  const [previewImageIndex, setPreviewImageIndex] = useState(0);
 
   // Auto-expand the running stage
   useEffect(() => {
@@ -388,6 +393,24 @@ export default function ProjectDetailPage() {
     return () => clearInterval(interval);
   }, [project?.status, loadProject, loadFramePreviews]);
 
+  // Keyboard navigation for image preview
+  useEffect(() => {
+    if (!showImagePreview) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setShowImagePreview(false);
+      } else if (e.key === 'ArrowLeft') {
+        setPreviewImageIndex((prev) => (prev > 0 ? prev - 1 : framePreview.length - 1));
+      } else if (e.key === 'ArrowRight') {
+        setPreviewImageIndex((prev) => (prev < framePreview.length - 1 ? prev + 1 : 0));
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showImagePreview, framePreview.length]);
+
   const handleRetry = async (fromStage?: string) => {
     try {
       // Build params object for retry
@@ -643,6 +666,14 @@ export default function ProjectDetailPage() {
 
               <div className="text-sm text-gray-500">
                 {getCurrentStage() ? (getStageLabelForEngine(getCurrentStage()?.key || '', project?.config?.sfm_engine) || PIPELINE_STAGES.find(s => s.key === getCurrentStage()?.key)?.label) : 'Initializing...'}
+                {/* Show GLOMAP sub-stage detail if available */}
+                {getCurrentStage()?.key === 'sparse_reconstruction' && 
+                 project?.config?.sfm_engine === 'glomap' && 
+                 stageDetails['sparse_reconstruction']?.text && (
+                  <span className="ml-2 text-blue-600">
+                    • {stageDetails['sparse_reconstruction'].text}
+                  </span>
+                )}
               </div>
 
               {/* COLMAP Inspection Button */}
@@ -890,6 +921,40 @@ export default function ProjectDetailPage() {
                         {stageDetails[expandedStage]?.text && (
                           <div className="border-t border-gray-200 pt-4">
                             <p className="text-sm text-gray-600">{stageDetails[expandedStage].text}</p>
+                            {stageDetails[expandedStage]?.subtext && (
+                              <p className="text-xs text-gray-400 mt-1">{stageDetails[expandedStage].subtext}</p>
+                            )}
+                          </div>
+                        )}
+
+                        {/* GLOMAP Sub-stages for sparse_reconstruction */}
+                        {expandedStage === 'sparse_reconstruction' && project?.config?.sfm_engine === 'glomap' && stage.status === 'running' && (
+                          <div className="border-t border-gray-200 pt-4">
+                            <p className="text-xs font-medium text-gray-500 mb-3">GLOMAP Pipeline Steps</p>
+                            <div className="space-y-2">
+                              {[
+                                { key: 'preprocessing', icon: '🔧', label: 'Preprocessing', progress: 5 },
+                                { key: 'view_graph_calibration', icon: '📊', label: 'View Graph Calibration', progress: 10 },
+                                { key: 'relative_pose', icon: '📐', label: 'Relative Pose Estimation', progress: 20 },
+                                { key: 'rotation_averaging', icon: '🔄', label: 'Rotation Averaging', progress: 35 },
+                                { key: 'track_establishment', icon: '🔗', label: 'Track Establishment', progress: 50 },
+                                { key: 'global_positioning', icon: '🌍', label: 'Global Positioning', progress: 65 },
+                                { key: 'bundle_adjustment', icon: '⚡', label: 'Bundle Adjustment', progress: 85 },
+                                { key: 'retriangulation', icon: '📐', label: 'Retriangulation', progress: 92 },
+                                { key: 'postprocessing', icon: '🏁', label: 'Postprocessing', progress: 98 },
+                              ].map((subStage) => {
+                                const currentProgress = progress;
+                                const isSubCompleted = currentProgress >= subStage.progress;
+                                const isSubActive = currentProgress >= (subStage.progress - 10) && currentProgress < subStage.progress + 5;
+                                return (
+                                  <div key={subStage.key} className={`flex items-center space-x-2 text-xs ${isSubCompleted ? 'text-green-600' : isSubActive ? 'text-blue-600 font-medium' : 'text-gray-400'}`}>
+                                    <span>{isSubCompleted ? '✓' : isSubActive ? '▶' : '○'}</span>
+                                    <span>{subStage.icon}</span>
+                                    <span>{subStage.label}</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
                           </div>
                         )}
 
@@ -939,17 +1004,27 @@ export default function ProjectDetailPage() {
               {/* Frame Preview Section - Show All Images */}
               {framePreview.length > 0 && (
                 <div className="border-t border-gray-200 pt-6">
-                  <h3 className="text-sm font-medium text-black mb-4">Frame Preview ({framePreview.length} images)</h3>
+                  <h3 className="text-sm font-medium text-black mb-4">Frame Preview ({framePreview.length} images) <span className="text-gray-400 font-normal">- คลิกเพื่อดูภาพขนาดใหญ่</span></h3>
                   <div className="max-h-96 overflow-y-auto">
                     <div className="grid grid-cols-5 gap-3">
                       {framePreview.map((frame, index) => (
-                        <div key={index} className="relative group flex-shrink-0">
+                        <div
+                          key={index}
+                          className="relative group flex-shrink-0 cursor-pointer"
+                          onClick={() => {
+                            setPreviewImageIndex(index);
+                            setShowImagePreview(true);
+                          }}
+                        >
                           <img
                             src={frame.url}
                             alt={frame.name}
-                            className="w-full h-24 object-cover rounded-lg border border-gray-200 hover:border-gray-400 transition-all"
+                            className="w-full h-24 object-cover rounded-lg border border-gray-200 hover:border-black hover:shadow-md transition-all"
                             loading="lazy"
                           />
+                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 rounded-lg transition-all flex items-center justify-center">
+                            <Eye className="h-6 w-6 text-white opacity-0 group-hover:opacity-100 drop-shadow-lg transition-opacity" />
+                          </div>
                           <div className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity">
                             {index + 1}
                           </div>
@@ -1410,6 +1485,93 @@ export default function ProjectDetailPage() {
                 ปิด
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Image Preview Dialog */}
+      {showImagePreview && framePreview.length > 0 && (
+        <div
+          className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50"
+          onClick={() => setShowImagePreview(false)}
+        >
+          {/* Close Button */}
+          <button
+            onClick={() => setShowImagePreview(false)}
+            className="absolute top-4 right-4 text-white/80 hover:text-white transition-colors z-10"
+          >
+            <X className="h-8 w-8" />
+          </button>
+
+          {/* Image Counter */}
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 text-white/80 text-sm font-medium bg-black/40 px-4 py-2 rounded-full">
+            {previewImageIndex + 1} / {framePreview.length}
+          </div>
+
+          {/* Previous Button */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setPreviewImageIndex((prev) => (prev > 0 ? prev - 1 : framePreview.length - 1));
+            }}
+            className="absolute left-4 top-1/2 -translate-y-1/2 bg-black/40 hover:bg-black/60 text-white p-3 rounded-full transition-colors"
+          >
+            <ChevronLeft className="h-8 w-8" />
+          </button>
+
+          {/* Main Image */}
+          <div
+            className="max-w-[90vw] max-h-[85vh] flex items-center justify-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <img
+              src={framePreview[previewImageIndex]?.url}
+              alt={framePreview[previewImageIndex]?.name || `Frame ${previewImageIndex + 1}`}
+              className="max-w-full max-h-[85vh] object-contain rounded-lg shadow-2xl"
+            />
+          </div>
+
+          {/* Next Button */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setPreviewImageIndex((prev) => (prev < framePreview.length - 1 ? prev + 1 : 0));
+            }}
+            className="absolute right-4 top-1/2 -translate-y-1/2 bg-black/40 hover:bg-black/60 text-white p-3 rounded-full transition-colors"
+          >
+            <ChevronRight className="h-8 w-8" />
+          </button>
+
+          {/* Thumbnail Strip */}
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 max-w-[90vw] overflow-x-auto">
+            <div className="flex space-x-2 p-2 bg-black/40 rounded-xl">
+              {framePreview.map((frame, index) => (
+                <button
+                  key={index}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setPreviewImageIndex(index);
+                  }}
+                  className={`flex-shrink-0 w-16 h-12 rounded-md overflow-hidden transition-all ${
+                    index === previewImageIndex
+                      ? 'ring-2 ring-white scale-110'
+                      : 'opacity-60 hover:opacity-100'
+                  }`}
+                >
+                  <img
+                    src={frame.url}
+                    alt={frame.name}
+                    className="w-full h-full object-cover"
+                    loading="lazy"
+                  />
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Keyboard Navigation Hint */}
+          <div className="absolute bottom-24 left-1/2 -translate-x-1/2 text-white/50 text-xs">
+            กดลูกศร ← → เพื่อเลื่อนดูภาพ หรือกด ESC เพื่อปิด
           </div>
         </div>
       )}

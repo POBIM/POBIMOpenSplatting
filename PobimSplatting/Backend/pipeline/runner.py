@@ -104,8 +104,26 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
             if video_files:
                 total_videos = len(video_files)
                 update_state(project_id, 'video_extraction', status='running')
-                update_stage_detail(project_id, 'video_extraction', text=f'Videos processed: 0/{total_videos}', subtext='Frames extracted: 0')
-                append_log_line(project_id, f"📹 Processing {total_videos} video file(s)...")
+                
+                # Check GPU extraction availability and log it
+                use_gpu = config.get('use_gpu_extraction', True)
+                from ..utils.video_processor import get_gpu_decode_info
+                gpu_info = get_gpu_decode_info()
+                
+                if use_gpu and gpu_info['available']:
+                    update_stage_detail(project_id, 'video_extraction', 
+                                      text=f'Videos processed: 0/{total_videos}', 
+                                      subtext=f'🚀 GPU accelerated ({gpu_info["method"].upper()})')
+                    append_log_line(project_id, f"📹 Processing {total_videos} video file(s) with GPU acceleration ({gpu_info['method'].upper()})...")
+                    if gpu_info.get('gpu_name'):
+                        append_log_line(project_id, f"   🎮 GPU: {gpu_info['gpu_name']}")
+                else:
+                    update_stage_detail(project_id, 'video_extraction', 
+                                      text=f'Videos processed: 0/{total_videos}', 
+                                      subtext='Frames extracted: 0')
+                    append_log_line(project_id, f"📹 Processing {total_videos} video file(s)...")
+                    if use_gpu and not gpu_info['available']:
+                        append_log_line(project_id, f"   ⚠️ GPU extraction unavailable, using CPU")
 
                 # Calculate expected total frames for all videos
                 expected_frames_per_video = config.get('max_frames', 100)
@@ -119,14 +137,16 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
                             'mode': 'fps',
                             'target_fps': config['target_fps'],
                             'quality': config['quality'],
-                            'preview_count': config.get('preview_count', 10)
+                            'preview_count': config.get('preview_count', 10),
+                            'use_gpu': config.get('use_gpu_extraction', True)
                         }
                     else:
                         extraction_config = {
                             'mode': 'frames',
                             'max_frames': config.get('max_frames', 100),
                             'quality': config.get('quality', 100),
-                            'preview_count': config.get('preview_count', 10)
+                            'preview_count': config.get('preview_count', 10),
+                            'use_gpu': config.get('use_gpu_extraction', True)
                         }
 
                     # Create progress callback for frame-by-frame updates
@@ -177,6 +197,7 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
             else:
                 update_state(project_id, 'video_extraction', status='completed', progress=100)
                 update_stage_detail(project_id, 'video_extraction', text='No video files', subtext=None)
+
 
         # Complete ingest stage if we started from there
         if start_index <= stage_order.index('ingest'):
@@ -1082,7 +1103,7 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
     use_glomap = sfm_engine == 'glomap' and GLOMAP_PATH is not None
     
     update_state(project_id, 'sparse_reconstruction', status='running')
-    update_stage_detail(project_id, 'sparse_reconstruction', text=f'Images registered: 0/{num_images}', subtext=None)
+    update_stage_detail(project_id, 'sparse_reconstruction', text=f'Initializing...', subtext=f'{num_images} images')
     
     if use_glomap:
         append_log_line(project_id, "🚀 Running GLOMAP Global Structure-from-Motion (10-100x faster)")
@@ -1129,57 +1150,220 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
         
         append_log_line(project_id, f"🔧 Using {os.cpu_count() or 8} CPU threads for mapper")
     
-    sparse_tracker = {'registered': 0}
+    # GLOMAP has 8 main sub-stages with approximate progress weights
+    glomap_stages = {
+        'preprocessing': {'progress': 5, 'label': '🔧 Preprocessing', 'icon': '🔧'},
+        'view_graph_calibration': {'progress': 10, 'label': '📊 View Graph Calibration', 'icon': '📊'},
+        'relative_pose': {'progress': 20, 'label': '📐 Relative Pose Estimation', 'icon': '📐'},
+        'rotation_averaging': {'progress': 35, 'label': '🔄 Rotation Averaging', 'icon': '🔄'},
+        'track_establishment': {'progress': 50, 'label': '🔗 Track Establishment', 'icon': '🔗'},
+        'global_positioning': {'progress': 65, 'label': '🌍 Global Positioning', 'icon': '🌍'},
+        'bundle_adjustment': {'progress': 85, 'label': '⚡ Bundle Adjustment', 'icon': '⚡'},
+        'retriangulation': {'progress': 92, 'label': '📐 Retriangulation', 'icon': '📐'},
+        'postprocessing': {'progress': 98, 'label': '🏁 Postprocessing', 'icon': '🏁'},
+    }
+    
+    sparse_tracker = {
+        'registered': 0,
+        'current_glomap_stage': None,
+        'last_progress': 0,
+        'ba_iteration': 0,
+        'ba_total': 3,  # Default BA iterations
+    }
     
     def sparse_line_handler(line):
         if num_images == 0:
             return
         
-        # Log relevant lines for debugging
-        keywords = ['registering', 'registered', 'reconstruction', 'bundle', 'mapper', 'image', 'track', 'camera']
-        if any(keyword in line.lower() for keyword in keywords):
-            append_log_line(project_id, f"[{'GLOMAP' if use_glomap else 'COLMAP'}] {line.strip()}")
+        line_lower = line.lower()
+        line_stripped = line.strip()
         
-        # Patterns for progress tracking (works for both GLOMAP and COLMAP)
-        patterns = [
-            r'Registering image #(\d+)',
-            r'Registered image #(\d+)',
-            r'Processing image (\d+)/(\d+)',
-            r'Reconstruction: (\d+)/(\d+)',
-            r'Bundle adjustment: (\d+) images',
-            r'Image #(\d+)',
-            r'(\d+) images registered',
-            r'Registering\s+(\d+)\s*/\s*(\d+)',
-            r'Global positioning: (\d+)/(\d+)',  # GLOMAP specific
-            r'Track estimation: (\d+)/(\d+)',    # GLOMAP specific
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, line, re.IGNORECASE)
-            if match:
-                if len(match.groups()) == 2:
-                    current = int(match.group(1))
-                    total = int(match.group(2))
-                    if total != num_images:
-                        total = num_images
-                    if current > total:
-                        current = total
-                else:
-                    sparse_tracker['registered'] += 1
-                    current = min(sparse_tracker['registered'], num_images)
-                    total = num_images
-                
-                percent = int((current / total) * 100)
+        # === GLOMAP-specific stage detection ===
+        if use_glomap:
+            # Detect GLOMAP sub-stages from output
+            stage_patterns = [
+                ('preprocessing', r'running preprocessing'),
+                ('view_graph_calibration', r'running view graph calibration'),
+                ('relative_pose', r'(running relative pose estimation|estimating relative pose)'),
+                ('rotation_averaging', r'running rotation averaging'),
+                ('track_establishment', r'(establishing tracks|track estimation)'),
+                ('global_positioning', r'running global positioning'),
+                ('bundle_adjustment', r'running bundle adjustment'),
+                ('retriangulation', r'running retriangulation'),
+                ('postprocessing', r'running postprocessing'),
+            ]
+            
+            for stage_key, pattern in stage_patterns:
+                if re.search(pattern, line_lower):
+                    sparse_tracker['current_glomap_stage'] = stage_key
+                    stage_info = glomap_stages[stage_key]
+                    progress = stage_info['progress']
+                    
+                    # Log the stage transition
+                    append_log_line(project_id, f"[GLOMAP] {stage_info['label']}")
+                    
+                    details = {
+                        'text': stage_info['label'],
+                        'current_item': progress,
+                        'total_items': 100,
+                        'item_name': stage_key,
+                        'glomap_stage': stage_key,
+                        'sfm_engine': 'glomap'
+                    }
+                    emit_stage_progress(project_id, 'sparse_reconstruction', progress, details)
+                    update_state(project_id, 'sparse_reconstruction', progress=progress, details=details)
+                    update_stage_detail(project_id, 'sparse_reconstruction', 
+                                      text=stage_info['label'], 
+                                      subtext=f'GLOMAP - {num_images} images')
+                    sparse_tracker['last_progress'] = progress
+                    return
+            
+            # Parse percentage progress from relative pose estimation
+            relpose_match = re.search(r'estimating relative pose[:\s]*(\d+)%', line_lower)
+            if relpose_match:
+                rel_percent = int(relpose_match.group(1))
+                # Map 0-100% of relative pose to 10-20% overall progress
+                progress = 10 + int(rel_percent * 0.1)
                 details = {
-                    'text': f'Images registered: {current}/{total}',
-                    'current_item': current,
-                    'total_items': total,
-                    'item_name': f'Image {current}'
+                    'text': f'📐 Relative Pose: {rel_percent}%',
+                    'current_item': rel_percent,
+                    'total_items': 100,
+                    'item_name': f'{rel_percent}%',
+                    'glomap_stage': 'relative_pose',
+                    'sfm_engine': 'glomap'
                 }
-                emit_stage_progress(project_id, 'sparse_reconstruction', percent, details)
-                update_state(project_id, 'sparse_reconstruction', progress=min(percent, 99), details=details)
-                update_stage_detail(project_id, 'sparse_reconstruction', text=f'Images registered: {current}/{total}', subtext=None)
+                emit_stage_progress(project_id, 'sparse_reconstruction', progress, details)
+                update_state(project_id, 'sparse_reconstruction', progress=progress, details=details)
+                update_stage_detail(project_id, 'sparse_reconstruction', 
+                                  text=f'📐 Relative Pose Estimation: {rel_percent}%', 
+                                  subtext=f'GLOMAP - {num_images} images')
                 return
+            
+            # Parse track establishment progress (e.g., "Establishing tracks 1234 / 5678")
+            track_match = re.search(r'establishing tracks\s*(\d+)\s*/\s*(\d+)', line_lower)
+            if track_match:
+                current_track = int(track_match.group(1))
+                total_tracks = int(track_match.group(2))
+                track_percent = min(100, int((current_track / max(total_tracks, 1)) * 100))
+                # Map track progress to 50-65% overall
+                progress = 50 + int(track_percent * 0.15)
+                details = {
+                    'text': f'🔗 Tracks: {current_track}/{total_tracks}',
+                    'current_item': current_track,
+                    'total_items': total_tracks,
+                    'item_name': f'Track {current_track}',
+                    'glomap_stage': 'track_establishment',
+                    'sfm_engine': 'glomap'
+                }
+                emit_stage_progress(project_id, 'sparse_reconstruction', progress, details)
+                update_state(project_id, 'sparse_reconstruction', progress=progress, details=details)
+                update_stage_detail(project_id, 'sparse_reconstruction', 
+                                  text=f'🔗 Track Establishment: {current_track}/{total_tracks}', 
+                                  subtext=f'GLOMAP - {track_percent}%')
+                return
+            
+            # Parse bundle adjustment iterations
+            ba_match = re.search(r'global bundle adjustment iteration\s*(\d+)\s*/\s*(\d+)', line_lower)
+            if ba_match:
+                ba_current = int(ba_match.group(1))
+                ba_total = int(ba_match.group(2))
+                sparse_tracker['ba_iteration'] = ba_current
+                sparse_tracker['ba_total'] = ba_total
+                ba_percent = int((ba_current / max(ba_total, 1)) * 100)
+                # Map BA progress to 65-92% overall
+                progress = 65 + int(ba_percent * 0.27)
+                details = {
+                    'text': f'⚡ Bundle Adjustment: {ba_current}/{ba_total}',
+                    'current_item': ba_current,
+                    'total_items': ba_total,
+                    'item_name': f'Iteration {ba_current}',
+                    'glomap_stage': 'bundle_adjustment',
+                    'sfm_engine': 'glomap'
+                }
+                emit_stage_progress(project_id, 'sparse_reconstruction', progress, details)
+                update_state(project_id, 'sparse_reconstruction', progress=progress, details=details)
+                update_stage_detail(project_id, 'sparse_reconstruction', 
+                                  text=f'⚡ Bundle Adjustment: Iteration {ba_current}/{ba_total}', 
+                                  subtext=f'GLOMAP - {ba_percent}%')
+                append_log_line(project_id, f"[GLOMAP] Bundle Adjustment iteration {ba_current}/{ba_total}")
+                return
+            
+            # Parse Loading Image Pair progress
+            pair_match = re.search(r'loading image pair\s*(\d+)\s*/\s*(\d+)', line_lower)
+            if pair_match:
+                current_pair = int(pair_match.group(1))
+                total_pairs = int(pair_match.group(2))
+                pair_percent = min(100, int((current_pair / max(total_pairs, 1)) * 100))
+                # This happens during preprocessing, map to 0-5%
+                progress = min(5, int(pair_percent * 0.05))
+                if current_pair % 500 == 0 or current_pair == total_pairs:  # Update every 500 pairs
+                    details = {
+                        'text': f'🔧 Loading pairs: {current_pair}/{total_pairs}',
+                        'current_item': current_pair,
+                        'total_items': total_pairs,
+                        'item_name': f'Pair {current_pair}',
+                        'glomap_stage': 'preprocessing',
+                        'sfm_engine': 'glomap'
+                    }
+                    emit_stage_progress(project_id, 'sparse_reconstruction', progress, details)
+                    update_stage_detail(project_id, 'sparse_reconstruction', 
+                                      text=f'🔧 Loading Image Pairs: {current_pair}/{total_pairs}', 
+                                      subtext=f'GLOMAP - Preprocessing')
+                return
+            
+            # Log important GLOMAP messages
+            important_keywords = ['error', 'warning', 'failed', 'done', 'finished', 'seconds', 'images', 'tracks', 'cameras']
+            if any(kw in line_lower for kw in important_keywords):
+                append_log_line(project_id, f"[GLOMAP] {line_stripped}")
+        
+        # === COLMAP-specific patterns (fallback) ===
+        else:
+            # Log relevant lines for debugging
+            keywords = ['registering', 'registered', 'reconstruction', 'bundle', 'mapper', 'image', 'track', 'camera']
+            if any(keyword in line_lower for keyword in keywords):
+                append_log_line(project_id, f"[COLMAP] {line_stripped}")
+            
+            # Patterns for COLMAP progress tracking
+            patterns = [
+                r'Registering image #(\d+)',
+                r'Registered image #(\d+)',
+                r'Processing image (\d+)/(\d+)',
+                r'Reconstruction: (\d+)/(\d+)',
+                r'Bundle adjustment: (\d+) images',
+                r'Image #(\d+)',
+                r'(\d+) images registered',
+                r'Registering\s+(\d+)\s*/\s*(\d+)',
+            ]
+            
+            for pattern in patterns:
+                match = re.search(pattern, line, re.IGNORECASE)
+                if match:
+                    if len(match.groups()) == 2:
+                        current = int(match.group(1))
+                        total = int(match.group(2))
+                        if total != num_images:
+                            total = num_images
+                        if current > total:
+                            current = total
+                    else:
+                        sparse_tracker['registered'] += 1
+                        current = min(sparse_tracker['registered'], num_images)
+                        total = num_images
+                    
+                    percent = int((current / total) * 100)
+                    details = {
+                        'text': f'Images registered: {current}/{total}',
+                        'current_item': current,
+                        'total_items': total,
+                        'item_name': f'Image {current}',
+                        'sfm_engine': 'colmap'
+                    }
+                    emit_stage_progress(project_id, 'sparse_reconstruction', percent, details)
+                    update_state(project_id, 'sparse_reconstruction', progress=min(percent, 99), details=details)
+                    update_stage_detail(project_id, 'sparse_reconstruction', 
+                                      text=f'Images registered: {current}/{total}', 
+                                      subtext='COLMAP')
+                    return
     
     run_command_with_logs(project_id, cmd, line_handler=sparse_line_handler)
     

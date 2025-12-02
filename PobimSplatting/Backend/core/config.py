@@ -148,6 +148,22 @@ COLMAP_CANDIDATE_PATHS.extend(
     ]
 )
 
+# GLOMAP binary discovery (must be compatible with COLMAP version)
+GLOMAP_ENV_PATH = os.getenv("GLOMAP_PATH")
+GLOMAP_CANDIDATE_PATHS = []
+if GLOMAP_ENV_PATH:
+    GLOMAP_CANDIDATE_PATHS.append(Path(GLOMAP_ENV_PATH).expanduser())
+
+GLOMAP_CANDIDATE_PATHS.extend(
+    [
+        # GLOMAP built with COLMAP 3.14+ (must match COLMAP version for database compatibility)
+        # This is the recommended path - ensures GLOMAP and COLMAP share the same database format
+        (REPO_ROOT / "colmap-build" / "src" / "glomap" / "glomap").resolve(),
+        # System-wide installation (symlink to colmap-build version)
+        Path("/usr/local/bin/glomap"),
+    ]
+)
+
 # Vocabulary tree configuration
 VOCAB_TREE_URL = "https://demuc.de/colmap/vocab_tree_flickr100K_words32K.bin"
 VOCAB_TREE_FILENAME = "vocab_tree_flickr100K_words32K.bin"

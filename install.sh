@@ -919,170 +919,73 @@ upgrade_cmake() {
 }
 
 # =============================================================================
-# Build GLOMAP (uses global CUDA settings)
+# Setup GLOMAP (included with COLMAP 3.14+)
 # =============================================================================
 
 build_glomap_internal() {
-    print_info "Building GLOMAP (10-100x faster mapper)..."
+    print_info "Setting up GLOMAP (included with COLMAP 3.14+)..."
     
-    GLOMAP_DIR="$PROJECT_ROOT/glomap"
-    GLOMAP_BUILD_DIR="$PROJECT_ROOT/glomap-build"
+    # GLOMAP is now built as part of COLMAP 3.14+
+    # No separate build needed - just create symlink to the COLMAP-integrated version
     
-    # Check if GLOMAP is already installed
-    if command -v glomap &> /dev/null; then
-        GLOMAP_VERSION=$(glomap --help 2>&1 | head -n 1 || echo "installed")
-        print_success "GLOMAP already installed: $GLOMAP_VERSION"
-        if ! prompt_yes_no "Rebuild GLOMAP?" "n"; then
-            return 0
-        fi
-    fi
+    GLOMAP_FROM_COLMAP="$COLMAP_BUILD_DIR/src/glomap/glomap"
     
-    # Check CMake version (GLOMAP requires 3.28+)
-    upgrade_cmake
-    if [ $? -ne 0 ]; then
-        print_error "Cannot build GLOMAP without CMake 3.28+"
-        print_info "Please install CMake 3.28+ manually and try again"
-        return 1
-    fi
-    
-    # Check if COLMAP is built (required dependency)
-    COLMAP_BIN=""
-    if [ -f "$COLMAP_BUILD_DIR/src/colmap/exe/colmap" ]; then
-        COLMAP_BIN="$COLMAP_BUILD_DIR/src/colmap/exe/colmap"
-    elif command -v colmap &> /dev/null; then
-        COLMAP_BIN=$(which colmap)
-    fi
-    
-    if [ -z "$COLMAP_BIN" ]; then
-        print_error "COLMAP not found. GLOMAP requires COLMAP to be built first."
-        print_info "COLMAP should have been built in previous step."
-        return 1
-    fi
-    
-    print_info "Using COLMAP: $COLMAP_BIN"
-    
-    # Clone GLOMAP repository
-    if [ ! -d "$GLOMAP_DIR" ]; then
-        print_info "Cloning GLOMAP repository..."
-        git clone --recursive https://github.com/colmap/glomap.git "$GLOMAP_DIR"
+    # Check if GLOMAP was built with COLMAP
+    if [ -f "$GLOMAP_FROM_COLMAP" ] && [ -x "$GLOMAP_FROM_COLMAP" ]; then
+        print_success "GLOMAP found in COLMAP build: $GLOMAP_FROM_COLMAP"
         
-        if [ $? -ne 0 ]; then
-            print_error "Failed to clone GLOMAP repository"
-            return 1
+        # Check GLOMAP version info
+        GLOMAP_INFO=$("$GLOMAP_FROM_COLMAP" --help 2>&1 | head -n 3 || echo "")
+        if [[ "$GLOMAP_INFO" =~ "CUDA" ]]; then
+            if [[ "$GLOMAP_INFO" =~ "NOT" ]]; then
+                print_info "GLOMAP built without CUDA (CPU-only)"
+            else
+                print_success "GLOMAP built with CUDA support"
+            fi
         fi
-        print_success "GLOMAP repository cloned"
-    else
-        print_info "GLOMAP source already exists"
-    fi
-    
-    # Clean previous build if exists
-    if [ -d "$GLOMAP_BUILD_DIR" ]; then
-        print_info "Cleaning previous GLOMAP build..."
-        rm -rf "$GLOMAP_BUILD_DIR"
-    fi
-    
-    mkdir -p "$GLOMAP_BUILD_DIR"
-    cd "$GLOMAP_BUILD_DIR"
-    
-    # Uses global CUDA_HOME, CUDA_ENABLED, GPU_ARCHS
-    # Build CMake arguments
-    CMAKE_ARGS=(
-        "$GLOMAP_DIR"
-        "-DCMAKE_BUILD_TYPE=Release"
-    )
-    
-    # Add CUDA if enabled globally
-    if [ "$CUDA_ENABLED" = "ON" ] && [ -n "$CUDA_HOME" ]; then
-        print_info "Building GLOMAP with CUDA support"
-        print_info "CUDA: $CUDA_HOME"
-        print_info "GPU architectures: $GPU_ARCHS"
         
-        CMAKE_ARGS+=(
-            "-DCMAKE_CUDA_ARCHITECTURES=$GPU_ARCHS"
-        )
-    else
-        print_warning "Building CPU-only GLOMAP"
-    fi
-    
-    print_info "Configuring GLOMAP with CMake..."
-    cmake "${CMAKE_ARGS[@]}"
-    
-    if [ $? -ne 0 ]; then
-        print_error "GLOMAP CMake configuration failed"
-        print_info "This might be due to missing dependencies."
-        print_info "Try installing: sudo apt-get install libposelib-dev"
-        cd "$PROJECT_ROOT"
-        return 1
-    fi
-    
-    print_info "Building GLOMAP (using $NUM_CORES cores)..."
-    make -j"$NUM_CORES"
-    
-    if [ $? -ne 0 ]; then
-        print_error "GLOMAP build failed"
-        cd "$PROJECT_ROOT"
-        return 1
-    fi
-    
-    # Find GLOMAP binary - check multiple possible locations
-    GLOMAP_BIN=""
-    POSSIBLE_PATHS=(
-        "$GLOMAP_BUILD_DIR/glomap/glomap"
-        "$GLOMAP_BUILD_DIR/glomap"
-        "$GLOMAP_BUILD_DIR/glomap_main"
-        "$GLOMAP_BUILD_DIR/glomap/glomap_main"
-    )
-    
-    for path in "${POSSIBLE_PATHS[@]}"; do
-        if [ -f "$path" ] && [ -x "$path" ]; then
-            GLOMAP_BIN="$path"
-            break
-        fi
-    done
-    
-    # If still not found, search recursively
-    if [ -z "$GLOMAP_BIN" ]; then
-        GLOMAP_BIN=$(find "$GLOMAP_BUILD_DIR" -name "glomap" -type f -executable 2>/dev/null | head -n 1)
-    fi
-    
-    if [ -n "$GLOMAP_BIN" ]; then
-        print_success "GLOMAP build complete"
-        print_info "Binary found at: $GLOMAP_BIN"
-        
-        # Install to system
-        print_info "Installing GLOMAP to /usr/local/bin..."
+        # Create/update symlink in /usr/local/bin
+        print_info "Creating symlink to /usr/local/bin/glomap..."
         if [ "$EUID" -eq 0 ]; then
-            cp "$GLOMAP_BIN" /usr/local/bin/glomap
-            chmod +x /usr/local/bin/glomap
-            print_success "GLOMAP installed to /usr/local/bin/glomap"
+            rm -f /usr/local/bin/glomap
+            ln -sf "$GLOMAP_FROM_COLMAP" /usr/local/bin/glomap
+            print_success "GLOMAP symlink created: /usr/local/bin/glomap -> $GLOMAP_FROM_COLMAP"
         elif sudo -n true 2>/dev/null; then
-            sudo cp "$GLOMAP_BIN" /usr/local/bin/glomap
-            sudo chmod +x /usr/local/bin/glomap
-            print_success "GLOMAP installed to /usr/local/bin/glomap"
+            sudo rm -f /usr/local/bin/glomap
+            sudo ln -sf "$GLOMAP_FROM_COLMAP" /usr/local/bin/glomap
+            print_success "GLOMAP symlink created: /usr/local/bin/glomap -> $GLOMAP_FROM_COLMAP"
         else
-            print_info "Installing GLOMAP requires sudo password..."
-            sudo cp "$GLOMAP_BIN" /usr/local/bin/glomap
-            sudo chmod +x /usr/local/bin/glomap
-            print_success "GLOMAP installed to /usr/local/bin/glomap"
+            print_info "Creating GLOMAP symlink requires sudo password..."
+            sudo rm -f /usr/local/bin/glomap
+            sudo ln -sf "$GLOMAP_FROM_COLMAP" /usr/local/bin/glomap
+            print_success "GLOMAP symlink created: /usr/local/bin/glomap -> $GLOMAP_FROM_COLMAP"
         fi
         
         # Test GLOMAP
         if command -v glomap &> /dev/null; then
             print_success "GLOMAP is ready to use!"
             print_info "GLOMAP provides 10-100x faster sparse reconstruction than COLMAP mapper"
+            print_info "NOTE: GLOMAP is built with COLMAP to ensure database compatibility"
         fi
+        
+        # Clean up old standalone glomap-build if exists
+        OLD_GLOMAP_BUILD="$PROJECT_ROOT/glomap-build"
+        if [ -d "$OLD_GLOMAP_BUILD" ]; then
+            print_info "Found old standalone glomap-build directory"
+            if prompt_yes_no "Remove old glomap-build to save space (~364MB)?" "y"; then
+                rm -rf "$OLD_GLOMAP_BUILD"
+                print_success "Old glomap-build removed"
+            fi
+        fi
+        
+        return 0
     else
-        print_error "GLOMAP binary not found after build"
-        print_info "Build directory contents:"
-        ls -la "$GLOMAP_BUILD_DIR" | head -20
-        print_info "Searching for glomap executables..."
-        find "$GLOMAP_BUILD_DIR" -type f -executable -name "*glomap*" 2>/dev/null
-        cd "$PROJECT_ROOT"
+        print_warning "GLOMAP not found in COLMAP build"
+        print_info "COLMAP 3.14+ includes GLOMAP by default"
+        print_info "If you built an older COLMAP version, GLOMAP may not be available"
+        print_info "Sparse reconstruction will use COLMAP mapper instead (slower but works)"
         return 1
     fi
-    
-    cd "$PROJECT_ROOT"
-    echo ""
 }
 
 # =============================================================================
@@ -1495,12 +1398,12 @@ print_summary() {
         echo "  • COLMAP: $COLMAP_BUILD_DIR/src/colmap/exe/colmap"
     fi
     
-    # GLOMAP location
-    if command -v glomap &> /dev/null; then
+    # GLOMAP location (now part of COLMAP build)
+    if [ -f "$COLMAP_BUILD_DIR/src/glomap/glomap" ]; then
+        echo -e "  • GLOMAP: $COLMAP_BUILD_DIR/src/glomap/glomap ${GREEN}(built with COLMAP)${NC}"
+    elif command -v glomap &> /dev/null; then
         GLOMAP_PATH=$(which glomap)
         echo -e "  • GLOMAP: $GLOMAP_PATH ${GREEN}(10-100x faster sparse reconstruction)${NC}"
-    elif [ -f "$PROJECT_ROOT/glomap-build/glomap" ]; then
-        echo -e "  • GLOMAP: $PROJECT_ROOT/glomap-build/glomap ${GREEN}(10-100x faster)${NC}"
     fi
     
     echo "  • LibTorch: $LIBTORCH_DIR"
@@ -1597,10 +1500,10 @@ build_sfm_engines() {
     fi
     
     # Build GLOMAP (depends on COLMAP)
-    print_header "Step 2/2: Building GLOMAP"
+    print_header "Step 2/2: Setting up GLOMAP"
     build_glomap_internal
     if [ $? -ne 0 ]; then
-        print_warning "GLOMAP build failed - COLMAP is still available"
+        print_warning "GLOMAP setup failed - COLMAP is still available"
         print_info "You can use COLMAP for all SfM operations"
     fi
     
@@ -1618,10 +1521,11 @@ build_sfm_engines() {
         echo -e "  ${RED}✗${NC} COLMAP: Not found"
     fi
     
-    if command -v glomap &> /dev/null; then
+    # GLOMAP is now part of COLMAP build
+    if [ -f "$COLMAP_BUILD_DIR/src/glomap/glomap" ]; then
+        echo -e "  ${GREEN}✓${NC} GLOMAP: $COLMAP_BUILD_DIR/src/glomap/glomap (built with COLMAP)"
+    elif command -v glomap &> /dev/null; then
         echo -e "  ${GREEN}✓${NC} GLOMAP: $(which glomap)"
-    elif [ -f "$PROJECT_ROOT/glomap-build/glomap/glomap" ]; then
-        echo -e "  ${GREEN}✓${NC} GLOMAP: $PROJECT_ROOT/glomap-build/glomap/glomap"
     else
         echo -e "  ${YELLOW}⚠${NC} GLOMAP: Not available (using COLMAP mapper)"
     fi

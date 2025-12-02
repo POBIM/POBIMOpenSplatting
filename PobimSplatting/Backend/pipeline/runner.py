@@ -29,17 +29,30 @@ logger = logging.getLogger(__name__)
 video_processor = VideoProcessor()
 
 
-def check_glomap_available():
-    """Check if GLOMAP is installed and available."""
+def get_glomap_executable():
+    """Get the appropriate GLOMAP executable (must be compatible with COLMAP version).
+    
+    IMPORTANT: GLOMAP must be built with the same COLMAP version to read the database.
+    Using mismatched versions causes 'SQLite error: SQL logic error'.
+    """
+    for candidate in app_config.GLOMAP_CANDIDATE_PATHS:
+        try:
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate)
+        except OSError:
+            continue
+
+    # Fallback: check system PATH (may have version mismatch issues)
     try:
         result = subprocess.run(['which', 'glomap'], capture_output=True, text=True)
         if result.returncode == 0:
             return result.stdout.strip()
-        return None
     except Exception:
-        return None
+        pass
+    
+    return None
 
-GLOMAP_PATH = check_glomap_available()
+GLOMAP_PATH = get_glomap_executable()
 
 def run_processing_pipeline_from_stage(project_id, paths, config, video_files, image_files, from_stage='ingest'):
     """Run the processing pipeline from a specific stage."""

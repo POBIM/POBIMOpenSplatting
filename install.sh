@@ -43,6 +43,12 @@ CUDA_VERSION=""
 LIBTORCH_DIR=""
 NUM_CORES=$(nproc)
 
+# Global CUDA Configuration (detected once, used everywhere)
+CUDA_HOME=""
+CUDA_ENABLED="OFF"
+GPU_ARCHS="70;75;80;86;89"  # Default architectures
+GPU_COMPUTE_CAP=""
+
 # Log file
 LOG_FILE="$PROJECT_ROOT/install.log"
 exec > >(tee -a "$LOG_FILE")
@@ -108,6 +114,75 @@ prompt_yes_no() {
     else
         return 1
     fi
+}
+
+# =============================================================================
+# Global CUDA Detection (Run once, use everywhere)
+# =============================================================================
+
+detect_cuda_environment() {
+    print_header "Detecting CUDA Environment"
+    
+    # Search for CUDA installation
+    CUDA_PATHS=(
+        "/usr/local/cuda"
+        "/usr/local/cuda-12.6"
+        "/usr/local/cuda-12.5"
+        "/usr/local/cuda-12.4"
+        "/usr/local/cuda-12.3"
+        "/usr/local/cuda-12.1"
+        "/usr/local/cuda-11.8"
+        "/opt/cuda"
+    )
+    
+    for cuda_path in "${CUDA_PATHS[@]}"; do
+        if [ -d "$cuda_path" ] && [ -f "$cuda_path/bin/nvcc" ]; then
+            CUDA_HOME="$cuda_path"
+            break
+        fi
+    done
+    
+    if [ -n "$CUDA_HOME" ]; then
+        print_success "CUDA found at: $CUDA_HOME"
+        
+        # Get CUDA version
+        CUDA_VERSION=$($CUDA_HOME/bin/nvcc --version 2>/dev/null | grep "release" | awk '{print $5}' | cut -d',' -f1 || echo "unknown")
+        print_info "CUDA version: $CUDA_VERSION"
+        
+        # Setup environment
+        export PATH="$CUDA_HOME/bin:$PATH"
+        export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$LD_LIBRARY_PATH"
+        export CUDA_HOME
+        
+        # Detect GPU compute capability
+        if check_command nvidia-smi; then
+            GPU_COMPUTE_CAP=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d '.')
+            if [ -n "$GPU_COMPUTE_CAP" ] && [[ "$GPU_COMPUTE_CAP" =~ ^[0-9]+$ ]]; then
+                print_info "GPU compute capability: ${GPU_COMPUTE_CAP:0:1}.${GPU_COMPUTE_CAP:1}"
+                # Add detected architecture if not already in list
+                if [[ ! "$GPU_ARCHS" =~ "$GPU_COMPUTE_CAP" ]]; then
+                    GPU_ARCHS="$GPU_ARCHS;$GPU_COMPUTE_CAP"
+                fi
+            fi
+        fi
+        
+        print_info "Target GPU architectures: $GPU_ARCHS"
+        
+        # Ask user if they want CUDA support
+        echo ""
+        if prompt_yes_no "Enable CUDA support for all builds?" "y"; then
+            CUDA_ENABLED="ON"
+            print_success "CUDA support enabled for all components"
+        else
+            CUDA_ENABLED="OFF"
+            print_warning "Building CPU-only versions"
+        fi
+    else
+        print_warning "CUDA not found - will build CPU-only versions"
+        CUDA_ENABLED="OFF"
+    fi
+    
+    echo ""
 }
 
 # =============================================================================
@@ -614,15 +689,15 @@ setup_libtorch() {
 }
 
 # =============================================================================
-# Build COLMAP
+# Build COLMAP (uses global CUDA settings)
 # =============================================================================
 
-build_colmap() {
-    print_header "Building COLMAP"
+build_colmap_internal() {
+    print_info "Building COLMAP..."
 
     if [ -f "$COLMAP_BUILD_DIR/src/colmap/exe/colmap" ] || [ -f "$COLMAP_BUILD_DIR/colmap" ]; then
         print_success "COLMAP binary already exists"
-        if prompt_yes_no "Rebuild COLMAP (recommended for clean build)?" "y"; then
+        if prompt_yes_no "Rebuild COLMAP?" "n"; then
             print_info "Cleaning previous build directory..."
             rm -rf "$COLMAP_BUILD_DIR"
             print_success "Previous build cleaned"
@@ -631,73 +706,17 @@ build_colmap() {
         fi
     fi
     
-    # Auto-detect CUDA for COLMAP
-    CUDA_HOME=""
-    CUDA_PATHS=(
-        "/usr/local/cuda"
-        "/usr/local/cuda-12.6"
-        "/usr/local/cuda-12.5"
-        "/usr/local/cuda-12.4"
-        "/usr/local/cuda-12.3"
-        "/usr/local/cuda-12.1"
-        "/opt/cuda"
-    )
-    
-    for cuda_path in "${CUDA_PATHS[@]}"; do
-        if [ -d "$cuda_path" ] && [ -f "$cuda_path/bin/nvcc" ]; then
-            CUDA_HOME="$cuda_path"
-            break
-        fi
-    done
-    
-    CUDA_ENABLED="OFF"
-    GPU_ARCHS="70;75;80;86;89"  # Common architectures
-    
-    if [ -n "$CUDA_HOME" ]; then
-        print_success "CUDA found at: $CUDA_HOME"
-        if prompt_yes_no "Build COLMAP with CUDA support?" "y"; then
-            CUDA_ENABLED="ON"
-            export PATH="$CUDA_HOME/bin:$PATH"
-            export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$LD_LIBRARY_PATH"
-            
-            # Try to detect GPU architecture
-            if command -v nvidia-smi &> /dev/null; then
-                COMPUTE_CAP=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -n 1 | tr -d '.')
-                if [ ! -z "$COMPUTE_CAP" ]; then
-                    print_info "Detected GPU compute capability: ${COMPUTE_CAP:0:1}.${COMPUTE_CAP:1}"
-                    if [[ ! "$GPU_ARCHS" =~ "$COMPUTE_CAP" ]]; then
-                        GPU_ARCHS="$GPU_ARCHS;$COMPUTE_CAP"
-                    fi
-                fi
-            fi
-            print_info "Building for GPU architectures: $GPU_ARCHS"
-        fi
+    # Uses global CUDA_HOME, CUDA_ENABLED, GPU_ARCHS
+    if [ "$CUDA_ENABLED" = "ON" ]; then
+        print_info "Building COLMAP with CUDA support"
+        print_info "CUDA: $CUDA_HOME"
+        print_info "GPU architectures: $GPU_ARCHS"
     else
-        print_warning "CUDA not found - building CPU-only COLMAP"
+        print_warning "Building CPU-only COLMAP"
     fi
     
-    # Ask if user wants GUI support
-    echo ""
-    echo -e "${CYAN}COLMAP GUI Support:${NC}"
-    echo "  • With GUI: Can open COLMAP graphical interface (requires Qt5)"
-    echo "  • Without GUI: Headless mode only, smaller binary, better for servers"
-    echo ""
-    
-    GUI_ENABLED="OFF"
-    if prompt_yes_no "Enable COLMAP GUI support?" "y"; then
-        GUI_ENABLED="ON"
-        print_info "GUI support enabled - checking Qt5 dependencies..."
-        
-        # Check if Qt5 is installed
-        if ! pkg-config --exists Qt5Widgets 2>/dev/null; then
-            print_warning "Qt5 not detected. Installing Qt5 dependencies..."
-            if [ "$PKG_MANAGER" = "apt-get" ]; then
-                $SUDO $PKG_INSTALL qtbase5-dev libqt5opengl5-dev
-            fi
-        fi
-    else
-        print_info "Building COLMAP without GUI support (headless mode)"
-    fi
+    # GUI support - default OFF for servers
+    GUI_ENABLED="$COLMAP_GUI_ENABLED"
     
     # Check if COLMAP source exists
     if [ ! -d "$PROJECT_ROOT/colmap" ]; then
@@ -900,11 +919,11 @@ upgrade_cmake() {
 }
 
 # =============================================================================
-# Build GLOMAP (Global Structure-from-Motion)
+# Build GLOMAP (uses global CUDA settings)
 # =============================================================================
 
-build_glomap() {
-    print_header "Building GLOMAP (10-100x faster than COLMAP mapper)"
+build_glomap_internal() {
+    print_info "Building GLOMAP (10-100x faster mapper)..."
     
     GLOMAP_DIR="$PROJECT_ROOT/glomap"
     GLOMAP_BUILD_DIR="$PROJECT_ROOT/glomap-build"
@@ -935,8 +954,8 @@ build_glomap() {
     fi
     
     if [ -z "$COLMAP_BIN" ]; then
-        print_warning "COLMAP not found. GLOMAP requires COLMAP to be built first."
-        print_info "Please build COLMAP first, then run this installer again."
+        print_error "COLMAP not found. GLOMAP requires COLMAP to be built first."
+        print_info "COLMAP should have been built in previous step."
         return 1
     fi
     
@@ -953,10 +972,7 @@ build_glomap() {
         fi
         print_success "GLOMAP repository cloned"
     else
-        print_info "GLOMAP source already exists, updating..."
-        cd "$GLOMAP_DIR"
-        git pull --recurse-submodules || print_warning "Could not update GLOMAP"
-        cd "$PROJECT_ROOT"
+        print_info "GLOMAP source already exists"
     fi
     
     # Clean previous build if exists
@@ -968,51 +984,24 @@ build_glomap() {
     mkdir -p "$GLOMAP_BUILD_DIR"
     cd "$GLOMAP_BUILD_DIR"
     
-    # Auto-detect CUDA
-    CUDA_HOME=""
-    CUDA_PATHS=(
-        "/usr/local/cuda"
-        "/usr/local/cuda-12.6"
-        "/usr/local/cuda-12.5"
-        "/usr/local/cuda-12.4"
-        "/usr/local/cuda-12.3"
-        "/usr/local/cuda-12.1"
-        "/opt/cuda"
-    )
-    
-    for cuda_path in "${CUDA_PATHS[@]}"; do
-        if [ -d "$cuda_path" ] && [ -f "$cuda_path/bin/nvcc" ]; then
-            CUDA_HOME="$cuda_path"
-            break
-        fi
-    done
-    
+    # Uses global CUDA_HOME, CUDA_ENABLED, GPU_ARCHS
     # Build CMake arguments
     CMAKE_ARGS=(
         "$GLOMAP_DIR"
         "-DCMAKE_BUILD_TYPE=Release"
     )
     
-    # Add CUDA if available
-    if [ -n "$CUDA_HOME" ]; then
-        print_info "Building GLOMAP with CUDA support: $CUDA_HOME"
-        export PATH="$CUDA_HOME/bin:$PATH"
-        export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$LD_LIBRARY_PATH"
-        
-        # Detect GPU architecture
-        GPU_ARCHS="70;75;80;86;89"
-        if command -v nvidia-smi &> /dev/null; then
-            COMPUTE_CAP=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -n 1 | tr -d '.')
-            if [ ! -z "$COMPUTE_CAP" ]; then
-                print_info "Detected GPU compute capability: ${COMPUTE_CAP:0:1}.${COMPUTE_CAP:1}"
-            fi
-        fi
+    # Add CUDA if enabled globally
+    if [ "$CUDA_ENABLED" = "ON" ] && [ -n "$CUDA_HOME" ]; then
+        print_info "Building GLOMAP with CUDA support"
+        print_info "CUDA: $CUDA_HOME"
+        print_info "GPU architectures: $GPU_ARCHS"
         
         CMAKE_ARGS+=(
             "-DCMAKE_CUDA_ARCHITECTURES=$GPU_ARCHS"
         )
     else
-        print_warning "CUDA not found - building CPU-only GLOMAP"
+        print_warning "Building CPU-only GLOMAP"
     fi
     
     print_info "Configuring GLOMAP with CMake..."
@@ -1097,7 +1086,7 @@ build_glomap() {
 }
 
 # =============================================================================
-# Build OpenSplat
+# Build OpenSplat (uses global CUDA settings)
 # =============================================================================
 
 build_opensplat() {
@@ -1105,7 +1094,7 @@ build_opensplat() {
 
     if [ -f "$BUILD_DIR/opensplat" ]; then
         print_success "OpenSplat binary already exists"
-        if prompt_yes_no "Rebuild OpenSplat (recommended for clean build)?" "y"; then
+        if prompt_yes_no "Rebuild OpenSplat?" "n"; then
             print_info "Cleaning previous build directory..."
             rm -rf "$BUILD_DIR"
             print_success "Previous build cleaned"
@@ -1125,43 +1114,11 @@ build_opensplat() {
     
     print_info "Configuring OpenSplat with CMake..."
     
-    # Auto-detect CUDA
-    CUDA_HOME=""
-    CUDA_PATHS=(
-        "/usr/local/cuda"
-        "/usr/local/cuda-12.6"
-        "/usr/local/cuda-12.5"
-        "/usr/local/cuda-12.4"
-        "/usr/local/cuda-12.3"
-        "/usr/local/cuda-12.1"
-        "/opt/cuda"
-    )
-    
-    for cuda_path in "${CUDA_PATHS[@]}"; do
-        if [ -d "$cuda_path" ] && [ -f "$cuda_path/bin/nvcc" ]; then
-            CUDA_HOME="$cuda_path"
-            break
-        fi
-    done
-    
-    # Setup CUDA environment if found
-    if [ -n "$CUDA_HOME" ]; then
-        export PATH="$CUDA_HOME/bin:$PATH"
-        export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$LD_LIBRARY_PATH"
-        export CUDA_HOME
-        print_info "Using CUDA: $CUDA_HOME"
-        
-        # Auto-detect GPU architecture
-        GPU_ARCHS="70;75;80;86;89"
-        if command -v nvidia-smi &> /dev/null; then
-            COMPUTE_CAP=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -n 1 | tr -d '.')
-            if [ ! -z "$COMPUTE_CAP" ]; then
-                print_info "Detected GPU compute capability: ${COMPUTE_CAP:0:1}.${COMPUTE_CAP:1}"
-                if [[ ! "$GPU_ARCHS" =~ "$COMPUTE_CAP" ]]; then
-                    GPU_ARCHS="$GPU_ARCHS;$COMPUTE_CAP"
-                fi
-            fi
-        fi
+    # Uses global CUDA_HOME, CUDA_ENABLED, GPU_ARCHS
+    if [ "$CUDA_ENABLED" = "ON" ] && [ -n "$CUDA_HOME" ]; then
+        print_info "Building OpenSplat with CUDA support"
+        print_info "CUDA: $CUDA_HOME"
+        print_info "GPU architectures: $GPU_ARCHS"
         
         # Configure with CUDA
         cmake .. \
@@ -1171,7 +1128,7 @@ build_opensplat() {
             -DCMAKE_CUDA_ARCHITECTURES="$GPU_ARCHS" \
             -DOPENSPLAT_BUILD_SIMPLE_TRAINER=ON
     else
-        print_warning "CUDA not found - building CPU-only version"
+        print_warning "Building CPU-only OpenSplat"
         
         # Configure without CUDA
         cmake .. \
@@ -1581,6 +1538,98 @@ print_summary() {
 }
 
 # =============================================================================
+# Unified SfM Engines Build (COLMAP + GLOMAP in one step)
+# =============================================================================
+
+build_sfm_engines() {
+    print_header "Building SfM Engines (COLMAP + GLOMAP)"
+    
+    echo -e "${CYAN}This will build both COLMAP and GLOMAP with the same CUDA configuration:${NC}"
+    echo ""
+    echo "  • COLMAP: Feature extraction, matching, dense reconstruction"
+    echo "  • GLOMAP: Fast global mapper (10-100x faster than COLMAP mapper)"
+    echo "  • Both tools share COLMAP libraries for consistency"
+    echo ""
+    
+    if [ "$CUDA_ENABLED" = "ON" ]; then
+        echo -e "${GREEN}CUDA Support: ENABLED${NC}"
+        echo -e "  CUDA Path: $CUDA_HOME"
+        echo -e "  GPU Architectures: $GPU_ARCHS"
+    else
+        echo -e "${YELLOW}CUDA Support: DISABLED (CPU-only builds)${NC}"
+    fi
+    echo ""
+    
+    # Ask for GUI support once
+    echo -e "${CYAN}COLMAP GUI Support:${NC}"
+    echo "  • With GUI: Can open COLMAP graphical interface (requires Qt5)"
+    echo "  • Without GUI: Headless mode only, smaller binary, better for servers"
+    echo ""
+    
+    COLMAP_GUI_ENABLED="OFF"
+    if prompt_yes_no "Enable COLMAP GUI support?" "n"; then
+        COLMAP_GUI_ENABLED="ON"
+        print_info "GUI support enabled"
+        
+        # Check if Qt5 is installed
+        if ! pkg-config --exists Qt5Widgets 2>/dev/null; then
+            print_warning "Qt5 not detected. Installing Qt5 dependencies..."
+            if [ "$EUID" -ne 0 ]; then
+                SUDO="sudo"
+            else
+                SUDO=""
+            fi
+            if check_command apt-get; then
+                $SUDO apt-get install -y qtbase5-dev libqt5opengl5-dev 2>/dev/null || true
+            fi
+        fi
+    else
+        print_info "Building without GUI support (headless mode)"
+    fi
+    echo ""
+    
+    # Build COLMAP first
+    print_header "Step 1/2: Building COLMAP"
+    build_colmap_internal
+    if [ $? -ne 0 ]; then
+        print_error "COLMAP build failed - cannot continue with GLOMAP"
+        return 1
+    fi
+    
+    # Build GLOMAP (depends on COLMAP)
+    print_header "Step 2/2: Building GLOMAP"
+    build_glomap_internal
+    if [ $? -ne 0 ]; then
+        print_warning "GLOMAP build failed - COLMAP is still available"
+        print_info "You can use COLMAP for all SfM operations"
+    fi
+    
+    # Summary
+    echo ""
+    print_success "SfM engines build complete!"
+    echo ""
+    echo -e "${CYAN}Build Summary:${NC}"
+    
+    if [ -f "$COLMAP_BUILD_DIR/src/colmap/exe/colmap" ]; then
+        echo -e "  ${GREEN}✓${NC} COLMAP: $COLMAP_BUILD_DIR/src/colmap/exe/colmap"
+    elif command -v colmap &> /dev/null; then
+        echo -e "  ${GREEN}✓${NC} COLMAP: $(which colmap)"
+    else
+        echo -e "  ${RED}✗${NC} COLMAP: Not found"
+    fi
+    
+    if command -v glomap &> /dev/null; then
+        echo -e "  ${GREEN}✓${NC} GLOMAP: $(which glomap)"
+    elif [ -f "$PROJECT_ROOT/glomap-build/glomap/glomap" ]; then
+        echo -e "  ${GREEN}✓${NC} GLOMAP: $PROJECT_ROOT/glomap-build/glomap/glomap"
+    else
+        echo -e "  ${YELLOW}⚠${NC} GLOMAP: Not available (using COLMAP mapper)"
+    fi
+    
+    echo ""
+}
+
+# =============================================================================
 # Main Installation Flow
 # =============================================================================
 
@@ -1599,22 +1648,20 @@ main() {
         print_success "CUDA Toolkit already available"
     fi
     
-    # Step 3: Install system dependencies
+    # Step 3: Detect CUDA environment (once for all builds)
+    detect_cuda_environment
+    
+    # Step 4: Install system dependencies
     if prompt_yes_no "Install system dependencies?" "y"; then
         install_system_dependencies
     fi
     
-    # Step 4: Setup LibTorch
+    # Step 5: Setup LibTorch
     setup_libtorch
     
-    # Step 5: Build COLMAP
-    if prompt_yes_no "Build COLMAP?" "y"; then
-        build_colmap
-    fi
-    
-    # Step 6: Build GLOMAP (faster alternative to COLMAP mapper)
-    if prompt_yes_no "Build GLOMAP (10-100x faster sparse reconstruction)?" "y"; then
-        build_glomap
+    # Step 6: Build SfM Engines (COLMAP + GLOMAP together)
+    if prompt_yes_no "Build SfM engines (COLMAP + GLOMAP)?" "y"; then
+        build_sfm_engines
     fi
     
     # Step 7: Build OpenSplat

@@ -9,10 +9,11 @@
 # 3. Install required system packages
 # 4. Download and setup LibTorch
 # 5. Build COLMAP with CUDA support
-# 6. Build OpenSplat
-# 7. Setup Python environments
-# 8. Setup Node.js frontend
-# 9. Create quick-start script
+# 6. Build GLOMAP (10-100x faster sparse reconstruction)
+# 7. Build OpenSplat
+# 8. Setup Python environments
+# 9. Setup Node.js frontend
+# 10. Create quick-start script
 # =============================================================================
 
 set -e  # Exit on error
@@ -735,6 +736,179 @@ build_colmap() {
 }
 
 # =============================================================================
+# Build GLOMAP (Global Structure-from-Motion)
+# =============================================================================
+
+build_glomap() {
+    print_header "Building GLOMAP (10-100x faster than COLMAP mapper)"
+    
+    GLOMAP_DIR="$PROJECT_ROOT/glomap"
+    GLOMAP_BUILD_DIR="$PROJECT_ROOT/glomap-build"
+    
+    # Check if GLOMAP is already installed
+    if command -v glomap &> /dev/null; then
+        GLOMAP_VERSION=$(glomap --help 2>&1 | head -n 1 || echo "installed")
+        print_success "GLOMAP already installed: $GLOMAP_VERSION"
+        if ! prompt_yes_no "Rebuild GLOMAP?" "n"; then
+            return 0
+        fi
+    fi
+    
+    # Check if COLMAP is built (required dependency)
+    COLMAP_BIN=""
+    if [ -f "$COLMAP_BUILD_DIR/src/colmap/exe/colmap" ]; then
+        COLMAP_BIN="$COLMAP_BUILD_DIR/src/colmap/exe/colmap"
+    elif command -v colmap &> /dev/null; then
+        COLMAP_BIN=$(which colmap)
+    fi
+    
+    if [ -z "$COLMAP_BIN" ]; then
+        print_warning "COLMAP not found. GLOMAP requires COLMAP to be built first."
+        print_info "Please build COLMAP first, then run this installer again."
+        return 1
+    fi
+    
+    print_info "Using COLMAP: $COLMAP_BIN"
+    
+    # Clone GLOMAP repository
+    if [ ! -d "$GLOMAP_DIR" ]; then
+        print_info "Cloning GLOMAP repository..."
+        git clone --recursive https://github.com/colmap/glomap.git "$GLOMAP_DIR"
+        
+        if [ $? -ne 0 ]; then
+            print_error "Failed to clone GLOMAP repository"
+            return 1
+        fi
+        print_success "GLOMAP repository cloned"
+    else
+        print_info "GLOMAP source already exists, updating..."
+        cd "$GLOMAP_DIR"
+        git pull --recurse-submodules || print_warning "Could not update GLOMAP"
+        cd "$PROJECT_ROOT"
+    fi
+    
+    # Clean previous build if exists
+    if [ -d "$GLOMAP_BUILD_DIR" ]; then
+        print_info "Cleaning previous GLOMAP build..."
+        rm -rf "$GLOMAP_BUILD_DIR"
+    fi
+    
+    mkdir -p "$GLOMAP_BUILD_DIR"
+    cd "$GLOMAP_BUILD_DIR"
+    
+    # Auto-detect CUDA
+    CUDA_HOME=""
+    CUDA_PATHS=(
+        "/usr/local/cuda"
+        "/usr/local/cuda-12.6"
+        "/usr/local/cuda-12.5"
+        "/usr/local/cuda-12.4"
+        "/usr/local/cuda-12.3"
+        "/usr/local/cuda-12.1"
+        "/opt/cuda"
+    )
+    
+    for cuda_path in "${CUDA_PATHS[@]}"; do
+        if [ -d "$cuda_path" ] && [ -f "$cuda_path/bin/nvcc" ]; then
+            CUDA_HOME="$cuda_path"
+            break
+        fi
+    done
+    
+    # Build CMake arguments
+    CMAKE_ARGS=(
+        "$GLOMAP_DIR"
+        "-DCMAKE_BUILD_TYPE=Release"
+    )
+    
+    # Add CUDA if available
+    if [ -n "$CUDA_HOME" ]; then
+        print_info "Building GLOMAP with CUDA support: $CUDA_HOME"
+        export PATH="$CUDA_HOME/bin:$PATH"
+        export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$LD_LIBRARY_PATH"
+        
+        # Detect GPU architecture
+        GPU_ARCHS="70;75;80;86;89"
+        if command -v nvidia-smi &> /dev/null; then
+            COMPUTE_CAP=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -n 1 | tr -d '.')
+            if [ ! -z "$COMPUTE_CAP" ]; then
+                print_info "Detected GPU compute capability: ${COMPUTE_CAP:0:1}.${COMPUTE_CAP:1}"
+            fi
+        fi
+        
+        CMAKE_ARGS+=(
+            "-DCMAKE_CUDA_ARCHITECTURES=$GPU_ARCHS"
+        )
+    else
+        print_warning "CUDA not found - building CPU-only GLOMAP"
+    fi
+    
+    print_info "Configuring GLOMAP with CMake..."
+    cmake "${CMAKE_ARGS[@]}"
+    
+    if [ $? -ne 0 ]; then
+        print_error "GLOMAP CMake configuration failed"
+        print_info "This might be due to missing dependencies."
+        print_info "Try installing: sudo apt-get install libposelib-dev"
+        cd "$PROJECT_ROOT"
+        return 1
+    fi
+    
+    print_info "Building GLOMAP (using $NUM_CORES cores)..."
+    make -j"$NUM_CORES"
+    
+    if [ $? -ne 0 ]; then
+        print_error "GLOMAP build failed"
+        cd "$PROJECT_ROOT"
+        return 1
+    fi
+    
+    # Find GLOMAP binary
+    GLOMAP_BIN=""
+    if [ -f "$GLOMAP_BUILD_DIR/glomap" ]; then
+        GLOMAP_BIN="$GLOMAP_BUILD_DIR/glomap"
+    elif [ -f "$GLOMAP_BUILD_DIR/glomap_main" ]; then
+        GLOMAP_BIN="$GLOMAP_BUILD_DIR/glomap_main"
+    fi
+    
+    if [ -n "$GLOMAP_BIN" ]; then
+        print_success "GLOMAP build complete"
+        
+        # Install to system
+        print_info "Installing GLOMAP to /usr/local/bin..."
+        if [ "$EUID" -eq 0 ]; then
+            cp "$GLOMAP_BIN" /usr/local/bin/glomap
+            chmod +x /usr/local/bin/glomap
+            print_success "GLOMAP installed to /usr/local/bin/glomap"
+        elif sudo -n true 2>/dev/null; then
+            sudo cp "$GLOMAP_BIN" /usr/local/bin/glomap
+            sudo chmod +x /usr/local/bin/glomap
+            print_success "GLOMAP installed to /usr/local/bin/glomap"
+        else
+            print_info "Installing GLOMAP requires sudo password..."
+            sudo cp "$GLOMAP_BIN" /usr/local/bin/glomap
+            sudo chmod +x /usr/local/bin/glomap
+            print_success "GLOMAP installed to /usr/local/bin/glomap"
+        fi
+        
+        # Test GLOMAP
+        if command -v glomap &> /dev/null; then
+            print_success "GLOMAP is ready to use!"
+            print_info "GLOMAP provides 10-100x faster sparse reconstruction than COLMAP mapper"
+        fi
+    else
+        print_error "GLOMAP binary not found after build"
+        print_info "Build directory contents:"
+        ls -la "$GLOMAP_BUILD_DIR" | head -20
+        cd "$PROJECT_ROOT"
+        return 1
+    fi
+    
+    cd "$PROJECT_ROOT"
+    echo ""
+}
+
+# =============================================================================
 # Build OpenSplat
 # =============================================================================
 
@@ -1170,10 +1344,18 @@ print_summary() {
         echo "  • COLMAP: $COLMAP_PATH"
         COLMAP_INFO=$(colmap -h 2>&1 | head -n 2 | grep "COLMAP" || echo "")
         if [[ "$COLMAP_INFO" =~ "with CUDA" ]]; then
-            echo "    ${GREEN}(with CUDA support)${NC}"
+            echo -e "    ${GREEN}(with CUDA support)${NC}"
         fi
     elif [ -f "$COLMAP_BUILD_DIR/src/colmap/exe/colmap" ]; then
         echo "  • COLMAP: $COLMAP_BUILD_DIR/src/colmap/exe/colmap"
+    fi
+    
+    # GLOMAP location
+    if command -v glomap &> /dev/null; then
+        GLOMAP_PATH=$(which glomap)
+        echo -e "  • GLOMAP: $GLOMAP_PATH ${GREEN}(10-100x faster sparse reconstruction)${NC}"
+    elif [ -f "$PROJECT_ROOT/glomap-build/glomap" ]; then
+        echo -e "  • GLOMAP: $PROJECT_ROOT/glomap-build/glomap ${GREEN}(10-100x faster)${NC}"
     fi
     
     echo "  • LibTorch: $LIBTORCH_DIR"
@@ -1185,6 +1367,11 @@ print_summary() {
     
     echo "  • Frontend: $FRONTEND_DIR"
     echo "  • Backend: $BACKEND_DIR"
+    echo ""
+    echo -e "${CYAN}SfM Engine Options:${NC}"
+    echo "  • GLOMAP: Recommended for faster processing (10-100x faster mapper)"
+    echo "  • COLMAP: Classic option, more stable but slower"
+    echo "  • Select engine in Frontend upload page"
     echo ""
     echo -e "${CYAN}Quick Start Commands:${NC}"
     echo ""
@@ -1237,32 +1424,37 @@ main() {
         build_colmap
     fi
     
-    # Step 6: Build OpenSplat
+    # Step 6: Build GLOMAP (faster alternative to COLMAP mapper)
+    if prompt_yes_no "Build GLOMAP (10-100x faster sparse reconstruction)?" "y"; then
+        build_glomap
+    fi
+    
+    # Step 7: Build OpenSplat
     if prompt_yes_no "Build OpenSplat?" "y"; then
         build_opensplat
     fi
     
-    # Step 7: Setup Python backend
+    # Step 8: Setup Python backend
     if [ -d "$BACKEND_DIR" ]; then
         if prompt_yes_no "Setup Python backend?" "y"; then
             setup_python_backend
         fi
     fi
     
-    # Step 8: Setup Node.js frontend
+    # Step 9: Setup Node.js frontend
     if [ -d "$FRONTEND_DIR" ]; then
         if prompt_yes_no "Setup Node.js frontend?" "y"; then
             setup_nodejs_frontend
         fi
     fi
     
-    # Step 9: Create quick start script
+    # Step 10: Create quick start script
     create_quick_start_script
     
-    # Step 10: Create environment config
+    # Step 11: Create environment config
     create_env_config
     
-    # Step 11: Summary
+    # Step 12: Summary
     print_summary
     
     # Ask to start now

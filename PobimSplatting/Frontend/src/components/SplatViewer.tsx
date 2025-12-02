@@ -165,15 +165,9 @@ export default function SplatViewer() {
 
   const measurement = useMeasurementTools({
     pickWorldPoint,
-    pickPoint,
     projectWorldToScreen,
-    cameraAxes,
-    orbitState,
     worldToModel,
     modelToWorld,
-    getPointWorldPosition,
-    getPointLocalPosition,
-    viewportKey,
     storageKey: measurementStorageKey,
   });
 

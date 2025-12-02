@@ -29,6 +29,18 @@ logger = logging.getLogger(__name__)
 video_processor = VideoProcessor()
 
 
+def check_glomap_available():
+    """Check if GLOMAP is installed and available."""
+    try:
+        result = subprocess.run(['which', 'glomap'], capture_output=True, text=True)
+        if result.returncode == 0:
+            return result.stdout.strip()
+        return None
+    except Exception:
+        return None
+
+GLOMAP_PATH = check_glomap_available()
+
 def run_processing_pipeline_from_stage(project_id, paths, config, video_files, image_files, from_stage='ingest'):
     """Run the processing pipeline from a specific stage."""
     try:
@@ -1060,39 +1072,62 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None):
 
 
 def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=None):
-    """Run COLMAP Sparse Reconstruction stage only."""
+    """Run Sparse Reconstruction stage using GLOMAP (fast) or COLMAP (classic)."""
     num_images, colmap_cfg, colmap_exe, has_cuda = get_colmap_config_for_pipeline(paths, config, project_id)
     if colmap_config:
         colmap_cfg = colmap_config
     
+    # Determine which SfM engine to use
+    sfm_engine = config.get('sfm_engine', 'glomap')  # Default to GLOMAP
+    use_glomap = sfm_engine == 'glomap' and GLOMAP_PATH is not None
+    
     update_state(project_id, 'sparse_reconstruction', status='running')
     update_stage_detail(project_id, 'sparse_reconstruction', text=f'Images registered: 0/{num_images}', subtext=None)
-    append_log_line(project_id, "🔄 Running Sparse Reconstruction...")
-    append_log_line(project_id, f"🏗️ Optimized mapper settings for {num_images} images")
     
-    cmd = [
-        colmap_exe, 'mapper',
-        '--database_path', str(paths['database_path']),
-        '--image_path', str(paths['images_path']),
-        '--output_path', str(paths['sparse_path']),
-        '--Mapper.min_num_matches', str(colmap_cfg['min_num_matches']),
-        '--Mapper.min_model_size', str(colmap_cfg['min_model_size']),
-        '--Mapper.max_num_models', str(colmap_cfg['max_num_models']),
-        '--Mapper.init_num_trials', str(colmap_cfg['init_num_trials']),
-        '--Mapper.max_extra_param', str(colmap_cfg['max_extra_param']),
-        '--Mapper.num_threads', str(os.cpu_count() or 8)
-    ]
-    
-    if has_cuda:
-        cmd.extend([
-            '--Mapper.ba_use_gpu', '1',
-            '--Mapper.ba_gpu_index', '0'
-        ])
-        append_log_line(project_id, "🚀 GPU-enabled COLMAP detected - Using GPU for Bundle Adjustment")
+    if use_glomap:
+        append_log_line(project_id, "🚀 Running GLOMAP Global Structure-from-Motion (10-100x faster)")
+        append_log_line(project_id, f"⚡ Global SfM mapper for {num_images} images")
+        
+        # GLOMAP command - simpler than COLMAP, uses database directly
+        cmd = [
+            GLOMAP_PATH, 'mapper',
+            '--database_path', str(paths['database_path']),
+            '--image_path', str(paths['images_path']),
+            '--output_path', str(paths['sparse_path'])
+        ]
+        
+        append_log_line(project_id, f"🔧 GLOMAP path: {GLOMAP_PATH}")
+        
     else:
-        append_log_line(project_id, "ℹ️ Using CPU-only COLMAP")
-    
-    append_log_line(project_id, f"🔧 Using {os.cpu_count() or 8} CPU threads for mapper")
+        if sfm_engine == 'glomap' and GLOMAP_PATH is None:
+            append_log_line(project_id, "⚠️ GLOMAP not found, falling back to COLMAP")
+        
+        append_log_line(project_id, "🔄 Running COLMAP Incremental Sparse Reconstruction...")
+        append_log_line(project_id, f"🏗️ Optimized mapper settings for {num_images} images")
+        
+        cmd = [
+            colmap_exe, 'mapper',
+            '--database_path', str(paths['database_path']),
+            '--image_path', str(paths['images_path']),
+            '--output_path', str(paths['sparse_path']),
+            '--Mapper.min_num_matches', str(colmap_cfg['min_num_matches']),
+            '--Mapper.min_model_size', str(colmap_cfg['min_model_size']),
+            '--Mapper.max_num_models', str(colmap_cfg['max_num_models']),
+            '--Mapper.init_num_trials', str(colmap_cfg['init_num_trials']),
+            '--Mapper.max_extra_param', str(colmap_cfg['max_extra_param']),
+            '--Mapper.num_threads', str(os.cpu_count() or 8)
+        ]
+        
+        if has_cuda:
+            cmd.extend([
+                '--Mapper.ba_use_gpu', '1',
+                '--Mapper.ba_gpu_index', '0'
+            ])
+            append_log_line(project_id, "🚀 GPU-enabled COLMAP detected - Using GPU for Bundle Adjustment")
+        else:
+            append_log_line(project_id, "ℹ️ Using CPU-only COLMAP")
+        
+        append_log_line(project_id, f"🔧 Using {os.cpu_count() or 8} CPU threads for mapper")
     
     sparse_tracker = {'registered': 0}
     
@@ -1100,9 +1135,12 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
         if num_images == 0:
             return
         
-        if any(keyword in line.lower() for keyword in ['registering', 'registered', 'reconstruction', 'bundle', 'mapper']):
-            append_log_line(project_id, f"[DEBUG] Sparse reconstruction: {line.strip()}")
+        # Log relevant lines for debugging
+        keywords = ['registering', 'registered', 'reconstruction', 'bundle', 'mapper', 'image', 'track', 'camera']
+        if any(keyword in line.lower() for keyword in keywords):
+            append_log_line(project_id, f"[{'GLOMAP' if use_glomap else 'COLMAP'}] {line.strip()}")
         
+        # Patterns for progress tracking (works for both GLOMAP and COLMAP)
         patterns = [
             r'Registering image #(\d+)',
             r'Registered image #(\d+)',
@@ -1112,6 +1150,8 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
             r'Image #(\d+)',
             r'(\d+) images registered',
             r'Registering\s+(\d+)\s*/\s*(\d+)',
+            r'Global positioning: (\d+)/(\d+)',  # GLOMAP specific
+            r'Track estimation: (\d+)/(\d+)',    # GLOMAP specific
         ]
         
         for pattern in patterns:
@@ -1145,8 +1185,9 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
     
     update_state(project_id, 'sparse_reconstruction', status='completed', progress=100)
     registered = sparse_tracker['registered'] if sparse_tracker['registered'] else num_images
-    update_stage_detail(project_id, 'sparse_reconstruction', text=f'Images registered: {min(registered, num_images)}/{num_images}', subtext='Sparse reconstruction complete')
-    append_log_line(project_id, "✅ Sparse Reconstruction completed")
+    engine_name = "GLOMAP" if use_glomap else "COLMAP"
+    update_stage_detail(project_id, 'sparse_reconstruction', text=f'Images registered: {min(registered, num_images)}/{num_images}', subtext=f'{engine_name} reconstruction complete')
+    append_log_line(project_id, f"✅ Sparse Reconstruction completed using {engine_name}")
     
     return colmap_cfg
 

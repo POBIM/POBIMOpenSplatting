@@ -27,11 +27,20 @@ import {
   AlertTriangle
 } from 'lucide-react';
 
+// Function to get stage labels based on SfM engine
+const getStageLabelForEngine = (stageKey: string, sfmEngine: 'glomap' | 'colmap' = 'glomap') => {
+  const isGlomap = sfmEngine === 'glomap';
+  const labels: Record<string, string> = {
+    'sparse_reconstruction': isGlomap ? 'GLOMAP Sparse Reconstruction' : 'COLMAP Sparse Reconstruction',
+  };
+  return labels[stageKey];
+};
+
 const PIPELINE_STAGES = [
   { key: 'ingest', label: 'Processing Upload', icon: '📥', weight: 0.05 },
   { key: 'video_extraction', label: 'Video Frame Extraction', icon: '🎬', weight: 0.1 },
-  { key: 'feature_extraction', label: 'COLMAP Feature Extraction', icon: '🔍', weight: 0.15 },
-  { key: 'feature_matching', label: 'COLMAP Feature Matching', icon: '🔗', weight: 0.1 },
+  { key: 'feature_extraction', label: 'Feature Extraction', icon: '🔍', weight: 0.15 },
+  { key: 'feature_matching', label: 'Feature Matching', icon: '🔗', weight: 0.1 },
   { key: 'sparse_reconstruction', label: 'Sparse Reconstruction', icon: '🏗️', weight: 0.2 },
   { key: 'model_conversion', label: 'Model Conversion', icon: '🔄', weight: 0.05 },
   { key: 'gaussian_splatting', label: 'Gaussian Splatting Training', icon: '✨', weight: 0.3 },
@@ -493,6 +502,12 @@ export default function ProjectDetailPage() {
         quality_mode: (project as any).quality_mode || '',
         iterations: (project as any).iterations?.toString() || '',
         learning_rate: '',
+        max_num_features: '',
+        max_image_size: '',
+        max_num_matches: '',
+        sequential_overlap: '',
+        min_num_matches: '',
+        max_num_models: '',
       });
     }
 
@@ -627,7 +642,7 @@ export default function ProjectDetailPage() {
               </div>
 
               <div className="text-sm text-gray-500">
-                {getCurrentStage() ? PIPELINE_STAGES.find(s => s.key === getCurrentStage()?.key)?.label : 'Initializing...'}
+                {getCurrentStage() ? (getStageLabelForEngine(getCurrentStage()?.key || '', project?.config?.sfm_engine) || PIPELINE_STAGES.find(s => s.key === getCurrentStage()?.key)?.label) : 'Initializing...'}
               </div>
 
               {/* COLMAP Inspection Button */}
@@ -642,9 +657,9 @@ export default function ProjectDetailPage() {
                       className="inline-flex items-center px-4 py-2 text-sm font-medium rounded-lg text-white bg-blue-600 hover:bg-blue-700 transition-colors"
                     >
                       <Eye className="h-4 w-4 mr-2" />
-                      ตรวจสอบผล COLMAP
+                      ตรวจสอบ Sparse Model
                     </button>
-                    <p className="text-xs text-gray-500 mt-2">เปิด COLMAP GUI เพื่อตรวจสอบความถูกต้องของกล้องและ sparse reconstruction</p>
+                    <p className="text-xs text-gray-500 mt-2">เปิด COLMAP GUI เพื่อตรวจสอบผล {project?.config?.sfm_engine === 'glomap' ? 'GLOMAP' : 'COLMAP'} sparse reconstruction</p>
                   </div>
                 );
               })()}
@@ -680,7 +695,7 @@ export default function ProjectDetailPage() {
                         className="inline-flex items-center px-4 py-2 border border-gray-200 text-sm font-medium rounded-lg text-blue-600 hover:bg-blue-50 transition-colors"
                       >
                         <Eye className="h-4 w-4 mr-2" />
-                        COLMAP
+                        {project?.config?.sfm_engine === 'glomap' ? 'GLOMAP' : 'COLMAP'}
                       </button>
                       <button
                         onClick={handleDownload}
@@ -796,7 +811,7 @@ export default function ProjectDetailPage() {
                               isStageError ? 'text-red-500 font-medium' :
                               'text-gray-400'
                             }`}>
-                              {stageConfig.label}
+                              {getStageLabelForEngine(stageConfig.key, project?.config?.sfm_engine) || stageConfig.label}
                             </p>
                           </div>
                         </div>
@@ -819,7 +834,7 @@ export default function ProjectDetailPage() {
                         <div className="flex items-center space-x-3">
                           <div className="text-2xl">{stageConfig?.icon}</div>
                           <div>
-                            <h4 className="text-lg font-semibold text-black">{stageConfig?.label}</h4>
+                            <h4 className="text-lg font-semibold text-black">{getStageLabelForEngine(stageConfig?.key || '', project?.config?.sfm_engine) || stageConfig?.label}</h4>
                             <p className="text-sm text-gray-500 mt-1">
                               {stage.status === 'completed' ? '✓ Completed' :
                                stage.status === 'running' ? `⏳ In progress (${progress}%)` :
@@ -1027,7 +1042,7 @@ export default function ProjectDetailPage() {
                     <div className="flex-1">
                       <div className="flex items-center space-x-3">
                         <span className="text-xl">{stage.icon}</span>
-                        <span className="text-sm font-medium text-black">{stage.label}</span>
+                        <span className="text-sm font-medium text-black">{getStageLabelForEngine(stage.key, project?.config?.sfm_engine) || stage.label}</span>
                       </div>
                       <div className="flex items-center space-x-2 mt-1.5 ml-9">
                         {isCompleted && (
@@ -1332,7 +1347,7 @@ export default function ProjectDetailPage() {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl max-w-3xl w-full p-6 space-y-4">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-xl font-semibold text-black">คำสั่งเปิด COLMAP GUI</h3>
+              <h3 className="text-xl font-semibold text-black">คำสั่งเปิด {project?.config?.sfm_engine === 'glomap' ? 'GLOMAP' : 'COLMAP'} GUI</h3>
               <button
                 onClick={() => setShowColmapModal(false)}
                 className="text-gray-400 hover:text-gray-600 transition-colors"

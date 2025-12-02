@@ -24,7 +24,8 @@ export default function UploadPage() {
     max_frames: 100,
     target_fps: 2.0,
     quality: 100,
-    preview_count: 10
+    preview_count: 10,
+    sfm_engine: 'glomap'  // 'colmap' or 'glomap' - default to GLOMAP for 10-100x faster reconstruction
   });
 
   // Custom parameters - starts with High quality (7000 iter) baseline
@@ -702,6 +703,73 @@ export default function UploadPage() {
                   </div>
                 </div>
               )}
+
+              {/* SfM Engine Selection */}
+              <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl p-4 border border-green-200">
+                <h4 className="font-semibold text-gray-900 mb-3 flex items-center">
+                  <span className="text-xl mr-2">⚡</span>
+                  Structure-from-Motion Engine
+                </h4>
+                <div className="grid md:grid-cols-1 gap-4">
+                  <div>
+                    <div className="flex gap-4">
+                      <label className={`flex-1 p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                        config.sfm_engine === 'glomap' 
+                          ? 'border-green-500 bg-green-100 shadow-md' 
+                          : 'border-gray-200 bg-white hover:border-green-300'
+                      }`}>
+                        <input
+                          type="radio"
+                          name="sfm_engine"
+                          value="glomap"
+                          checked={config.sfm_engine === 'glomap'}
+                          onChange={(e) => setConfig({...config, sfm_engine: e.target.value})}
+                          className="sr-only"
+                        />
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <span className="font-bold text-green-700 text-lg">🚀 GLOMAP</span>
+                            <span className="ml-2 px-2 py-0.5 bg-green-500 text-white text-xs rounded-full">RECOMMENDED</span>
+                          </div>
+                          <span className="text-green-600 font-semibold">10-100x Faster</span>
+                        </div>
+                        <p className="text-sm text-gray-600 mt-2">
+                          Global SfM - Processes all camera poses simultaneously. 
+                          <strong className="text-green-700"> Best for most datasets.</strong>
+                        </p>
+                        <p className="text-xs text-green-600 mt-1">✓ Same quality as COLMAP ✓ Much faster ✓ GPU accelerated</p>
+                      </label>
+                      
+                      <label className={`flex-1 p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                        config.sfm_engine === 'colmap' 
+                          ? 'border-blue-500 bg-blue-100 shadow-md' 
+                          : 'border-gray-200 bg-white hover:border-blue-300'
+                      }`}>
+                        <input
+                          type="radio"
+                          name="sfm_engine"
+                          value="colmap"
+                          checked={config.sfm_engine === 'colmap'}
+                          onChange={(e) => setConfig({...config, sfm_engine: e.target.value})}
+                          className="sr-only"
+                        />
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <span className="font-bold text-blue-700 text-lg">🔧 COLMAP</span>
+                            <span className="ml-2 px-2 py-0.5 bg-gray-400 text-white text-xs rounded-full">CLASSIC</span>
+                          </div>
+                          <span className="text-gray-500 font-semibold">Standard Speed</span>
+                        </div>
+                        <p className="text-sm text-gray-600 mt-2">
+                          Incremental SfM - Processes images one by one. 
+                          <strong className="text-blue-700"> Most mature &amp; stable.</strong>
+                        </p>
+                        <p className="text-xs text-blue-600 mt-1">✓ Battle-tested ✓ Handles edge cases ✓ More options</p>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              </div>
 
               {/* COLMAP Options */}
               <div className="grid md:grid-cols-2 gap-4">

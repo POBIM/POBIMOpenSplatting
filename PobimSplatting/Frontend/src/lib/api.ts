@@ -43,6 +43,10 @@ export interface Project {
   iterations?: number;
   camera_model?: string;
   thumbnail_url?: string;
+  config?: {
+    sfm_engine?: 'glomap' | 'colmap';
+    [key: string]: any;
+  };
 }
 
 export interface ProcessingStatus {

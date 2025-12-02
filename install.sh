@@ -781,6 +781,125 @@ build_colmap() {
 }
 
 # =============================================================================
+# Upgrade CMake (Required for GLOMAP)
+# =============================================================================
+
+upgrade_cmake() {
+    print_header "Checking/Upgrading CMake"
+    
+    # Required minimum version for GLOMAP
+    REQUIRED_CMAKE_VERSION="3.28"
+    
+    # Check current CMake version
+    if check_command cmake; then
+        CURRENT_CMAKE_VERSION=$(cmake --version | head -n1 | grep -oP '\d+\.\d+\.\d+' | head -1)
+        CURRENT_MAJOR=$(echo "$CURRENT_CMAKE_VERSION" | cut -d'.' -f1)
+        CURRENT_MINOR=$(echo "$CURRENT_CMAKE_VERSION" | cut -d'.' -f2)
+        
+        REQUIRED_MAJOR=$(echo "$REQUIRED_CMAKE_VERSION" | cut -d'.' -f1)
+        REQUIRED_MINOR=$(echo "$REQUIRED_CMAKE_VERSION" | cut -d'.' -f2)
+        
+        # Compare versions
+        if [ "$CURRENT_MAJOR" -gt "$REQUIRED_MAJOR" ] || \
+           ([ "$CURRENT_MAJOR" -eq "$REQUIRED_MAJOR" ] && [ "$CURRENT_MINOR" -ge "$REQUIRED_MINOR" ]); then
+            print_success "CMake $CURRENT_CMAKE_VERSION is sufficient (>= $REQUIRED_CMAKE_VERSION)"
+            return 0
+        else
+            print_warning "CMake $CURRENT_CMAKE_VERSION is too old (need >= $REQUIRED_CMAKE_VERSION)"
+        fi
+    else
+        print_warning "CMake not found"
+    fi
+    
+    print_info "Installing CMake $REQUIRED_CMAKE_VERSION or newer..."
+    
+    # Check if we need sudo
+    if [ "$EUID" -ne 0 ]; then
+        SUDO="sudo"
+    else
+        SUDO=""
+    fi
+    
+    # For Ubuntu/Debian - use Kitware's official APT repository
+    if check_command apt-get; then
+        print_info "Adding Kitware APT repository for latest CMake..."
+        
+        # Install prerequisites
+        $SUDO apt-get update -qq
+        $SUDO apt-get install -y ca-certificates gpg wget
+        
+        # Download and add Kitware's GPG key
+        wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | $SUDO tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
+        
+        # Add Kitware repository (Ubuntu 22.04)
+        if [ -f /etc/os-release ]; then
+            . /etc/os-release
+            UBUNTU_CODENAME="${UBUNTU_CODENAME:-jammy}"
+        else
+            UBUNTU_CODENAME="jammy"
+        fi
+        
+        echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ $UBUNTU_CODENAME main" | $SUDO tee /etc/apt/sources.list.d/kitware.list >/dev/null
+        
+        # Update and install CMake
+        $SUDO apt-get update -qq
+        $SUDO apt-get install -y cmake
+        
+        # Verify installation
+        if check_command cmake; then
+            NEW_CMAKE_VERSION=$(cmake --version | head -n1 | grep -oP '\d+\.\d+\.\d+' | head -1)
+            print_success "CMake upgraded to $NEW_CMAKE_VERSION"
+            
+            # Update PATH hash
+            hash -r
+            return 0
+        else
+            print_error "CMake installation via APT failed"
+        fi
+    fi
+    
+    # Fallback: Install from pre-built binary
+    print_info "Installing CMake from pre-built binary..."
+    
+    CMAKE_VERSION="3.30.5"
+    CMAKE_ARCH="x86_64"
+    CMAKE_INSTALL_DIR="/opt/cmake-${CMAKE_VERSION}"
+    CMAKE_URL="https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-${CMAKE_ARCH}.tar.gz"
+    
+    # Download and extract
+    print_info "Downloading CMake ${CMAKE_VERSION}..."
+    wget -q --show-progress -O /tmp/cmake.tar.gz "$CMAKE_URL"
+    
+    if [ $? -ne 0 ]; then
+        print_error "Failed to download CMake"
+        return 1
+    fi
+    
+    print_info "Extracting CMake..."
+    $SUDO mkdir -p "$CMAKE_INSTALL_DIR"
+    $SUDO tar -xzf /tmp/cmake.tar.gz -C /opt/
+    rm -f /tmp/cmake.tar.gz
+    
+    # Create symlinks
+    $SUDO ln -sf "$CMAKE_INSTALL_DIR/bin/cmake" /usr/local/bin/cmake
+    $SUDO ln -sf "$CMAKE_INSTALL_DIR/bin/ctest" /usr/local/bin/ctest
+    $SUDO ln -sf "$CMAKE_INSTALL_DIR/bin/cpack" /usr/local/bin/cpack
+    
+    # Update PATH hash
+    hash -r
+    
+    # Verify
+    if check_command cmake; then
+        NEW_CMAKE_VERSION=$(cmake --version | head -n1 | grep -oP '\d+\.\d+\.\d+' | head -1)
+        print_success "CMake $NEW_CMAKE_VERSION installed successfully"
+        return 0
+    else
+        print_error "CMake installation failed"
+        return 1
+    fi
+}
+
+# =============================================================================
 # Build GLOMAP (Global Structure-from-Motion)
 # =============================================================================
 
@@ -797,6 +916,14 @@ build_glomap() {
         if ! prompt_yes_no "Rebuild GLOMAP?" "n"; then
             return 0
         fi
+    fi
+    
+    # Check CMake version (GLOMAP requires 3.28+)
+    upgrade_cmake
+    if [ $? -ne 0 ]; then
+        print_error "Cannot build GLOMAP without CMake 3.28+"
+        print_info "Please install CMake 3.28+ manually and try again"
+        return 1
     fi
     
     # Check if COLMAP is built (required dependency)
@@ -908,16 +1035,30 @@ build_glomap() {
         return 1
     fi
     
-    # Find GLOMAP binary
+    # Find GLOMAP binary - check multiple possible locations
     GLOMAP_BIN=""
-    if [ -f "$GLOMAP_BUILD_DIR/glomap" ]; then
-        GLOMAP_BIN="$GLOMAP_BUILD_DIR/glomap"
-    elif [ -f "$GLOMAP_BUILD_DIR/glomap_main" ]; then
-        GLOMAP_BIN="$GLOMAP_BUILD_DIR/glomap_main"
+    POSSIBLE_PATHS=(
+        "$GLOMAP_BUILD_DIR/glomap/glomap"
+        "$GLOMAP_BUILD_DIR/glomap"
+        "$GLOMAP_BUILD_DIR/glomap_main"
+        "$GLOMAP_BUILD_DIR/glomap/glomap_main"
+    )
+    
+    for path in "${POSSIBLE_PATHS[@]}"; do
+        if [ -f "$path" ] && [ -x "$path" ]; then
+            GLOMAP_BIN="$path"
+            break
+        fi
+    done
+    
+    # If still not found, search recursively
+    if [ -z "$GLOMAP_BIN" ]; then
+        GLOMAP_BIN=$(find "$GLOMAP_BUILD_DIR" -name "glomap" -type f -executable 2>/dev/null | head -n 1)
     fi
     
     if [ -n "$GLOMAP_BIN" ]; then
         print_success "GLOMAP build complete"
+        print_info "Binary found at: $GLOMAP_BIN"
         
         # Install to system
         print_info "Installing GLOMAP to /usr/local/bin..."
@@ -945,6 +1086,8 @@ build_glomap() {
         print_error "GLOMAP binary not found after build"
         print_info "Build directory contents:"
         ls -la "$GLOMAP_BUILD_DIR" | head -20
+        print_info "Searching for glomap executables..."
+        find "$GLOMAP_BUILD_DIR" -type f -executable -name "*glomap*" 2>/dev/null
         cd "$PROJECT_ROOT"
         return 1
     fi

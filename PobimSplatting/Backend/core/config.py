@@ -118,6 +118,8 @@ if COLMAP_ENV_PATH:
 
 COLMAP_CANDIDATE_PATHS.extend(
     [
+        # System-wide installation (highest priority if installed via install.sh)
+        Path("/usr/local/bin/colmap"),
         # GPU-enabled COLMAP (highest priority) - actual build location
         (REPO_ROOT / "colmap-build" / "src" / "colmap" / "exe" / "colmap").resolve(),
         # Legacy paths for backwards compatibility

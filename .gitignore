@@ -4,11 +4,15 @@
 # Build directories
 build/
 my_build/
-colmap-build
+colmap-build/
+glomap-build/
+
 # IDE
 .idea/
 .vscode/
+.claude/
 node_modules.root-owned
+
 # Web Frontend - User Data
 web-frontend/uploads/*/
 web-frontend/results/*/
@@ -32,10 +36,20 @@ __pycache__/
 env/
 ENV/
 venv/
-libtorch-cuda126/
+
+# LibTorch (downloaded binaries)
+libtorch/
+libtorch-cpu/
+libtorch-cuda*/
+libtorch-*.zip
+
+# CUDA installers
+cuda_*.run
+cuda-keyring*.deb
 
 # Logs
 *.log
+install.log
 
 # Temporary files
 *.tmp
@@ -53,60 +67,54 @@ images.bin
 points3D.bin
 project.ini
 
-# 3D model files
+# 3D model files (generated outputs)
 *.ply
 *.obj
 *.gltf
+*.glb
 
 # Large binary files
 *.zip
 *.tar.gz
 *.7z
 
+# Datasets (user data)
+datasets/
+frames/
+uploads/
+results/
+
 # Results and output files
 PobimSplats/results/
 !PobimSplats/results/.gitkeep
 PobimSplats/uploads/
 !PobimSplats/uploads/.gitkeep
+PobimSplats/projects_db.json
+
 PobimSplatting/Backend/results/
 !PobimSplatting/Backend/results/.gitkeep
 PobimSplatting/Backend/uploads/
 !PobimSplatting/Backend/uploads/.gitkeep
+PobimSplatting/Backend/projects_db.json
+PobimSplatting/Backend/test_exports/
 
-# libtorch
-libtorch/
-libtorch-*.zip
-datasets/
-cuda_12.1.1_530.30.02_linux.run
-libtorch-cpu/
-
-node_modules/
-cuda_12.6.3_560.35.05_linux.run
-colmap
+# Environment files
 .env
+.env.local
 PobimSplatting/Backend/.env
+
+# Node.js
+node_modules/
+PobimSplatting/Frontend/package-lock.json
+
+# Generated scripts
+quick-start.sh
+
+# PID files
+*.pid
 PobimSplatting/backend.pid
 PobimSplatting/frontend.pid
-colmap-build/colmap
-.claude/settings.local.json
-PobimSplatting/Backend/.env
-PobimSplatting/Backend/projects_db.json
-PobimSplatting/Backend/.env
 
-PobimSplatting/Backend/.env
-PobimSplatting/Backend/.env
-PobimSplats/projects_db.json
-PobimSplatting/Backend/test_exports/gltf_buffer_0.bin
-PobimSplatting/Backend/test_exports/gltf_buffer_1.bin
-PobimSplatting/Backend/test_exports/test_alpha.glb
-PobimSplatting/Backend/test_exports/test_pointcloud.glb
-PobimSplatting/Backend/test_exports/test_poisson.glb
-quick-start.sh
-PobimSplatting/Backend/projects_db.json
-PobimSplatting/Backend/projects_db.json
-PobimSplatting/Backend/projects_db.json
-.env.local
-PobimSplatting/Frontend/package-lock.json
-cuda-keyring_1.1-1_all.deb
-.env.local
-.env.local
+# COLMAP/GLOMAP source (cloned repos - optional)
+# colmap/
+# glomap/

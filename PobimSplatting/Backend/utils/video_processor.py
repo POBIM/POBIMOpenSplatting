@@ -5,6 +5,10 @@ Supports GPU-accelerated video decoding using:
 - FFmpeg with NVDEC (NVIDIA hardware decoder) - 5-10x faster
 - Parallel frame saving with ThreadPoolExecutor
 - Automatic fallback to CPU if GPU unavailable
+
+Resolution presets for extraction:
+- 720p, 1080p, 2K, 4K, 8K, or original
+- Supports dual-resolution extraction for COLMAP (lower) vs Training (higher)
 """
 import cv2
 import os
@@ -20,6 +24,80 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, Callable, List, Dict, Any
 
 logger = logging.getLogger(__name__)
+
+# =============================================================================
+# Resolution Presets for Video Frame Extraction
+# =============================================================================
+RESOLUTION_PRESETS = {
+    '720p': {'width': 1280, 'height': 720, 'jpeg_quality': 85, 'label': '720p (1280×720)'},
+    '1080p': {'width': 1920, 'height': 1080, 'jpeg_quality': 90, 'label': '1080p (1920×1080)'},
+    '2K': {'width': 2560, 'height': 1440, 'jpeg_quality': 92, 'label': '2K (2560×1440)'},
+    '4K': {'width': 3840, 'height': 2160, 'jpeg_quality': 95, 'label': '4K (3840×2160)'},
+    '8K': {'width': 7680, 'height': 4320, 'jpeg_quality': 98, 'label': '8K (7680×4320)'},
+    'original': {'width': None, 'height': None, 'jpeg_quality': 95, 'label': 'Original Resolution'},
+}
+
+# Mapping from legacy quality percentage to resolution preset
+QUALITY_TO_RESOLUTION = {
+    50: '1080p',
+    75: '2K', 
+    100: '4K',
+}
+
+
+def get_resolution_preset(resolution: str) -> Dict[str, Any]:
+    """Get resolution preset by name, with fallback to 2K."""
+    return RESOLUTION_PRESETS.get(resolution, RESOLUTION_PRESETS['2K'])
+
+
+def get_target_dimensions(resolution: str, source_width: int, source_height: int) -> tuple:
+    """
+    Calculate target dimensions for a given resolution preset while maintaining aspect ratio.
+    
+    Args:
+        resolution: Resolution preset name ('720p', '1080p', '2K', '4K', '8K', 'original')
+        source_width: Original video width
+        source_height: Original video height
+        
+    Returns:
+        Tuple of (target_width, target_height, jpeg_quality)
+    """
+    preset = get_resolution_preset(resolution)
+    
+    # Original resolution - no scaling
+    if resolution == 'original' or preset['width'] is None:
+        return source_width, source_height, preset['jpeg_quality']
+    
+    target_width = preset['width']
+    target_height = preset['height']
+    
+    # If source is smaller than target, use original
+    if source_width <= target_width and source_height <= target_height:
+        return source_width, source_height, preset['jpeg_quality']
+    
+    # Calculate scale to fit within target dimensions while maintaining aspect ratio
+    source_aspect = source_width / source_height
+    target_aspect = target_width / target_height
+    
+    if source_aspect > target_aspect:
+        # Source is wider - fit to width
+        new_width = target_width
+        new_height = int(target_width / source_aspect)
+    else:
+        # Source is taller - fit to height
+        new_height = target_height
+        new_width = int(target_height * source_aspect)
+    
+    # Ensure even dimensions (required for many video codecs)
+    new_width = new_width - (new_width % 2)
+    new_height = new_height - (new_height % 2)
+    
+    return new_width, new_height, preset['jpeg_quality']
+
+
+def convert_legacy_quality_to_resolution(quality_percent: int) -> str:
+    """Convert legacy quality percentage (50/75/100) to resolution preset."""
+    return QUALITY_TO_RESOLUTION.get(quality_percent, '2K')
 
 
 def is_wsl() -> bool:
@@ -272,7 +350,18 @@ class VideoProcessor:
         
         # Calculate extraction parameters
         mode = extraction_config.get('mode', 'frames')
-        quality_percent = extraction_config.get('quality', 100)
+        
+        # Get resolution setting (supports both new 'resolution' and legacy 'quality')
+        resolution = extraction_config.get('resolution')
+        if not resolution:
+            # Fallback to legacy quality percentage
+            quality_percent = extraction_config.get('quality', 100)
+            resolution = convert_legacy_quality_to_resolution(quality_percent)
+            logger.info(f"Using legacy quality {quality_percent}% → resolution preset: {resolution}")
+        
+        # Get target dimensions based on resolution preset
+        target_width, target_height, jpeg_quality = get_target_dimensions(resolution, width, height)
+        logger.info(f"Target resolution: {target_width}x{target_height} ({resolution})")
         
         if mode == 'fps':
             target_fps = extraction_config.get('target_fps', 1.0)
@@ -288,32 +377,11 @@ class VideoProcessor:
             else:
                 fps_filter = None
         
-        # Quality-based scaling
-        if quality_percent == 100:
-            max_dimension = 6240
-        elif quality_percent == 75:
-            max_dimension = 3840
-        else:
-            max_dimension = 2048
-        
-        # Build scale filter if needed
+        # Build scale filter if needed (only if target differs from source)
         scale_filter = None
-        if width > max_dimension or height > max_dimension:
-            if width > height:
-                scale_filter = f"scale={max_dimension}:-1"
-            else:
-                scale_filter = f"scale=-1:{max_dimension}"
-        
-        # Additional quality scaling
-        if quality_percent < 100:
-            scale = quality_percent / 100.0
-            target_width = int(width * scale)
-            target_height = int(height * scale)
-            if scale_filter:
-                # Apply after max dimension scaling
-                scale_filter += f",scale={target_width}:{target_height}"
-            else:
-                scale_filter = f"scale={target_width}:{target_height}"
+        if target_width != width or target_height != height:
+            scale_filter = f"scale={target_width}:{target_height}"
+            logger.info(f"Scaling: {width}x{height} → {target_width}x{target_height}")
         
         # Build filter chain
         filters = []
@@ -324,8 +392,6 @@ class VideoProcessor:
         
         filter_chain = ','.join(filters) if filters else None
         
-        # JPEG quality mapping
-        jpeg_quality = 95 if quality_percent == 100 else (85 if quality_percent == 75 else 75)
         # FFmpeg uses qscale:v where lower = better quality (2-5 is good)
         ffmpeg_quality = max(2, min(5, int(6 - (jpeg_quality / 100) * 4)))
         
@@ -524,24 +590,22 @@ class VideoProcessor:
             frame_interval = max(1, total_frames // max_frames) if max_frames < total_frames else 1
             logger.info(f"Frame mode: extracting up to {max_frames} frames, interval={frame_interval}")
 
-        quality_percent = extraction_config.get('quality', 100)
-        jpeg_quality = 95 if quality_percent == 100 else (85 if quality_percent == 75 else 75)
-
-        if quality_percent == 100:
-            max_dimension = 6240
-        elif quality_percent == 75:
-            max_dimension = 3840
-        else:
-            max_dimension = 2048
-
-        if width > max_dimension or height > max_dimension:
-            scale_factor = min(max_dimension / width, max_dimension / height)
-            target_width = int(width * scale_factor)
-            target_height = int(height * scale_factor)
-            logger.info(f"Resizing frames from {width}x{height} to {target_width}x{target_height}")
-        else:
-            scale_factor = 1.0
-            target_width, target_height = width, height
+        # Get resolution setting (supports both new 'resolution' and legacy 'quality')
+        resolution = extraction_config.get('resolution')
+        if not resolution:
+            # Fallback to legacy quality percentage
+            quality_percent = extraction_config.get('quality', 100)
+            resolution = convert_legacy_quality_to_resolution(quality_percent)
+            logger.info(f"Using legacy quality {quality_percent}% → resolution preset: {resolution}")
+        
+        # Get target dimensions based on resolution preset
+        target_width, target_height, jpeg_quality = get_target_dimensions(resolution, width, height)
+        logger.info(f"Target resolution: {target_width}x{target_height} ({resolution}), JPEG quality: {jpeg_quality}")
+        
+        # Calculate if scaling is needed
+        need_scale = (target_width != width or target_height != height)
+        if need_scale:
+            logger.info(f"Scaling: {width}x{height} → {target_width}x{target_height}")
 
         extracted_frames = []
         frame_count = 0
@@ -572,20 +636,15 @@ class VideoProcessor:
                     frame_count += 1
                     continue
 
-                if self._is_good_quality_frame(frame, prev_frame, quality_percent):
+                # Use resolution for quality check (map to approximate percentage)
+                approx_quality = {'720p': 50, '1080p': 75, '2K': 75, '4K': 100, '8K': 100, 'original': 100}.get(resolution, 100)
+                if self._is_good_quality_frame(frame, prev_frame, approx_quality):
                     try:
                         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-                        if scale_factor < 1.0:
+                        # Apply scaling if needed
+                        if need_scale:
                             frame_rgb = cv2.resize(frame_rgb, (target_width, target_height), 
-                                                 interpolation=cv2.INTER_LANCZOS4)
-
-                        if quality_percent < 100:
-                            h, w = frame_rgb.shape[:2]
-                            scale = quality_percent / 100.0
-                            new_w = int(w * scale)
-                            new_h = int(h * scale)
-                            frame_rgb = cv2.resize(frame_rgb, (new_w, new_h), 
                                                  interpolation=cv2.INTER_LANCZOS4)
 
                     except Exception as e:

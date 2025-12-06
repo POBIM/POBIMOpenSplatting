@@ -148,22 +148,31 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
                 for i, video_path in enumerate(video_files):
                     append_log_line(project_id, f"Extracting frames from: {Path(video_path).name}")
 
+                    # Get resolution settings
+                    colmap_resolution = config.get('colmap_resolution', '2K')
+                    training_resolution = config.get('training_resolution', '4K')
+                    use_separate = config.get('use_separate_training_images', False)
+                    
+                    # Base extraction config
+                    base_config = {
+                        'mode': config.get('extraction_mode', 'frames'),
+                        'preview_count': config.get('preview_count', 10),
+                        'use_gpu': config.get('use_gpu_extraction', True)
+                    }
+                    
                     if config.get('extraction_mode') == 'fps':
-                        extraction_config = {
-                            'mode': 'fps',
-                            'target_fps': config['target_fps'],
-                            'quality': config['quality'],
-                            'preview_count': config.get('preview_count', 10),
-                            'use_gpu': config.get('use_gpu_extraction', True)
-                        }
+                        base_config['target_fps'] = config.get('target_fps', 1.0)
                     else:
-                        extraction_config = {
-                            'mode': 'frames',
-                            'max_frames': config.get('max_frames', 100),
-                            'quality': config.get('quality', 100),
-                            'preview_count': config.get('preview_count', 10),
-                            'use_gpu': config.get('use_gpu_extraction', True)
-                        }
+                        base_config['max_frames'] = config.get('max_frames', 100)
+                    
+                    # Primary extraction (for COLMAP)
+                    extraction_config = {
+                        **base_config,
+                        'resolution': colmap_resolution,
+                        'quality': config.get('quality', 100)  # Legacy fallback
+                    }
+                    
+                    append_log_line(project_id, f"   📐 COLMAP resolution: {colmap_resolution}")
 
                     # Create progress callback for frame-by-frame updates
                     def frame_progress_callback(current_frame, expected_total, frame_path):
@@ -197,6 +206,25 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
 
                     total_extracted_frames += len(extracted)
                     append_log_line(project_id, f"✅ Extracted {len(extracted)} frames from video {i + 1}")
+                    
+                    # Extract high-resolution training images if enabled
+                    if use_separate and training_resolution != colmap_resolution:
+                        append_log_line(project_id, f"   📐 Extracting high-res training images: {training_resolution}")
+                        
+                        training_config = {
+                            **base_config,
+                            'resolution': training_resolution,
+                            'quality': 100  # Always max quality for training images
+                        }
+                        
+                        # Extract to training_images folder (no progress callback to avoid confusion)
+                        training_extracted = video_processor.extract_frames(
+                            video_path,
+                            paths['training_images_path'],
+                            extraction_config=training_config,
+                            progress_callback=None
+                        )
+                        append_log_line(project_id, f"   ✅ Extracted {len(training_extracted)} high-res training frames")
 
                     videos_done = i + 1
                     progress = int((videos_done / total_videos) * 100)
@@ -210,6 +238,9 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
 
                 update_state(project_id, 'video_extraction', status='completed', progress=100)
                 append_log_line(project_id, f"🎬 Frame extraction complete. Total frames: {total_extracted_frames}")
+                if use_separate:
+                    training_frames = len(list(paths['training_images_path'].glob('*')))
+                    append_log_line(project_id, f"   🎯 Training images: {training_frames} ({training_resolution})")
             else:
                 update_state(project_id, 'video_extraction', status='completed', progress=100)
                 update_stage_detail(project_id, 'video_extraction', text='No video files', subtext=None)
@@ -1519,6 +1550,69 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
             '-n', str(enhanced_iterations),
             '--output', str(output_ply.absolute())
         ]
+        
+        # Use high-resolution training images if available
+        use_separate = config.get('use_separate_training_images', False)
+        training_images_path = paths.get('training_images_path')
+        
+        # Check if we need to extract training images (for retry scenarios)
+        if use_separate and training_images_path:
+            training_images_count = len(list(training_images_path.glob('*'))) if training_images_path.exists() else 0
+            
+            # If no training images exist but user wants them, try to extract from video
+            if training_images_count == 0:
+                append_log_line(project_id, "⚠️ Training images folder is empty, attempting to extract...")
+                
+                # Find video files in project
+                project_path = paths['project_path']
+                video_files = []
+                for ext in ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.MP4', '.MOV', '.AVI', '.MKV', '.WEBM']:
+                    video_files.extend(list(project_path.glob(f'*{ext}')))
+                
+                if video_files:
+                    from ..utils.video_processor import VideoProcessor
+                    video_processor = VideoProcessor()
+                    training_resolution = config.get('training_resolution', '4K')
+                    
+                    # Ensure training_images folder exists
+                    training_images_path.mkdir(parents=True, exist_ok=True)
+                    
+                    for video_path in video_files:
+                        append_log_line(project_id, f"   📹 Extracting training frames from {video_path.name} at {training_resolution}...")
+                        
+                        training_config = {
+                            'max_frames': config.get('max_frames', 200),
+                            'min_frames': config.get('min_frames', 30),
+                            'resolution': training_resolution,
+                            'quality': 100,  # Always max quality for training images
+                            'use_gpu': config.get('use_gpu_extraction', True),
+                            'motion_threshold': config.get('motion_threshold', 0.15),
+                            'blur_threshold': config.get('blur_threshold', 100)
+                        }
+                        
+                        training_extracted = video_processor.extract_frames(
+                            str(video_path),
+                            training_images_path,
+                            extraction_config=training_config,
+                            progress_callback=None
+                        )
+                        append_log_line(project_id, f"   ✅ Extracted {len(training_extracted)} high-res training frames")
+                    
+                    # Re-count after extraction
+                    training_images_count = len(list(training_images_path.glob('*')))
+                else:
+                    append_log_line(project_id, "   ℹ️ No video files found, will use images folder for training")
+            
+            # Now check if we have training images
+            if training_images_count > 0:
+                cmd.extend(['--colmap-image-path', str(training_images_path.absolute())])
+                append_log_line(project_id, f"🎯 Using high-res training images: {training_images_count} images from {training_images_path.name}")
+                training_resolution = config.get('training_resolution', '4K')
+                append_log_line(project_id, f"   📐 Training resolution: {training_resolution}")
+            else:
+                append_log_line(project_id, "⚠️ No training images available, using COLMAP images for training")
+        elif use_separate:
+            append_log_line(project_id, "⚠️ Training images path not configured, using COLMAP images")
 
         # Add advanced quality parameters for high/ultra/custom modes (using correct OpenSplat parameter names)
         if quality_mode in ['high', 'ultra', 'custom', 'balanced']:

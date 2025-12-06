@@ -60,6 +60,24 @@ export interface ProcessingStatus {
   frame_previews?: string[];
 }
 
+export interface PlyFile {
+  filename: string;
+  path: string;
+  size: number;
+  size_mb: number;
+  created_at: number;
+  quality_mode: string;
+  iterations: number;
+  download_url: string;
+}
+
+export interface PlyFilesResponse {
+  project_id: string;
+  project_name: string;
+  ply_files: PlyFile[];
+  total: number;
+}
+
 export interface UploadConfig {
   project_name?: string;
   project_description?: string;
@@ -117,6 +135,19 @@ export const api = {
     return response.data;
   },
 
+  // PLY Files
+  getPlyFiles: async (id: string): Promise<PlyFilesResponse> => {
+    const response = await apiClient.get(`/api/project/${id}/ply_files`);
+    return response.data;
+  },
+
+  getDownloadUrl: (id: string, filename?: string) => {
+    if (filename) {
+      return `${API_BASE_URL}/api/download/${id}/${filename}`;
+    }
+    return `${API_BASE_URL}/api/download/${id}`;
+  },
+
   // Upload
   upload: async (files: File[], config: any, onProgress?: (loaded: number, total: number) => void) => {
     const formData = new FormData();
@@ -142,6 +173,11 @@ export const api = {
     if (config.vram_size !== undefined) formData.append('vram_size', config.vram_size.toString());
     // GPU acceleration for video frame extraction (5-10x faster with NVDEC)
     if (config.use_gpu_extraction !== undefined) formData.append('use_gpu_extraction', config.use_gpu_extraction.toString());
+    
+    // Resolution-based extraction settings (new)
+    if (config.colmap_resolution) formData.append('colmap_resolution', config.colmap_resolution);
+    if (config.training_resolution) formData.append('training_resolution', config.training_resolution);
+    if (config.use_separate_training_images !== undefined) formData.append('use_separate_training_images', config.use_separate_training_images.toString());
 
     // Custom parameters - send each parameter individually
     if (config.quality_mode === 'custom') {

@@ -57,7 +57,8 @@ def setup_project_directories(project_id: str) -> Dict[str, Path]:
 
     paths = {
         "project_path": project_path,
-        "images_path": project_path / "images",
+        "images_path": project_path / "images",  # Images for COLMAP (lower resolution)
+        "training_images_path": project_path / "training_images",  # High-res images for 3DGS training
         "frames_path": config.FRAMES_FOLDER / project_id,
         "results_path": config.RESULTS_FOLDER / project_id,
         "log_file": project_path / "processing.log",

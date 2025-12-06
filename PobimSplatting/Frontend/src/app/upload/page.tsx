@@ -23,10 +23,14 @@ export default function UploadPage() {
     extraction_mode: 'fps',
     max_frames: 100,
     target_fps: 2.0,
-    quality: 100,
+    quality: 100,  // Legacy - kept for backward compatibility
     preview_count: 10,
     sfm_engine: 'glomap',  // 'colmap' or 'glomap' - default to GLOMAP for 10-100x faster reconstruction
-    use_gpu_extraction: true  // GPU-accelerated video frame extraction (5-10x faster)
+    use_gpu_extraction: true,  // GPU-accelerated video frame extraction (5-10x faster)
+    // New resolution-based extraction settings
+    colmap_resolution: '2K',  // Resolution for COLMAP feature extraction (720p, 1080p, 2K, 4K, 8K, original)
+    training_resolution: '4K',  // Resolution for 3DGS training (higher quality)
+    use_separate_training_images: false  // Extract separate high-res images for training
   });
 
   // Custom parameters - starts with High quality (7000 iter) baseline
@@ -849,17 +853,72 @@ export default function UploadPage() {
                       </select>
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Frame Quality</label>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        {config.use_separate_training_images ? 'COLMAP Resolution' : 'Frame Resolution'}
+                      </label>
                       <select
-                        value={config.quality}
-                        onChange={(e) => setConfig({...config, quality: parseInt(e.target.value)})}
+                        value={config.colmap_resolution}
+                        onChange={(e) => setConfig({...config, colmap_resolution: e.target.value})}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       >
-                        <option value={100}>100% (Original size)</option>
-                        <option value={75}>75% (Reduced size)</option>
-                        <option value={50}>50% (Smaller files)</option>
+                        <option value="720p">720p (1280×720) - Fast</option>
+                        <option value="1080p">1080p (1920×1080) - Standard</option>
+                        <option value="2K">2K (2560×1440) - Recommended</option>
+                        <option value="4K">4K (3840×2160) - High Quality</option>
+                        <option value="8K">8K (7680×4320) - Maximum</option>
+                        <option value="original">Original Resolution</option>
                       </select>
+                      <p className="text-xs text-gray-500 mt-1">
+                        {config.use_separate_training_images 
+                          ? 'Used for camera pose estimation' 
+                          : 'Resolution for extracted frames'}
+                      </p>
                     </div>
+                  </div>
+                  
+                  {/* Separate Training Images Option */}
+                  <div className="mt-4 p-3 bg-gradient-to-r from-purple-50 to-indigo-50 rounded-lg border border-purple-200">
+                    <label className="flex items-center justify-between cursor-pointer">
+                      <div className="flex items-center">
+                        <Image className="h-5 w-5 text-purple-600 mr-2" />
+                        <div>
+                          <span className="font-medium text-gray-900">Use High-Res Training Images</span>
+                          <p className="text-xs text-gray-600">Extract separate higher resolution images for 3DGS training</p>
+                        </div>
+                      </div>
+                      <div className="relative">
+                        <input
+                          type="checkbox"
+                          checked={config.use_separate_training_images}
+                          onChange={(e) => setConfig({...config, use_separate_training_images: e.target.checked})}
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:bg-purple-500 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+                      </div>
+                    </label>
+                    {config.use_separate_training_images && (
+                      <div className="mt-3 space-y-2">
+                        <p className="text-xs text-purple-700 flex items-center">
+                          <span className="mr-1">💡</span>
+                          COLMAP uses lower resolution for faster/stable pose estimation, then 3DGS trains on higher resolution for better quality
+                        </p>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">Training Resolution</label>
+                          <select
+                            value={config.training_resolution}
+                            onChange={(e) => setConfig({...config, training_resolution: e.target.value})}
+                            className="w-full px-3 py-2 border border-purple-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white"
+                          >
+                            <option value="1080p">1080p (1920×1080)</option>
+                            <option value="2K">2K (2560×1440)</option>
+                            <option value="4K">4K (3840×2160) - Recommended</option>
+                            <option value="8K">8K (7680×4320) - Maximum</option>
+                            <option value="original">Original Resolution</option>
+                          </select>
+                          <p className="text-xs text-gray-500 mt-1">Higher resolution images for 3DGS training (uses more disk space)</p>
+                        </div>
+                      </div>
+                    )}
                   </div>
                   <div className="mt-4">
                     {config.extraction_mode === 'frames' ? (

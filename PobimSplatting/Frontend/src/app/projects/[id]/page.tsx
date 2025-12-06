@@ -2,7 +2,7 @@
 
 import { useParams, useRouter } from 'next/navigation';
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { api, Project } from '@/lib/api';
+import { api, Project, PlyFile } from '@/lib/api';
 import { websocket } from '@/lib/websocket';
 import MeshExportPanel from '@/components/MeshExportPanel';
 import ExportedMeshesList from '@/components/ExportedMeshesList';
@@ -27,7 +27,8 @@ import {
   AlertTriangle,
   ChevronLeft,
   ChevronRight,
-  X
+  X,
+  FileBox
 } from 'lucide-react';
 
 // Function to get stage labels based on SfM engine
@@ -100,6 +101,8 @@ export default function ProjectDetailPage() {
   const [stageDetails, setStageDetails] = useState<Record<string, any>>({});
   const [logs, setLogs] = useState<string[]>([]);
   const [framePreview, setFramePreview] = useState<any[]>([]);
+  const [trainingFramePreview, setTrainingFramePreview] = useState<any[]>([]);
+  const [hasSeparateTraining, setHasSeparateTraining] = useState(false);
   const [timeStats, setTimeStats] = useState({
     startTime: null as string | null,
     elapsedTime: '0s',
@@ -124,6 +127,10 @@ export default function ProjectDetailPage() {
     // COLMAP Sparse Reconstruction params
     min_num_matches: '',
     max_num_models: '',
+    // Resolution settings
+    colmap_resolution: '',
+    training_resolution: '',
+    use_separate_training_images: false,
   });
   const [expandedStage, setExpandedStage] = useState<string | null>(null);
   const [showColmapModal, setShowColmapModal] = useState(false);
@@ -131,6 +138,11 @@ export default function ProjectDetailPage() {
   const [colmapWorkingDir, setColmapWorkingDir] = useState<string>('');
   const [showImagePreview, setShowImagePreview] = useState(false);
   const [previewImageIndex, setPreviewImageIndex] = useState(0);
+  
+  // Download modal states
+  const [showDownloadModal, setShowDownloadModal] = useState(false);
+  const [plyFiles, setPlyFiles] = useState<PlyFile[]>([]);
+  const [loadingPlyFiles, setLoadingPlyFiles] = useState(false);
 
   // Auto-expand the running stage
   useEffect(() => {
@@ -208,9 +220,20 @@ export default function ProjectDetailPage() {
     try {
       const data = await api.getFramePreviews(projectId);
       if (data.frames && data.frames.length > 0) {
-        setFramePreview(data.frames); // Show all preview images
+        setFramePreview(data.frames); // COLMAP frames (or combined if no separate training)
+      } else if (data.colmap_frames && data.colmap_frames.length > 0) {
+        setFramePreview(data.colmap_frames);
       } else {
         setFramePreview([]);
+      }
+      
+      // Handle separate training images
+      if (data.has_separate_training && data.training_frames && data.training_frames.length > 0) {
+        setTrainingFramePreview(data.training_frames);
+        setHasSeparateTraining(true);
+      } else {
+        setTrainingFramePreview([]);
+        setHasSeparateTraining(false);
       }
     } catch (err) {
       console.error('Failed to load frame previews:', err);
@@ -421,6 +444,19 @@ export default function ProjectDetailPage() {
         params.quality_mode = retryParams.quality_mode;
       }
 
+      // Add parameters if retrying from video_extraction stage
+      if (fromStage === 'video_extraction') {
+        if (retryParams.colmap_resolution) {
+          params.colmap_resolution = retryParams.colmap_resolution;
+        }
+        if (retryParams.use_separate_training_images) {
+          params.use_separate_training_images = true;
+          if (retryParams.training_resolution) {
+            params.training_resolution = retryParams.training_resolution;
+          }
+        }
+      }
+
       // Add parameters if retrying from COLMAP Feature Extraction stage
       if (fromStage === 'feature_extraction') {
         if (retryParams.max_num_features) {
@@ -459,6 +495,13 @@ export default function ProjectDetailPage() {
         if (retryParams.learning_rate) {
           params.learning_rate = parseFloat(retryParams.learning_rate);
         }
+        // Add training images option
+        if (retryParams.use_separate_training_images) {
+          params.use_separate_training_images = true;
+          if (retryParams.training_resolution) {
+            params.training_resolution = retryParams.training_resolution;
+          }
+        }
       }
 
       await api.retryProject(projectId, fromStage, params);
@@ -474,6 +517,9 @@ export default function ProjectDetailPage() {
         sequential_overlap: '',
         min_num_matches: '',
         max_num_models: '',
+        colmap_resolution: '',
+        training_resolution: '',
+        use_separate_training_images: false,
       });
       await loadProject();
     } catch (err) {
@@ -531,21 +577,76 @@ export default function ProjectDetailPage() {
         sequential_overlap: '',
         min_num_matches: '',
         max_num_models: '',
+        colmap_resolution: '',
+        training_resolution: '',
+        use_separate_training_images: false,
       });
     }
 
     setShowRetryModal(true);
   };
 
-  const handleDownload = () => {
-    // Create download link with backend API endpoint
-    const downloadUrl = `http://localhost:5000/api/download/${projectId}`;
+  const handleDownload = async () => {
+    // Load PLY files and show download modal
+    setLoadingPlyFiles(true);
+    setShowDownloadModal(true);
+    
+    try {
+      const response = await api.getPlyFiles(projectId);
+      setPlyFiles(response.ply_files);
+    } catch (err) {
+      console.error('Failed to load PLY files:', err);
+      // Fallback to single download
+      const downloadUrl = api.getDownloadUrl(projectId);
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = `${project?.metadata?.name || 'model'}_${projectId.slice(0, 8)}.ply`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setShowDownloadModal(false);
+    } finally {
+      setLoadingPlyFiles(false);
+    }
+  };
+
+  const downloadPlyFile = (filename: string) => {
+    const downloadUrl = api.getDownloadUrl(projectId, filename);
     const link = document.createElement('a');
     link.href = downloadUrl;
-    link.download = `${project?.metadata?.name || 'model'}_${projectId.slice(0, 8)}.ply`;
+    link.download = filename;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+  };
+
+  const formatFileSize = (bytes: number): string => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  };
+
+  const formatPlyDate = (timestamp: number): string => {
+    return new Date(timestamp * 1000).toLocaleString('th-TH', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  const getQualityBadgeColor = (quality: string): string => {
+    switch (quality) {
+      case 'fast': return 'bg-gray-100 text-gray-700';
+      case 'balanced': return 'bg-blue-100 text-blue-700';
+      case 'high': return 'bg-green-100 text-green-700';
+      case 'ultra': return 'bg-purple-100 text-purple-700';
+      case 'professional': return 'bg-orange-100 text-orange-700';
+      case 'ultra_professional': return 'bg-red-100 text-red-700';
+      default: return 'bg-gray-100 text-gray-600';
+    }
   };
 
   const getStatusIcon = (status: string) => {
@@ -1004,7 +1105,11 @@ export default function ProjectDetailPage() {
               {/* Frame Preview Section - Show All Images */}
               {framePreview.length > 0 && (
                 <div className="border-t border-gray-200 pt-6">
-                  <h3 className="text-sm font-medium text-black mb-4">Frame Preview ({framePreview.length} images) <span className="text-gray-400 font-normal">- คลิกเพื่อดูภาพขนาดใหญ่</span></h3>
+                  <h3 className="text-sm font-medium text-black mb-4">
+                    {hasSeparateTraining ? 'COLMAP Frames' : 'Frame Preview'} ({framePreview.length} images) 
+                    <span className="text-gray-400 font-normal"> - คลิกเพื่อดูภาพขนาดใหญ่</span>
+                    {hasSeparateTraining && <span className="ml-2 text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">For Pose Estimation</span>}
+                  </h3>
                   <div className="max-h-96 overflow-y-auto">
                     <div className="grid grid-cols-5 gap-3">
                       {framePreview.map((frame, index) => (
@@ -1026,6 +1131,44 @@ export default function ProjectDetailPage() {
                             <Eye className="h-6 w-6 text-white opacity-0 group-hover:opacity-100 drop-shadow-lg transition-opacity" />
                           </div>
                           <div className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity">
+                            {index + 1}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* High-Res Training Frames Preview - Only show if separate training images exist */}
+              {hasSeparateTraining && trainingFramePreview.length > 0 && (
+                <div className="border-t border-gray-200 pt-6">
+                  <h3 className="text-sm font-medium text-black mb-4">
+                    Training Frames ({trainingFramePreview.length} images)
+                    <span className="text-gray-400 font-normal"> - High resolution for 3DGS training</span>
+                    <span className="ml-2 text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded">High-Res</span>
+                  </h3>
+                  <div className="max-h-96 overflow-y-auto">
+                    <div className="grid grid-cols-5 gap-3">
+                      {trainingFramePreview.map((frame, index) => (
+                        <div
+                          key={index}
+                          className="relative group flex-shrink-0 cursor-pointer"
+                          onClick={() => {
+                            // Open training frame in new tab for full resolution view
+                            window.open(frame.url, '_blank');
+                          }}
+                        >
+                          <img
+                            src={frame.url}
+                            alt={frame.name}
+                            className="w-full h-24 object-cover rounded-lg border border-purple-200 hover:border-purple-500 hover:shadow-md transition-all"
+                            loading="lazy"
+                          />
+                          <div className="absolute inset-0 bg-black/0 group-hover:bg-purple-500/10 rounded-lg transition-all flex items-center justify-center">
+                            <Eye className="h-6 w-6 text-white opacity-0 group-hover:opacity-100 drop-shadow-lg transition-opacity" />
+                          </div>
+                          <div className="absolute bottom-1 right-1 bg-purple-600/80 text-white text-xs px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity">
                             {index + 1}
                           </div>
                         </div>
@@ -1143,6 +1286,72 @@ export default function ProjectDetailPage() {
               })}
             </div>
 
+            {/* Video Extraction Parameters Form - Show only for video_extraction stage */}
+            {selectedRetryStage === 'video_extraction' && (
+              <div className="mb-6 p-4 bg-orange-50 border border-orange-200 rounded-xl">
+                <h4 className="text-sm font-semibold text-black mb-3 flex items-center">
+                  <Settings className="h-4 w-4 mr-2" />
+                  ปรับค่าการแยกเฟรม (ทิ้งว่างเพื่อใช้ค่าเดิม)
+                </h4>
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                      COLMAP Resolution (สำหรับ Pose Estimation)
+                    </label>
+                    <select
+                      value={retryParams.colmap_resolution}
+                      onChange={(e) => setRetryParams({...retryParams, colmap_resolution: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                    >
+                      <option value="">ใช้ค่าเดิม</option>
+                      <option value="720p">720p (1280×720) - Fast</option>
+                      <option value="1080p">1080p (1920×1080) - Standard</option>
+                      <option value="2K">2K (2560×1440) - Recommended</option>
+                      <option value="4K">4K (3840×2160) - High Quality</option>
+                      <option value="8K">8K (7680×4320) - Maximum</option>
+                      <option value="original">Original Resolution</option>
+                    </select>
+                  </div>
+
+                  <div className="flex items-center">
+                    <input
+                      type="checkbox"
+                      id="use_separate_training"
+                      checked={retryParams.use_separate_training_images}
+                      onChange={(e) => setRetryParams({...retryParams, use_separate_training_images: e.target.checked})}
+                      className="w-4 h-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"
+                    />
+                    <label htmlFor="use_separate_training" className="ml-2 text-xs font-medium text-gray-700">
+                      ใช้ภาพความละเอียดสูงแยกสำหรับ Training
+                    </label>
+                  </div>
+
+                  {retryParams.use_separate_training_images && (
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                        Training Resolution (สำหรับ 3DGS Training)
+                      </label>
+                      <select
+                        value={retryParams.training_resolution}
+                        onChange={(e) => setRetryParams({...retryParams, training_resolution: e.target.value})}
+                        className="w-full px-3 py-2 border border-purple-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+                      >
+                        <option value="">ใช้ค่าเดิม</option>
+                        <option value="1080p">1080p (1920×1080)</option>
+                        <option value="2K">2K (2560×1440)</option>
+                        <option value="4K">4K (3840×2160) - Recommended</option>
+                        <option value="8K">8K (7680×4320) - Maximum</option>
+                        <option value="original">Original Resolution</option>
+                      </select>
+                    </div>
+                  )}
+                </div>
+                <p className="text-xs text-gray-500 mt-3">
+                  💡 ภาพความละเอียดต่ำช่วยให้ COLMAP ทำงานเร็วขึ้น แล้วใช้ภาพ high-res สำหรับ training
+                </p>
+              </div>
+            )}
+
             {/* Training Parameters Form - Show only for gaussian_splatting stage */}
             {selectedRetryStage === 'gaussian_splatting' && (
               <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-xl">
@@ -1195,6 +1404,45 @@ export default function ProjectDetailPage() {
                       onChange={(e) => setRetryParams({...retryParams, learning_rate: e.target.value})}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
                     />
+                  </div>
+
+                  {/* Training Images Option */}
+                  <div className="pt-2 border-t border-blue-200">
+                    <div className="flex items-center mb-2">
+                      <input
+                        type="checkbox"
+                        id="gs_use_separate_training"
+                        checked={retryParams.use_separate_training_images}
+                        onChange={(e) => setRetryParams({...retryParams, use_separate_training_images: e.target.checked})}
+                        className="w-4 h-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"
+                      />
+                      <label htmlFor="gs_use_separate_training" className="ml-2 text-xs font-medium text-gray-700">
+                        ใช้ภาพความละเอียดสูงแยกสำหรับ Training
+                      </label>
+                    </div>
+
+                    {retryParams.use_separate_training_images && (
+                      <div>
+                        <label className="block text-xs font-medium text-gray-700 mb-1">
+                          Training Resolution
+                        </label>
+                        <select
+                          value={retryParams.training_resolution}
+                          onChange={(e) => setRetryParams({...retryParams, training_resolution: e.target.value})}
+                          className="w-full px-3 py-2 border border-purple-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+                        >
+                          <option value="">ใช้ค่าเดิม</option>
+                          <option value="1080p">1080p (1920×1080)</option>
+                          <option value="2K">2K (2560×1440)</option>
+                          <option value="4K">4K (3840×2160) - Recommended</option>
+                          <option value="8K">8K (7680×4320) - Maximum</option>
+                          <option value="original">Original Resolution</option>
+                        </select>
+                        <p className="text-xs text-purple-600 mt-1">
+                          ⚠️ ถ้าไม่มี training_images จะถอดจาก video ให้อัตโนมัติ
+                        </p>
+                      </div>
+                    )}
                   </div>
                 </div>
                 <p className="text-xs text-gray-500 mt-3">
@@ -1412,6 +1660,106 @@ export default function ProjectDetailPage() {
                   Start Retry
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Download PLY Files Modal */}
+      {showDownloadModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 space-y-4 max-h-[80vh] overflow-hidden flex flex-col">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xl font-semibold text-black flex items-center">
+                <FileBox className="h-6 w-6 mr-2 text-blue-600" />
+                ดาวน์โหลดโมเดล 3D Gaussian Splatting
+              </h3>
+              <button
+                onClick={() => setShowDownloadModal(false)}
+                className="text-gray-400 hover:text-gray-600 transition-colors"
+              >
+                <X className="h-6 w-6" />
+              </button>
+            </div>
+
+            {loadingPlyFiles ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader className="h-8 w-8 animate-spin text-blue-600" />
+                <span className="ml-3 text-gray-600">กำลังโหลดรายการไฟล์...</span>
+              </div>
+            ) : plyFiles.length === 0 ? (
+              <div className="text-center py-12">
+                <FileBox className="h-12 w-12 mx-auto text-gray-400 mb-3" />
+                <p className="text-gray-600">ยังไม่มีไฟล์ PLY</p>
+                <p className="text-sm text-gray-500">รอให้การประมวลผลเสร็จสิ้นก่อน</p>
+              </div>
+            ) : (
+              <div className="flex-1 overflow-y-auto space-y-3 pr-2">
+                <p className="text-sm text-gray-600 mb-4">
+                  มี {plyFiles.length} ไฟล์ PLY พร้อมดาวน์โหลด (เรียงตามเวลาสร้างล่าสุด)
+                </p>
+                
+                {plyFiles.map((file, index) => (
+                  <div
+                    key={file.filename}
+                    className={`p-4 rounded-xl border transition-all hover:shadow-md ${
+                      index === 0 
+                        ? 'bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200' 
+                        : 'bg-gray-50 border-gray-200'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          {index === 0 && (
+                            <span className="px-2 py-0.5 text-xs font-medium bg-blue-600 text-white rounded-full">
+                              ล่าสุด
+                            </span>
+                          )}
+                          <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${getQualityBadgeColor(file.quality_mode)}`}>
+                            {file.quality_mode}
+                          </span>
+                          {file.iterations > 0 && (
+                            <span className="px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-600 rounded-full">
+                              {file.iterations.toLocaleString()} iterations
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-sm font-medium text-gray-900 truncate" title={file.filename}>
+                          {file.filename}
+                        </p>
+                        <div className="flex items-center gap-4 mt-1 text-xs text-gray-500">
+                          <span>{formatFileSize(file.size)}</span>
+                          <span>{formatPlyDate(file.created_at)}</span>
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => downloadPlyFile(file.filename)}
+                        className={`ml-4 px-4 py-2 text-sm font-medium rounded-lg transition-colors flex items-center ${
+                          index === 0
+                            ? 'bg-blue-600 text-white hover:bg-blue-700'
+                            : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
+                        }`}
+                      >
+                        <Download className="h-4 w-4 mr-1" />
+                        Download
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="flex justify-between items-center pt-4 border-t">
+              <p className="text-xs text-gray-500">
+                💡 ไฟล์ที่ retry ใหม่จะแสดงด้านบน
+              </p>
+              <button
+                onClick={() => setShowDownloadModal(false)}
+                className="px-6 py-2 text-sm font-medium rounded-lg text-gray-700 bg-gray-100 hover:bg-gray-200 transition-colors"
+              >
+                ปิด
+              </button>
             </div>
           </div>
         </div>

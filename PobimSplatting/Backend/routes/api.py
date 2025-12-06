@@ -124,10 +124,15 @@ def upload_files():
         'extraction_mode': request.form.get('extraction_mode', 'frames'),  # 'frames' or 'fps'
         'max_frames': int(request.form.get('max_frames', 100)),
         'target_fps': float(request.form.get('target_fps', 1.0)),
-        'quality': int(request.form.get('quality', 100)),
+        'quality': int(request.form.get('quality', 100)),  # Legacy - kept for backward compatibility
         'preview_count': int(request.form.get('preview_count', 10)),
         # GPU acceleration for video frame extraction (5-10x faster)
-        'use_gpu_extraction': request.form.get('use_gpu_extraction', 'true').lower() == 'true'
+        'use_gpu_extraction': request.form.get('use_gpu_extraction', 'true').lower() == 'true',
+        
+        # Resolution-based extraction settings (new)
+        'colmap_resolution': request.form.get('colmap_resolution', '2K'),  # 720p, 1080p, 2K, 4K, 8K, original
+        'training_resolution': request.form.get('training_resolution', '4K'),  # Higher res for 3DGS training
+        'use_separate_training_images': request.form.get('use_separate_training_images', 'false').lower() == 'true'
     }
 
     # Add custom parameters if in custom mode
@@ -375,22 +380,65 @@ def get_frame_previews(project_id):
 
     project_path = app_config.UPLOAD_FOLDER / project_id
     images_path = project_path / 'images'
+    training_images_path = project_path / 'training_images'
 
-    if not images_path.exists():
-        return jsonify({'frames': [], 'message': 'No frames extracted yet'})
+    result = {
+        'colmap_frames': [],
+        'training_frames': [],
+        'frames': [],  # Legacy - combined list for backward compatibility
+        'has_separate_training': False
+    }
 
-    # Get all frame files for preview (no limit)
-    frame_files = sorted(images_path.glob('frame_*.jpg'))
+    # Get COLMAP frames
+    if images_path.exists():
+        frame_files = sorted(images_path.glob('frame_*.jpg'))
+        for frame_file in frame_files:
+            frame_info = {
+                'name': frame_file.name,
+                'url': f'/api/frame_preview/{project_id}/{frame_file.name}',
+                'type': 'colmap'
+            }
+            result['colmap_frames'].append(frame_info)
+            result['frames'].append(frame_info)
 
-    frames = []
-    for frame_file in frame_files:
-        # Create a thumbnail path
-        frames.append({
-            'name': frame_file.name,
-            'url': f'/api/frame_preview/{project_id}/{frame_file.name}'
-        })
+    # Get high-res training frames (if separate extraction was used)
+    if training_images_path.exists():
+        training_files = sorted(training_images_path.glob('frame_*.jpg'))
+        if training_files:
+            result['has_separate_training'] = True
+            for frame_file in training_files:
+                frame_info = {
+                    'name': frame_file.name,
+                    'url': f'/api/training_frame_preview/{project_id}/{frame_file.name}',
+                    'type': 'training'
+                }
+                result['training_frames'].append(frame_info)
 
-    return jsonify({'frames': frames, 'count': len(frames)})
+    result['count'] = len(result['frames'])
+    result['training_count'] = len(result['training_frames'])
+    
+    if not result['frames']:
+        result['message'] = 'No frames extracted yet'
+
+    return jsonify(result)
+
+
+@api_bp.route('/training_frame_preview/<project_id>/<filename>')
+def serve_training_frame_preview(project_id, filename):
+    """Serve individual high-res training frame preview."""
+    if project_id not in project_store.processing_status:
+        return jsonify({'error': 'Project not found'}), 404
+
+    frame_path = app_config.UPLOAD_FOLDER / project_id / 'training_images' / filename
+
+    if not frame_path.exists():
+        return jsonify({'error': 'Training frame not found'}), 404
+
+    # Serve the frame with caching headers
+    return send_file(frame_path,
+                    mimetype='image/jpeg',
+                    as_attachment=False,
+                    max_age=3600)
 
 
 @api_bp.route('/frame_preview/<project_id>/<filename>')
@@ -475,6 +523,88 @@ def download_ply(project_id):
                     download_name=download_filename)
 
 
+@api_bp.route('/project/<project_id>/ply_files')
+def list_ply_files(project_id):
+    """List all PLY files available for a project."""
+    if project_id not in project_store.processing_status:
+        return jsonify({'error': 'Project not found'}), 404
+
+    project = project_store.processing_status[project_id]
+    project_name = project.get('metadata', {}).get('name', f'PobimSplats_{project_id[:8]}')
+
+    project_dir = app_config.RESULTS_FOLDER / project_id
+    ply_files = []
+
+    if project_dir.exists():
+        for ply_path in sorted(project_dir.glob("*.ply"), key=lambda p: p.stat().st_mtime, reverse=True):
+            # Parse filename to extract info
+            filename = ply_path.name
+            file_size = ply_path.stat().st_size
+            created_at = ply_path.stat().st_mtime
+
+            # Try to extract quality mode and iterations from filename
+            # Format: {project_id}_{quality}_{iterations}iter.ply
+            parts = filename.replace('.ply', '').split('_')
+            quality_mode = 'unknown'
+            iterations = 0
+
+            for i, part in enumerate(parts):
+                if part.endswith('iter'):
+                    try:
+                        iterations = int(part.replace('iter', ''))
+                    except ValueError:
+                        pass
+                elif part in ['fast', 'balanced', 'high', 'ultra', 'professional', 'ultra_professional', 'custom']:
+                    quality_mode = part
+
+            ply_files.append({
+                'filename': filename,
+                'path': str(ply_path),
+                'size': file_size,
+                'size_mb': round(file_size / (1024 * 1024), 2),
+                'created_at': created_at,
+                'quality_mode': quality_mode,
+                'iterations': iterations,
+                'download_url': f'/api/download/{project_id}/{filename}'
+            })
+
+    return jsonify({
+        'project_id': project_id,
+        'project_name': project_name,
+        'ply_files': ply_files,
+        'total': len(ply_files)
+    })
+
+
+@api_bp.route('/download/<project_id>/<filename>')
+def download_specific_ply(project_id, filename):
+    """Download a specific PLY file by filename."""
+    if project_id not in project_store.processing_status:
+        return jsonify({'error': 'Project not found'}), 404
+
+    project = project_store.processing_status[project_id]
+
+    # Security: prevent path traversal
+    if '..' in filename or '/' in filename or '\\' in filename:
+        return jsonify({'error': 'Invalid filename'}), 400
+
+    ply_path = app_config.RESULTS_FOLDER / project_id / filename
+    if not ply_path.exists():
+        return jsonify({'error': 'PLY file not found'}), 404
+
+    # Create a safe download filename
+    project_name = project.get('metadata', {}).get('name', f'PobimSplats_{project_id[:8]}')
+    safe_filename = "".join(c for c in project_name if c.isalnum() or c in (' ', '-', '_')).rstrip()
+
+    # Keep original filename info but prefix with project name
+    download_filename = f"{safe_filename}_{filename}"
+
+    return send_file(ply_path,
+                    mimetype='application/octet-stream',
+                    as_attachment=True,
+                    download_name=download_filename)
+
+
 @api_bp.route('/project/<project_id>/retry', methods=['POST'])
 def retry_project(project_id):
     """Retry processing from a specific stage."""
@@ -527,6 +657,12 @@ def retry_project(project_id):
 
             # Update COLMAP Sparse Reconstruction parameters if provided
             for param_key in ['min_num_matches', 'max_num_models', 'init_num_trials']:
+                if param_key in new_params and new_params[param_key] is not None:
+                    config[param_key] = new_params[param_key]
+                    append_log_line(project_id, f"  • {param_key}: {new_params[param_key]}")
+
+            # Update resolution settings if provided
+            for param_key in ['colmap_resolution', 'training_resolution', 'use_separate_training_images']:
                 if param_key in new_params and new_params[param_key] is not None:
                     config[param_key] = new_params[param_key]
                     append_log_line(project_id, f"  • {param_key}: {new_params[param_key]}")

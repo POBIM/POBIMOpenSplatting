@@ -137,6 +137,9 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
                     append_log_line(project_id, f"📹 Processing {total_videos} video file(s)...")
                     if use_gpu and not gpu_info['available']:
                         append_log_line(project_id, f"   ⚠️ GPU extraction unavailable, using CPU")
+                        # Log details why GPU is not available
+                        for detail in gpu_info.get('details', []):
+                            append_log_line(project_id, f"      → {detail}")
 
                 # Calculate expected total frames for all videos
                 expected_frames_per_video = config.get('max_frames', 100)

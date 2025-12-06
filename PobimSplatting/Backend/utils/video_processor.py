@@ -22,9 +22,40 @@ from typing import Optional, Callable, List, Dict, Any
 logger = logging.getLogger(__name__)
 
 
+def is_wsl() -> bool:
+    """Check if running in Windows Subsystem for Linux (WSL)."""
+    try:
+        with open('/proc/version', 'r') as f:
+            return 'microsoft' in f.read().lower() or 'wsl' in f.read().lower()
+    except:
+        return False
+
+
+def get_gpu_environment() -> Dict[str, Any]:
+    """
+    Get environment variables configured for GPU access.
+    Handles both native Linux and WSL2 environments.
+    
+    Returns:
+        Dict with 'env' (environment dict) and 'is_wsl' (bool)
+    """
+    env = os.environ.copy()
+    wsl_lib_path = '/usr/lib/wsl/lib'
+    
+    # Check if WSL2 and library path exists
+    if os.path.exists(wsl_lib_path):
+        current_ld_path = env.get('LD_LIBRARY_PATH', '')
+        if wsl_lib_path not in current_ld_path:
+            env['LD_LIBRARY_PATH'] = f"{wsl_lib_path}:{current_ld_path}" if current_ld_path else wsl_lib_path
+        return {'env': env, 'is_wsl': True}
+    
+    return {'env': env, 'is_wsl': False}
+
+
 def check_gpu_decode_available() -> Dict[str, Any]:
     """
     Check if GPU-accelerated video decoding is available.
+    Supports both native Linux servers and WSL2 environments.
     
     Returns:
         Dict with 'available' bool and 'method' string ('nvdec', 'vaapi', 'none')
@@ -45,11 +76,17 @@ def check_gpu_decode_available() -> Dict[str, Any]:
     
     result['ffmpeg_path'] = ffmpeg_path
     
+    # Get GPU environment (handles WSL2 vs native Linux)
+    gpu_env = get_gpu_environment()
+    env = gpu_env['env']
+    if gpu_env['is_wsl']:
+        result['details'].append('WSL2 environment detected, using WSL GPU passthrough')
+    
     # Check for NVIDIA GPU and NVDEC support
     try:
         nvidia_smi = subprocess.run(
             ['nvidia-smi', '--query-gpu=name', '--format=csv,noheader'],
-            capture_output=True, text=True, timeout=5
+            capture_output=True, text=True, timeout=5, env=env
         )
         if nvidia_smi.returncode == 0:
             gpu_name = nvidia_smi.stdout.strip().split('\n')[0]
@@ -59,7 +96,7 @@ def check_gpu_decode_available() -> Dict[str, Any]:
             # Check FFmpeg NVDEC support
             ffmpeg_hwaccels = subprocess.run(
                 ['ffmpeg', '-hwaccels'],
-                capture_output=True, text=True, timeout=5
+                capture_output=True, text=True, timeout=5, env=env
             )
             if 'cuda' in ffmpeg_hwaccels.stdout.lower() or 'nvdec' in ffmpeg_hwaccels.stdout.lower():
                 result['available'] = True
@@ -323,13 +360,18 @@ class VideoProcessor:
         
         logger.info(f"FFmpeg command: {' '.join(cmd)}")
         
+        # Get GPU environment (handles both WSL2 and native Linux)
+        gpu_env = get_gpu_environment()
+        env = gpu_env['env']
+        
         # Run FFmpeg with progress tracking
         try:
             process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                universal_newlines=True
+                universal_newlines=True,
+                env=env
             )
             
             # Monitor stderr for progress

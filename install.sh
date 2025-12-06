@@ -49,6 +49,9 @@ CUDA_ENABLED="OFF"
 GPU_ARCHS="70;75;80;86;89"  # Default architectures
 GPU_COMPUTE_CAP=""
 
+# Yes to all mode (skip all prompts)
+YES_TO_ALL="false"
+
 # Log file
 LOG_FILE="$PROJECT_ROOT/install.log"
 exec > >(tee -a "$LOG_FILE")
@@ -99,6 +102,17 @@ check_command() {
 prompt_yes_no() {
     local prompt="$1"
     local default="${2:-n}"
+    
+    # If YES_TO_ALL is enabled, automatically return yes for default=y prompts
+    if [ "$YES_TO_ALL" = "true" ]; then
+        if [ "$default" = "y" ]; then
+            echo -e "$prompt ${GREEN}[Auto: Yes]${NC}"
+            return 0
+        else
+            echo -e "$prompt ${YELLOW}[Auto: No - non-default]${NC}"
+            return 1
+        fi
+    fi
     
     if [ "$default" = "y" ]; then
         prompt="$prompt [Y/n]: "
@@ -489,6 +503,8 @@ install_system_dependencies() {
         libqt5opengl5-dev
         libcgal-dev
         libceres-dev
+        libopenimageio-dev
+        openimageio-tools
 
         # OpenCV
         libopencv-dev
@@ -1540,6 +1556,17 @@ build_sfm_engines() {
 main() {
     echo -e "${CYAN}Starting installation...${NC}"
     echo ""
+    
+    # Ask for Yes to all mode
+    echo -e "${BOLD}${YELLOW}Quick Install Mode:${NC}"
+    echo -e "  Choose 'Yes to all' to automatically accept all default options."
+    echo -e "  This will install everything with recommended settings.\n"
+    read -p "Enable 'Yes to all' mode? [y/N]: " yes_all_response
+    if [[ "$yes_all_response" =~ ^[Yy]$ ]]; then
+        YES_TO_ALL="true"
+        print_success "Yes to all mode enabled - using default options"
+        echo ""
+    fi
     
     # Step 1: Check system
     check_system_requirements

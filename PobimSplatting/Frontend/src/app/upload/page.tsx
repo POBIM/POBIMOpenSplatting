@@ -30,7 +30,9 @@ export default function UploadPage() {
     // New resolution-based extraction settings
     colmap_resolution: '2K',  // Resolution for COLMAP feature extraction (720p, 1080p, 2K, 4K, 8K, original)
     training_resolution: '4K',  // Resolution for 3DGS training (higher quality)
-    use_separate_training_images: false  // Extract separate high-res images for training
+    use_separate_training_images: false,  // Extract separate high-res images for training
+    // 8K Optimization
+    crop_size: 0  // Patch-based training (0 = disabled)
   });
 
   // Custom parameters - starts with High quality (7000 iter) baseline
@@ -171,7 +173,7 @@ export default function UploadPage() {
         const progress = Math.round((loaded / total) * 100);
         setUploadProgress(progress);
         setUploadedBytes(loaded);
-        
+
         // Calculate upload speed (bytes per second)
         const now = Date.now();
         const timeDiff = (now - lastTime) / 1000; // seconds
@@ -242,11 +244,10 @@ export default function UploadPage() {
       </div>
 
       <div
-        className={`border-2 border-dashed rounded-2xl p-16 text-center transition-all ${
-          isDragging
-            ? 'border-black bg-gray-50'
-            : 'border-gray-200 hover:border-gray-300'
-        }`}
+        className={`border-2 border-dashed rounded-2xl p-16 text-center transition-all ${isDragging
+          ? 'border-black bg-gray-50'
+          : 'border-gray-200 hover:border-gray-300'
+          }`}
         onDragEnter={handleDragEnter}
         onDragLeave={handleDragLeave}
         onDragOver={handleDragOver}
@@ -318,7 +319,7 @@ export default function UploadPage() {
                   <input
                     type="text"
                     value={config.project_name}
-                    onChange={(e) => setConfig({...config, project_name: e.target.value})}
+                    onChange={(e) => setConfig({ ...config, project_name: e.target.value })}
                     className="input"
                     placeholder="My Awesome 3D Model"
                   />
@@ -327,7 +328,7 @@ export default function UploadPage() {
                   <label className="block text-sm font-medium text-black mb-2">Quality Preset</label>
                   <select
                     value={config.quality_mode}
-                    onChange={(e) => setConfig({...config, quality_mode: e.target.value})}
+                    onChange={(e) => setConfig({ ...config, quality_mode: e.target.value })}
                     className="input"
                   >
                     <option value="high">🎯 High ({getQualityInfo('high').iterations} iter) - {getQualityInfo('high').time}</option>
@@ -339,6 +340,42 @@ export default function UploadPage() {
                   <p className="text-xs text-gray-500 mt-1">
                     {config.quality_mode === 'custom' ? 'Fine-tune all parameters' : getQualityInfo(config.quality_mode).desc}
                   </p>
+                </div>
+              </div>
+
+              {/* 8K Optimization - Patch Training */}
+              <div className="bg-gradient-to-r from-purple-50 to-pink-50 rounded-xl p-4 border border-purple-200">
+                <h4 className="font-semibold text-gray-900 mb-3 flex items-center">
+                  <span className="text-xl mr-2">🧩</span>
+                  8K Optimization (Patch-based Training)
+                </h4>
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">Crop Size (pixels)</label>
+                    <input
+                      type="number"
+                      value={config.crop_size}
+                      onChange={(e) => setConfig({ ...config, crop_size: parseInt(e.target.value) || 0 })}
+                      min="0"
+                      max="2048"
+                      step="64"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                      placeholder="0"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      0 = Use full image | 512-1024 = Recommended for 8K images
+                    </p>
+                  </div>
+                  <div className="flex items-center">
+                    <div className="bg-white rounded-lg p-3 border border-purple-100">
+                      <p className="text-sm text-purple-800">
+                        <strong>💡 Tip:</strong> ใช้ค่า 512 หรือ 1024 สำหรับภาพ 8K เพื่อลด VRAM
+                      </p>
+                      <p className="text-xs text-gray-600 mt-1">
+                        ช่วยให้เทรนภาพความละเอียดสูงได้โดยไม่ต้องใช้ GPU ที่มี VRAM เยอะ
+                      </p>
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -361,7 +398,7 @@ export default function UploadPage() {
                         <input
                           type="number"
                           value={customParams.iterations}
-                          onChange={(e) => setCustomParams({...customParams, iterations: parseInt(e.target.value) || 7000})}
+                          onChange={(e) => setCustomParams({ ...customParams, iterations: parseInt(e.target.value) || 7000 })}
                           min="100"
                           max="50000"
                           className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
@@ -375,7 +412,7 @@ export default function UploadPage() {
                         <input
                           type="number"
                           value={customParams.densify_grad_threshold}
-                          onChange={(e) => setCustomParams({...customParams, densify_grad_threshold: parseFloat(e.target.value) || 0.00015})}
+                          onChange={(e) => setCustomParams({ ...customParams, densify_grad_threshold: parseFloat(e.target.value) || 0.00015 })}
                           min="0.00001"
                           max="0.001"
                           step="0.00001"
@@ -390,7 +427,7 @@ export default function UploadPage() {
                         <input
                           type="number"
                           value={customParams.refine_every}
-                          onChange={(e) => setCustomParams({...customParams, refine_every: parseInt(e.target.value) || 75})}
+                          onChange={(e) => setCustomParams({ ...customParams, refine_every: parseInt(e.target.value) || 75 })}
                           min="10"
                           max="500"
                           className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
@@ -404,7 +441,7 @@ export default function UploadPage() {
                         <input
                           type="number"
                           value={customParams.warmup_length}
-                          onChange={(e) => setCustomParams({...customParams, warmup_length: parseInt(e.target.value) || 750})}
+                          onChange={(e) => setCustomParams({ ...customParams, warmup_length: parseInt(e.target.value) || 750 })}
                           min="100"
                           max="2000"
                           className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
@@ -418,7 +455,7 @@ export default function UploadPage() {
                         <input
                           type="number"
                           value={customParams.ssim_weight}
-                          onChange={(e) => setCustomParams({...customParams, ssim_weight: parseFloat(e.target.value) || 0.25})}
+                          onChange={(e) => setCustomParams({ ...customParams, ssim_weight: parseFloat(e.target.value) || 0.25 })}
                           min="0"
                           max="1"
                           step="0.01"
@@ -440,7 +477,7 @@ export default function UploadPage() {
                         <input
                           type="number"
                           value={customParams.learning_rate}
-                          onChange={(e) => setCustomParams({...customParams, learning_rate: parseFloat(e.target.value) || 0.0025})}
+                          onChange={(e) => setCustomParams({ ...customParams, learning_rate: parseFloat(e.target.value) || 0.0025 })}
                           min="0.0001"
                           max="0.01"
                           step="0.0001"
@@ -455,7 +492,7 @@ export default function UploadPage() {
                         <input
                           type="number"
                           value={customParams.position_lr_init}
-                          onChange={(e) => setCustomParams({...customParams, position_lr_init: parseFloat(e.target.value) || 0.00016})}
+                          onChange={(e) => setCustomParams({ ...customParams, position_lr_init: parseFloat(e.target.value) || 0.00016 })}
                           min="0.00001"
                           max="0.001"
                           step="0.00001"
@@ -470,7 +507,7 @@ export default function UploadPage() {
                         <input
                           type="number"
                           value={customParams.position_lr_final}
-                          onChange={(e) => setCustomParams({...customParams, position_lr_final: parseFloat(e.target.value) || 0.0000016})}
+                          onChange={(e) => setCustomParams({ ...customParams, position_lr_final: parseFloat(e.target.value) || 0.0000016 })}
                           min="0.0000001"
                           max="0.0001"
                           step="0.0000001"
@@ -485,7 +522,7 @@ export default function UploadPage() {
                         <input
                           type="number"
                           value={customParams.feature_lr}
-                          onChange={(e) => setCustomParams({...customParams, feature_lr: parseFloat(e.target.value) || 0.0025})}
+                          onChange={(e) => setCustomParams({ ...customParams, feature_lr: parseFloat(e.target.value) || 0.0025 })}
                           min="0.0001"
                           max="0.01"
                           step="0.0001"
@@ -500,7 +537,7 @@ export default function UploadPage() {
                         <input
                           type="number"
                           value={customParams.opacity_lr}
-                          onChange={(e) => setCustomParams({...customParams, opacity_lr: parseFloat(e.target.value) || 0.05})}
+                          onChange={(e) => setCustomParams({ ...customParams, opacity_lr: parseFloat(e.target.value) || 0.05 })}
                           min="0.001"
                           max="0.5"
                           step="0.001"
@@ -515,7 +552,7 @@ export default function UploadPage() {
                         <input
                           type="number"
                           value={customParams.scaling_lr}
-                          onChange={(e) => setCustomParams({...customParams, scaling_lr: parseFloat(e.target.value) || 0.005})}
+                          onChange={(e) => setCustomParams({ ...customParams, scaling_lr: parseFloat(e.target.value) || 0.005 })}
                           min="0.0001"
                           max="0.05"
                           step="0.0001"
@@ -530,7 +567,7 @@ export default function UploadPage() {
                         <input
                           type="number"
                           value={customParams.rotation_lr}
-                          onChange={(e) => setCustomParams({...customParams, rotation_lr: parseFloat(e.target.value) || 0.001})}
+                          onChange={(e) => setCustomParams({ ...customParams, rotation_lr: parseFloat(e.target.value) || 0.001 })}
                           min="0.0001"
                           max="0.01"
                           step="0.0001"
@@ -545,7 +582,7 @@ export default function UploadPage() {
                         <input
                           type="number"
                           value={customParams.percent_dense}
-                          onChange={(e) => setCustomParams({...customParams, percent_dense: parseFloat(e.target.value) || 0.01})}
+                          onChange={(e) => setCustomParams({ ...customParams, percent_dense: parseFloat(e.target.value) || 0.01 })}
                           min="0.001"
                           max="0.5"
                           step="0.001"
@@ -567,7 +604,7 @@ export default function UploadPage() {
                         <input
                           type="number"
                           value={customParams.peak_threshold}
-                          onChange={(e) => setCustomParams({...customParams, peak_threshold: parseFloat(e.target.value) || 0.01})}
+                          onChange={(e) => setCustomParams({ ...customParams, peak_threshold: parseFloat(e.target.value) || 0.01 })}
                           min="0.001"
                           max="0.1"
                           step="0.001"
@@ -582,7 +619,7 @@ export default function UploadPage() {
                         <input
                           type="number"
                           value={customParams.edge_threshold}
-                          onChange={(e) => setCustomParams({...customParams, edge_threshold: parseFloat(e.target.value) || 15})}
+                          onChange={(e) => setCustomParams({ ...customParams, edge_threshold: parseFloat(e.target.value) || 15 })}
                           min="5"
                           max="30"
                           step="1"
@@ -597,7 +634,7 @@ export default function UploadPage() {
                         <input
                           type="number"
                           value={customParams.max_num_orientations}
-                          onChange={(e) => setCustomParams({...customParams, max_num_orientations: parseInt(e.target.value) || 2})}
+                          onChange={(e) => setCustomParams({ ...customParams, max_num_orientations: parseInt(e.target.value) || 2 })}
                           min="1"
                           max="5"
                           className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
@@ -618,7 +655,7 @@ export default function UploadPage() {
                         <input
                           type="number"
                           value={customParams.max_num_features}
-                          onChange={(e) => setCustomParams({...customParams, max_num_features: parseInt(e.target.value) || 12288})}
+                          onChange={(e) => setCustomParams({ ...customParams, max_num_features: parseInt(e.target.value) || 12288 })}
                           min="1024"
                           max="32768"
                           step="1024"
@@ -633,7 +670,7 @@ export default function UploadPage() {
                         <input
                           type="number"
                           value={customParams.max_num_matches}
-                          onChange={(e) => setCustomParams({...customParams, max_num_matches: parseInt(e.target.value) || 32768})}
+                          onChange={(e) => setCustomParams({ ...customParams, max_num_matches: parseInt(e.target.value) || 32768 })}
                           min="4096"
                           max="65536"
                           step="4096"
@@ -648,7 +685,7 @@ export default function UploadPage() {
                         <input
                           type="number"
                           value={customParams.sequential_overlap}
-                          onChange={(e) => setCustomParams({...customParams, sequential_overlap: parseInt(e.target.value) || 18})}
+                          onChange={(e) => setCustomParams({ ...customParams, sequential_overlap: parseInt(e.target.value) || 18 })}
                           min="5"
                           max="50"
                           className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
@@ -669,7 +706,7 @@ export default function UploadPage() {
                         <input
                           type="number"
                           value={customParams.min_num_matches}
-                          onChange={(e) => setCustomParams({...customParams, min_num_matches: parseInt(e.target.value) || 16})}
+                          onChange={(e) => setCustomParams({ ...customParams, min_num_matches: parseInt(e.target.value) || 16 })}
                           min="6"
                           max="50"
                           className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
@@ -683,7 +720,7 @@ export default function UploadPage() {
                         <input
                           type="number"
                           value={customParams.max_num_models}
-                          onChange={(e) => setCustomParams({...customParams, max_num_models: parseInt(e.target.value) || 40})}
+                          onChange={(e) => setCustomParams({ ...customParams, max_num_models: parseInt(e.target.value) || 40 })}
                           min="5"
                           max="100"
                           className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
@@ -697,7 +734,7 @@ export default function UploadPage() {
                         <input
                           type="number"
                           value={customParams.init_num_trials}
-                          onChange={(e) => setCustomParams({...customParams, init_num_trials: parseInt(e.target.value) || 225})}
+                          onChange={(e) => setCustomParams({ ...customParams, init_num_trials: parseInt(e.target.value) || 225 })}
                           min="50"
                           max="500"
                           className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
@@ -718,17 +755,16 @@ export default function UploadPage() {
                 <div className="grid md:grid-cols-1 gap-4">
                   <div>
                     <div className="flex gap-4">
-                      <label className={`flex-1 p-4 rounded-xl border-2 cursor-pointer transition-all ${
-                        config.sfm_engine === 'glomap' 
-                          ? 'border-green-500 bg-green-100 shadow-md' 
-                          : 'border-gray-200 bg-white hover:border-green-300'
-                      }`}>
+                      <label className={`flex-1 p-4 rounded-xl border-2 cursor-pointer transition-all ${config.sfm_engine === 'glomap'
+                        ? 'border-green-500 bg-green-100 shadow-md'
+                        : 'border-gray-200 bg-white hover:border-green-300'
+                        }`}>
                         <input
                           type="radio"
                           name="sfm_engine"
                           value="glomap"
                           checked={config.sfm_engine === 'glomap'}
-                          onChange={(e) => setConfig({...config, sfm_engine: e.target.value})}
+                          onChange={(e) => setConfig({ ...config, sfm_engine: e.target.value })}
                           className="sr-only"
                         />
                         <div className="flex items-center justify-between">
@@ -739,23 +775,22 @@ export default function UploadPage() {
                           <span className="text-green-600 font-semibold">10-100x Faster</span>
                         </div>
                         <p className="text-sm text-gray-600 mt-2">
-                          Global SfM - Processes all camera poses simultaneously. 
+                          Global SfM - Processes all camera poses simultaneously.
                           <strong className="text-green-700"> Best for most datasets.</strong>
                         </p>
                         <p className="text-xs text-green-600 mt-1">✓ Same quality as COLMAP ✓ Much faster ✓ GPU accelerated</p>
                       </label>
-                      
-                      <label className={`flex-1 p-4 rounded-xl border-2 cursor-pointer transition-all ${
-                        config.sfm_engine === 'colmap' 
-                          ? 'border-blue-500 bg-blue-100 shadow-md' 
-                          : 'border-gray-200 bg-white hover:border-blue-300'
-                      }`}>
+
+                      <label className={`flex-1 p-4 rounded-xl border-2 cursor-pointer transition-all ${config.sfm_engine === 'colmap'
+                        ? 'border-blue-500 bg-blue-100 shadow-md'
+                        : 'border-gray-200 bg-white hover:border-blue-300'
+                        }`}>
                         <input
                           type="radio"
                           name="sfm_engine"
                           value="colmap"
                           checked={config.sfm_engine === 'colmap'}
-                          onChange={(e) => setConfig({...config, sfm_engine: e.target.value})}
+                          onChange={(e) => setConfig({ ...config, sfm_engine: e.target.value })}
                           className="sr-only"
                         />
                         <div className="flex items-center justify-between">
@@ -766,7 +801,7 @@ export default function UploadPage() {
                           <span className="text-gray-500 font-semibold">Standard Speed</span>
                         </div>
                         <p className="text-sm text-gray-600 mt-2">
-                          Incremental SfM - Processes images one by one. 
+                          Incremental SfM - Processes images one by one.
                           <strong className="text-blue-700"> Most mature &amp; stable.</strong>
                         </p>
                         <p className="text-xs text-blue-600 mt-1">✓ Battle-tested ✓ Handles edge cases ✓ More options</p>
@@ -782,7 +817,7 @@ export default function UploadPage() {
                   <label className="block text-sm font-medium text-gray-700 mb-2">Feature Matching</label>
                   <select
                     value={config.matcher_type}
-                    onChange={(e) => setConfig({...config, matcher_type: e.target.value})}
+                    onChange={(e) => setConfig({ ...config, matcher_type: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   >
                     <option value="sequential">Sequential (Fast, good for sequences)</option>
@@ -793,7 +828,7 @@ export default function UploadPage() {
                   <label className="block text-sm font-medium text-gray-700 mb-2">Camera Model</label>
                   <select
                     value={config.camera_model}
-                    onChange={(e) => setConfig({...config, camera_model: e.target.value})}
+                    onChange={(e) => setConfig({ ...config, camera_model: e.target.value })}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   >
                     <option value="SIMPLE_RADIAL">SIMPLE_RADIAL (Recommended)</option>
@@ -811,7 +846,7 @@ export default function UploadPage() {
                     <FileVideo className="h-5 w-5 mr-2" />
                     Video Frame Extraction Settings
                   </h4>
-                  
+
                   {/* GPU Acceleration Toggle */}
                   <div className="mb-4 p-3 bg-gradient-to-r from-yellow-50 to-orange-50 rounded-lg border border-yellow-200">
                     <label className="flex items-center justify-between cursor-pointer">
@@ -826,7 +861,7 @@ export default function UploadPage() {
                         <input
                           type="checkbox"
                           checked={config.use_gpu_extraction}
-                          onChange={(e) => setConfig({...config, use_gpu_extraction: e.target.checked})}
+                          onChange={(e) => setConfig({ ...config, use_gpu_extraction: e.target.checked })}
                           className="sr-only peer"
                         />
                         <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:bg-yellow-500 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
@@ -839,13 +874,13 @@ export default function UploadPage() {
                       </p>
                     )}
                   </div>
-                  
+
                   <div className="grid md:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">Extraction Mode</label>
                       <select
                         value={config.extraction_mode}
-                        onChange={(e) => setConfig({...config, extraction_mode: e.target.value})}
+                        onChange={(e) => setConfig({ ...config, extraction_mode: e.target.value })}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       >
                         <option value="frames">Fixed Frame Count</option>
@@ -858,7 +893,7 @@ export default function UploadPage() {
                       </label>
                       <select
                         value={config.colmap_resolution}
-                        onChange={(e) => setConfig({...config, colmap_resolution: e.target.value})}
+                        onChange={(e) => setConfig({ ...config, colmap_resolution: e.target.value })}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       >
                         <option value="720p">720p (1280×720) - Fast</option>
@@ -869,13 +904,13 @@ export default function UploadPage() {
                         <option value="original">Original Resolution</option>
                       </select>
                       <p className="text-xs text-gray-500 mt-1">
-                        {config.use_separate_training_images 
-                          ? 'Used for camera pose estimation' 
+                        {config.use_separate_training_images
+                          ? 'Used for camera pose estimation'
                           : 'Resolution for extracted frames'}
                       </p>
                     </div>
                   </div>
-                  
+
                   {/* Separate Training Images Option */}
                   <div className="mt-4 p-3 bg-gradient-to-r from-purple-50 to-indigo-50 rounded-lg border border-purple-200">
                     <label className="flex items-center justify-between cursor-pointer">
@@ -890,7 +925,7 @@ export default function UploadPage() {
                         <input
                           type="checkbox"
                           checked={config.use_separate_training_images}
-                          onChange={(e) => setConfig({...config, use_separate_training_images: e.target.checked})}
+                          onChange={(e) => setConfig({ ...config, use_separate_training_images: e.target.checked })}
                           className="sr-only peer"
                         />
                         <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:bg-purple-500 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
@@ -906,7 +941,7 @@ export default function UploadPage() {
                           <label className="block text-sm font-medium text-gray-700 mb-1">Training Resolution</label>
                           <select
                             value={config.training_resolution}
-                            onChange={(e) => setConfig({...config, training_resolution: e.target.value})}
+                            onChange={(e) => setConfig({ ...config, training_resolution: e.target.value })}
                             className="w-full px-3 py-2 border border-purple-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white"
                           >
                             <option value="1080p">1080p (1920×1080)</option>
@@ -926,7 +961,7 @@ export default function UploadPage() {
                         <label className="block text-sm font-medium text-gray-700 mb-2">Maximum Frames</label>
                         <select
                           value={config.max_frames}
-                          onChange={(e) => setConfig({...config, max_frames: parseInt(e.target.value)})}
+                          onChange={(e) => setConfig({ ...config, max_frames: parseInt(e.target.value) })}
                           className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                         >
                           <option value={50}>50 frames (Quick)</option>
@@ -940,7 +975,7 @@ export default function UploadPage() {
                         <label className="block text-sm font-medium text-gray-700 mb-2">Target FPS</label>
                         <select
                           value={config.target_fps}
-                          onChange={(e) => setConfig({...config, target_fps: parseFloat(e.target.value)})}
+                          onChange={(e) => setConfig({ ...config, target_fps: parseFloat(e.target.value) })}
                           className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                         >
                           <option value={0.5}>0.5 FPS (1 frame every 2 seconds)</option>
@@ -995,8 +1030,8 @@ export default function UploadPage() {
                   </span>
                 </div>
                 <p className="text-xs text-gray-500 text-center">
-                  {uploadProgress < 100 
-                    ? uploadSpeed > 0 
+                  {uploadProgress < 100
+                    ? uploadSpeed > 0
                       ? `Estimated time: ~${Math.ceil((totalSize - uploadedBytes) / uploadSpeed)}s remaining`
                       : 'Calculating speed...'
                     : '✅ Upload complete! Processing will start automatically...'

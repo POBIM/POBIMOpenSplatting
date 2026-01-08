@@ -44,20 +44,32 @@ void parallel_for(IndexType begin, IndexType end, FuncType func) {
     size_t numThreads = (std::min)(static_cast<size_t>(std::thread::hardware_concurrency()), range);
     size_t chunkSize = (range + numThreads - 1) / numThreads;
     std::vector<std::thread> threads;
+    std::vector<std::exception_ptr> exceptions(numThreads);
 
     for (unsigned int i = 0; i < numThreads; i++) {
         IndexType chunkBegin = begin + i * chunkSize;
         IndexType chunkEnd = (std::min)(chunkBegin + chunkSize, end);
 
-        threads.emplace_back([chunkBegin, chunkEnd, &func]() {
-            for (IndexType item = chunkBegin; item < chunkEnd; item++) {
-                func(*item);
+        threads.emplace_back([chunkBegin, chunkEnd, &func, &exceptions, i]() {
+            try {
+                for (IndexType item = chunkBegin; item < chunkEnd; item++) {
+                    func(*item);
+                }
+            } catch (...) {
+                exceptions[i] = std::current_exception();
             }
         });
     }
 
     for (std::thread& t : threads) {
         t.join();
+    }
+
+    // Re-throw the first exception encountered
+    for (auto& e : exceptions) {
+        if (e) {
+            std::rethrow_exception(e);
+        }
     }
 }
 

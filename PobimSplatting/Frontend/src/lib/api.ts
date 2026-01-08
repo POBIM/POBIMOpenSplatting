@@ -343,6 +343,48 @@ export const api = {
     );
     return response.data;
   },
+
+  // ArUco Markers
+  getMarkerPresets: async () => {
+    const response = await apiClient.get('/api/markers/presets');
+    return response.data;
+  },
+
+  getMarkerSheetUrl: (options: {
+    startId?: number;
+    count?: number;
+    sizeCm?: number;
+    dict?: string;
+    format?: 'pdf' | 'png' | 'jpg';
+  } = {}) => {
+    const params = new URLSearchParams();
+    if (options.startId !== undefined) params.set('start_id', options.startId.toString());
+    if (options.count !== undefined) params.set('count', options.count.toString());
+    if (options.sizeCm !== undefined) params.set('size_cm', options.sizeCm.toString());
+    if (options.dict) params.set('dict', options.dict);
+    if (options.format) params.set('format', options.format);
+    return `${API_BASE_URL}/api/markers/sheet?${params.toString()}`;
+  },
+
+  getSingleMarkerUrl: (markerId: number, options: {
+    sizePx?: number;
+    dict?: string;
+  } = {}) => {
+    const params = new URLSearchParams();
+    if (options.sizePx !== undefined) params.set('size_px', options.sizePx.toString());
+    if (options.dict) params.set('dict', options.dict);
+    return `${API_BASE_URL}/api/markers/single/${markerId}?${params.toString()}`;
+  },
+
+  analyzeMarkers: async (imageFile: File, dict: string = '6x6_250') => {
+    const formData = new FormData();
+    formData.append('image', imageFile);
+    formData.append('dict', dict);
+    const response = await apiClient.post('/api/markers/analyze', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    });
+    return response.data;
+  },
 };
 
 // Export axios instance for custom requests

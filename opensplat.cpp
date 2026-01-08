@@ -42,6 +42,7 @@ int main(int argc, char *argv[]){
         ("stop-screen-size-at", "Stop splitting gaussians that are larger than [split-screen-size] after these many steps", cxxopts::value<int>()->default_value("4000"))
         ("split-screen-size", "Split gaussians that are larger than this percentage of screen space", cxxopts::value<float>()->default_value("0.05"))
         ("colmap-image-path", "Override the default image path for COLMAP-based input", cxxopts::value<std::string>()->default_value(""))
+        ("crop-size", "Random crop size for training (0 to disable)", cxxopts::value<int>()->default_value("0"))
 
         ("h,help", "Print usage")
         ("version", "Print version")
@@ -92,6 +93,7 @@ int main(int argc, char *argv[]){
     const int stopScreenSizeAt = result["stop-screen-size-at"].as<int>();
     const float splitScreenSize = result["split-screen-size"].as<float>();
     const std::string colmapImageSourcePath = result["colmap-image-path"].as<std::string>();
+    const int cropSize = result["crop-size"].as<int>();
 
     torch::Device device = torch::kCPU;
     int displayStep = 10;
@@ -114,6 +116,25 @@ int main(int argc, char *argv[]){
 
     try{
         InputData inputData = inputDataFromX(projectRoot, colmapImageSourcePath);
+
+        // Validate all image files exist before loading
+        std::vector<std::string> missingImages;
+        for (const Camera &cam : inputData.cameras) {
+            if (!fs::exists(cam.filePath)) {
+                missingImages.push_back(cam.filePath);
+            }
+        }
+        if (!missingImages.empty()) {
+            std::string errorMsg = "Missing image files (" + std::to_string(missingImages.size()) + " not found):\n";
+            for (size_t i = 0; i < std::min(missingImages.size(), static_cast<size_t>(5)); i++) {
+                errorMsg += "  - " + missingImages[i] + "\n";
+            }
+            if (missingImages.size() > 5) {
+                errorMsg += "  ... and " + std::to_string(missingImages.size() - 5) + " more\n";
+            }
+            errorMsg += "Make sure your COLMAP images.bin references existing image files.";
+            throw std::runtime_error(errorMsg);
+        }
 
         parallel_for(inputData.cameras.begin(), inputData.cameras.end(), [&downScaleFactor](Camera &cam){
             cam.loadImage(downScaleFactor);
@@ -147,8 +168,45 @@ int main(int argc, char *argv[]){
 
             model.optimizersZeroGrad();
 
-            torch::Tensor rgb = model.forward(cam, step);
-            torch::Tensor gt = cam.getImage(model.getDownscaleFactor(step));
+            Camera* trainCam = &cam;
+            Camera croppedCam;
+            torch::Tensor gt;
+            
+            int scaleFactor = model.getDownscaleFactor(step);
+
+            if (cropSize > 0){
+                int currentW = cam.width / scaleFactor;
+                int currentH = cam.height / scaleFactor;
+
+                if (cropSize < currentW && cropSize < currentH){
+                    croppedCam = cam;
+                    trainCam = &croppedCam;
+
+                    int maxOffX = currentW - cropSize;
+                    int maxOffY = currentH - cropSize;
+
+                    int offX = rand() % (maxOffX + 1);
+                    int offY = rand() % (maxOffY + 1);
+
+                    croppedCam.width = cropSize * scaleFactor;
+                    croppedCam.height = cropSize * scaleFactor;
+                    croppedCam.cx = cam.cx - (offX * scaleFactor);
+                    croppedCam.cy = cam.cy - (offY * scaleFactor);
+
+                    // Crop GT from CPU before sending to GPU
+                    torch::Tensor fullGt = cam.getImage(scaleFactor);
+                    gt = fullGt.index({
+                        Slice(offY, offY + cropSize),
+                        Slice(offX, offX + cropSize)
+                    });
+                }else{
+                    gt = cam.getImage(scaleFactor);
+                }
+            }else{
+                gt = cam.getImage(scaleFactor);
+            }
+
+            torch::Tensor rgb = model.forward(*trainCam, step);
             gt = gt.to(device);
 
             torch::Tensor mainLoss = model.mainLoss(rgb, gt, ssimWeight);

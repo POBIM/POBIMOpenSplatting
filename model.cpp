@@ -32,12 +32,15 @@ torch::Tensor randomQuatTensor(long long n){
     }, -1);
 }
 
-torch::Tensor projectionMatrix(float zNear, float zFar, float fovX, float fovY, const torch::Device &device){
-    // OpenGL perspective projection matrix
-    float t = zNear * std::tan(0.5f * fovY);
-    float b = -t;
-    float r = zNear * std::tan(0.5f * fovX);
-    float l = -r;
+torch::Tensor projectionMatrix(float zNear, float zFar, float fovX, float fovY, float width, float height, float cx, float cy, const torch::Device &device){
+    float fx = width / (2.0f * std::tan(0.5f * fovX));
+    float fy = height / (2.0f * std::tan(0.5f * fovY));
+
+    float l = -cx * zNear / fx;
+    float r = (width - cx) * zNear / fx;
+    float t = cy * zNear / fy;
+    float b = (cy - height) * zNear / fy;
+
     return torch::tensor({
         {2.0f * zNear / (r - l), 0.0f, (r + l) / (r - l), 0.0f},
         {0.0f, 2 * zNear / (t - b), (t + b) / (t - b), 0.0f},
@@ -110,7 +113,7 @@ torch::Tensor Model::forward(Camera& cam, int step){
     float fovX = 2.0f * std::atan(width / (2.0f * fx));
     float fovY = 2.0f * std::atan(height / (2.0f * fy));
 
-    torch::Tensor projMat = projectionMatrix(0.001f, 1000.0f, fovX, fovY, device);
+    torch::Tensor projMat = projectionMatrix(0.001f, 1000.0f, fovX, fovY, width, height, cx, cy, device);
     torch::Tensor colors =  torch::cat({featuresDc.index({Slice(), None, Slice()}), featuresRest}, 1);
 
     torch::Tensor conics;

@@ -76,8 +76,8 @@ echo "[4/7] Configuring with CMake..."
 echo "Using LibTorch at: $LIBTORCH_DIR"
 
 # Use GCC 12 for CUDA 12.6 compatibility
-export CC=gcc-12
-export CXX=g++-12
+export CC=gcc-13
+export CXX=g++-13
 
 cmake -DCMAKE_PREFIX_PATH="$LIBTORCH_DIR" \
       -DOPENSPLAT_USE_FAST_MATH=ON \

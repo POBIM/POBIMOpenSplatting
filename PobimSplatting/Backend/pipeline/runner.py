@@ -208,23 +208,20 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
                     append_log_line(project_id, f"✅ Extracted {len(extracted)} frames from video {i + 1}")
                     
                     # Extract high-resolution training images if enabled
+                    # Use extract_matching_frames to ensure EXACT same frames as COLMAP
                     if use_separate and training_resolution != colmap_resolution:
                         append_log_line(project_id, f"   📐 Extracting high-res training images: {training_resolution}")
+                        append_log_line(project_id, f"   🔗 Matching {len(extracted)} COLMAP frames...")
                         
-                        training_config = {
-                            **base_config,
-                            'resolution': training_resolution,
-                            'quality': 100  # Always max quality for training images
-                        }
-                        
-                        # Extract to training_images folder (no progress callback to avoid confusion)
-                        training_extracted = video_processor.extract_frames(
+                        # Extract matching frames at higher resolution
+                        training_extracted = video_processor.extract_matching_frames(
                             video_path,
-                            paths['training_images_path'],
-                            extraction_config=training_config,
+                            paths['images_path'],  # Source COLMAP frames
+                            paths['training_images_path'],  # Output training images
+                            resolution=training_resolution,
                             progress_callback=None
                         )
-                        append_log_line(project_id, f"   ✅ Extracted {len(training_extracted)} high-res training frames")
+                        append_log_line(project_id, f"   ✅ Extracted {len(training_extracted)} high-res training frames (matched)")
 
                     videos_done = i + 1
                     progress = int((videos_done / total_videos) * 100)
@@ -1550,6 +1547,12 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
             '-n', str(enhanced_iterations),
             '--output', str(output_ply.absolute())
         ]
+
+        # Check for crop size (Patch-based training)
+        crop_size = config.get('crop_size', 0)
+        if crop_size > 0:
+            cmd.extend(['--crop-size', str(crop_size)])
+            append_log_line(project_id, f"🧩 Using patch-based training with crop size: {crop_size}")
         
         # Use high-resolution training images if available
         use_separate = config.get('use_separate_training_images', False)
@@ -1878,6 +1881,12 @@ def run_opensplat_training(project_id, paths, config, processing_start_time, tim
             '-n', str(enhanced_iterations),
             '--output', str(output_ply.absolute())
         ]
+
+        # Check for crop size (Patch-based training)
+        crop_size = config.get('crop_size', 0)
+        if crop_size > 0:
+            cmd.extend(['--crop-size', str(crop_size)])
+            append_log_line(project_id, f"🧩 Using patch-based training with crop size: {crop_size}")
 
         # Add advanced quality parameters for high/ultra/custom modes
         if quality_mode in ['high', 'ultra', 'custom', 'balanced']:

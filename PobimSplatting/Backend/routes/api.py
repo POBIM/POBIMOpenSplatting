@@ -132,7 +132,10 @@ def upload_files():
         # Resolution-based extraction settings (new)
         'colmap_resolution': request.form.get('colmap_resolution', '2K'),  # 720p, 1080p, 2K, 4K, 8K, original
         'training_resolution': request.form.get('training_resolution', '4K'),  # Higher res for 3DGS training
-        'use_separate_training_images': request.form.get('use_separate_training_images', 'false').lower() == 'true'
+        'use_separate_training_images': request.form.get('use_separate_training_images', 'false').lower() == 'true',
+        
+        # 8K Optimization - Patch-based training (works with all quality modes)
+        'crop_size': int(request.form.get('crop_size', 0))
     }
 
     # Add custom parameters if in custom mode
@@ -638,7 +641,7 @@ def retry_project(project_id):
             # Update OpenSplat training parameters if provided
             for param_key in ['iterations', 'densify_grad_threshold', 'refine_every', 'warmup_length',
                             'ssim_weight', 'learning_rate', 'position_lr_init', 'position_lr_final',
-                            'feature_lr', 'opacity_lr', 'scaling_lr', 'rotation_lr', 'percent_dense']:
+                            'feature_lr', 'opacity_lr', 'scaling_lr', 'rotation_lr', 'percent_dense', 'crop_size']:
                 if param_key in new_params and new_params[param_key] is not None:
                     config[param_key] = new_params[param_key]
                     append_log_line(project_id, f"  • {param_key}: {new_params[param_key]}")
@@ -1218,6 +1221,7 @@ def cancel_project_processing(project_id):
         # Import the cancel function
         from ..core.projects import cancel_processing
         
+        
         # Attempt to cancel the processing
         success = cancel_processing(project_id)
         
@@ -1242,3 +1246,217 @@ def cancel_project_processing(project_id):
         return jsonify({
             'error': f'Failed to cancel processing: {str(e)}'
         }), 500
+
+
+# =============================================================================
+# ArUco Marker Generation Endpoints
+# =============================================================================
+
+@api_bp.route('/markers/sheet', methods=['GET'])
+def generate_marker_sheet_endpoint():
+    """
+    Generate a printable sheet of ArUco markers.
+    
+    Query params:
+        start_id: Starting marker ID (default: 0)
+        count: Number of markers (default: 12)
+        size_cm: Marker size in centimeters (default: 10)
+        dict: ArUco dictionary name (default: 6x6_250)
+        format: Output format - pdf, png or jpg (default: pdf)
+    """
+    try:
+        from ..utils.aruco_generator import get_marker_sheet_bytes, get_marker_sheet_pdf_bytes, ARUCO_DICTS
+        
+        start_id = request.args.get('start_id', 0, type=int)
+        count = min(request.args.get('count', 12, type=int), 48)  # Max 48 markers
+        size_cm = request.args.get('size_cm', 10.0, type=float)
+        dict_name = request.args.get('dict', '6x6_250')
+        format_type = request.args.get('format', 'pdf').lower()
+        
+        # Validate dictionary
+        if dict_name not in ARUCO_DICTS:
+            dict_name = '6x6_250'
+        
+        from io import BytesIO
+        
+        if format_type == 'pdf':
+            # Generate PDF for accurate A4 printing
+            pdf_bytes = get_marker_sheet_pdf_bytes(
+                start_id=start_id,
+                count=count,
+                marker_size_cm=size_cm,
+                dict_name=dict_name
+            )
+            filename = f'aruco_markers_{start_id}-{start_id+count-1}_{size_cm}cm.pdf'
+            return send_file(
+                BytesIO(pdf_bytes),
+                mimetype='application/pdf',
+                as_attachment=True,
+                download_name=filename
+            )
+        else:
+            # Generate image (PNG/JPG)
+            image_bytes = get_marker_sheet_bytes(
+                start_id=start_id,
+                count=count,
+                marker_size_cm=size_cm,
+                dict_name=dict_name,
+                format=format_type
+            )
+            mimetype = 'image/png' if format_type == 'png' else 'image/jpeg'
+            filename = f'aruco_markers_{start_id}-{start_id+count-1}_{size_cm}cm.{format_type}'
+            return send_file(
+                BytesIO(image_bytes),
+                mimetype=mimetype,
+                as_attachment=True,
+                download_name=filename
+            )
+        
+    except Exception as e:
+        logger.error(f"Failed to generate marker sheet: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
+
+
+@api_bp.route('/markers/single/<int:marker_id>', methods=['GET'])
+def generate_single_marker_endpoint(marker_id: int):
+    """
+    Generate a single ArUco marker.
+    
+    Query params:
+        size_px: Marker size in pixels (default: 200)
+        size_cm: Physical size in cm for label (default: 10)
+        dict: ArUco dictionary name (default: 6x6_250)
+        format: Output format - png or jpg (default: png)
+    """
+    try:
+        from ..utils.aruco_generator import get_marker_image_bytes, ARUCO_DICTS
+        
+        size_px = request.args.get('size_px', 200, type=int)
+        dict_name = request.args.get('dict', '6x6_250')
+        format_type = request.args.get('format', 'png')
+        
+        if dict_name not in ARUCO_DICTS:
+            dict_name = '6x6_250'
+        
+        image_bytes = get_marker_image_bytes(
+            marker_id=marker_id,
+            size_pixels=size_px,
+            dict_name=dict_name,
+            format=format_type
+        )
+        
+        mimetype = 'image/png' if format_type == 'png' else 'image/jpeg'
+        
+        from io import BytesIO
+        return send_file(
+            BytesIO(image_bytes),
+            mimetype=mimetype,
+            as_attachment=False
+        )
+        
+    except Exception as e:
+        logger.error(f"Failed to generate marker: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@api_bp.route('/markers/presets', methods=['GET'])
+def get_marker_presets():
+    """
+    Get available marker presets and dictionary options.
+    """
+    from ..utils.aruco_generator import ARUCO_DICTS
+    
+    return jsonify({
+        'dictionaries': list(ARUCO_DICTS.keys()),
+        'default_dictionary': '6x6_250',
+        'presets': [
+            {
+                'name': 'room_standard',
+                'description': 'Standard markers for room scanning (10cm)',
+                'count': 12,
+                'size_cm': 10.0,
+                'use_case': 'General indoor scanning'
+            },
+            {
+                'name': 'room_large',
+                'description': 'Large floor markers (15cm)',
+                'count': 8,
+                'size_cm': 15.0,
+                'use_case': 'Floor and open areas'
+            },
+            {
+                'name': 'corner_small',
+                'description': 'Small corner markers (8cm)',
+                'count': 8,
+                'size_cm': 8.0,
+                'start_id': 100,
+                'use_case': 'Corners and edges'
+            },
+            {
+                'name': 'object_tiny',
+                'description': 'Tiny markers for small objects (5cm)',
+                'count': 6,
+                'size_cm': 5.0,
+                'start_id': 200,
+                'use_case': 'Small object scanning'
+            }
+        ],
+        'tips': [
+            'Print at 100% scale for accurate size',
+            'Use matte paper to reduce reflections',
+            'Place markers at different heights',
+            'Ensure at least 3-4 markers visible per photo',
+            'Avoid placing markers on curved surfaces'
+        ]
+    })
+
+
+@api_bp.route('/markers/analyze', methods=['POST'])
+def analyze_markers_in_image():
+    """
+    Analyze an uploaded image for marker detection.
+    Useful for checking if markers are properly detected before full processing.
+    """
+    try:
+        from ..utils.aruco_generator import analyze_marker_coverage, draw_detected_markers, detect_aruco_markers
+        import cv2
+        import numpy as np
+        
+        if 'image' not in request.files:
+            return jsonify({'error': 'No image file provided'}), 400
+        
+        file = request.files['image']
+        dict_name = request.form.get('dict', '6x6_250')
+        return_annotated = request.form.get('annotated', 'false').lower() == 'true'
+        
+        # Read image
+        file_bytes = np.frombuffer(file.read(), np.uint8)
+        image = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+        
+        if image is None:
+            return jsonify({'error': 'Invalid image file'}), 400
+        
+        # Analyze
+        analysis = analyze_marker_coverage(image, dict_name)
+        
+        if return_annotated:
+            # Return annotated image
+            corners, ids, _ = detect_aruco_markers(image, dict_name)
+            annotated = draw_detected_markers(image, corners, ids)
+            
+            _, buffer = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            
+            from io import BytesIO
+            return send_file(
+                BytesIO(buffer.tobytes()),
+                mimetype='image/jpeg'
+            )
+        else:
+            return jsonify(analysis)
+        
+    except Exception as e:
+        logger.error(f"Failed to analyze markers: {e}")
+        return jsonify({'error': str(e)}), 500
+

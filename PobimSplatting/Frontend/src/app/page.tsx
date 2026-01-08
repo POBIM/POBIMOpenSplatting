@@ -11,7 +11,8 @@ import {
   HardDrive,
   Zap,
   CheckCircle,
-  XCircle
+  XCircle,
+  QrCode
 } from 'lucide-react';
 
 export default function DashboardPage() {
@@ -147,7 +148,7 @@ export default function DashboardPage() {
       {/* Quick Actions */}
       <div className="card p-6">
         <h2 className="text-xl font-semibold text-black mb-6">Quick Actions</h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <Link
             href="/upload"
             className="flex items-center justify-center p-6 border border-gray-200 rounded-xl hover:border-black hover:bg-gray-50 transition-all group"
@@ -162,6 +163,14 @@ export default function DashboardPage() {
           >
             <FolderOpen className="h-6 w-6 text-black mr-3" />
             <span className="font-medium text-black">View Projects</span>
+          </Link>
+
+          <Link
+            href="/markers"
+            className="flex items-center justify-center p-6 border border-blue-200 rounded-xl hover:border-blue-500 hover:bg-blue-50 transition-all group"
+          >
+            <QrCode className="h-6 w-6 text-blue-600 mr-3" />
+            <span className="font-medium text-blue-900">ArUco Markers</span>
           </Link>
 
           <Link

@@ -2,12 +2,13 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Home, Upload, FolderOpen, Settings, Activity } from 'lucide-react';
+import { Home, Upload, FolderOpen, Settings, Activity, QrCode } from 'lucide-react';
 
 const navItems = [
   { href: '/', label: 'Dashboard', icon: Home },
   { href: '/upload', label: 'Upload', icon: Upload },
   { href: '/projects', label: 'Projects', icon: FolderOpen },
+  { href: '/markers', label: 'Markers', icon: QrCode },
   { href: '/viewer', label: 'Viewer', icon: Activity },
   { href: '/settings', label: 'Settings', icon: Settings },
 ];

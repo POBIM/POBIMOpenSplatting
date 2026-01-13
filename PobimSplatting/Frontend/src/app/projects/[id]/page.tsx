@@ -28,8 +28,18 @@ import {
   ChevronLeft,
   ChevronRight,
   X,
-  FileBox
+  FileBox,
+  ArrowDownToLine,
+  Upload,
+  Film,
+  Search,
+  Link2,
+  Box,
+  Sparkles,
+  Flag,
+  LucideIcon
 } from 'lucide-react';
+import { Breadcrumbs } from '@/components/ui';
 
 const getStageLabelForEngine = (
   stageKey: string, 
@@ -55,15 +65,15 @@ const getStageLabelForEngine = (
   return labels[stageKey];
 };
 
-const PIPELINE_STAGES = [
-  { key: 'ingest', label: 'Processing Upload', icon: '📥', weight: 0.05 },
-  { key: 'video_extraction', label: 'Video Frame Extraction', icon: '🎬', weight: 0.1 },
-  { key: 'feature_extraction', label: 'Feature Extraction', icon: '🔍', weight: 0.15 },
-  { key: 'feature_matching', label: 'Feature Matching', icon: '🔗', weight: 0.1 },
-  { key: 'sparse_reconstruction', label: 'Sparse Reconstruction', icon: '🏗️', weight: 0.2 },
-  { key: 'model_conversion', label: 'Model Conversion', icon: '🔄', weight: 0.05 },
-  { key: 'gaussian_splatting', label: 'Gaussian Splatting Training', icon: '✨', weight: 0.3 },
-  { key: 'finalizing', label: 'Finalizing Model', icon: '🏁', weight: 0.05 },
+const PIPELINE_STAGES: { key: string; label: string; Icon: LucideIcon; weight: number }[] = [
+  { key: 'ingest', label: 'Upload', Icon: Upload, weight: 0.05 },
+  { key: 'video_extraction', label: 'Extract', Icon: Film, weight: 0.1 },
+  { key: 'feature_extraction', label: 'Features', Icon: Search, weight: 0.15 },
+  { key: 'feature_matching', label: 'Match', Icon: Link2, weight: 0.1 },
+  { key: 'sparse_reconstruction', label: 'Reconstruct', Icon: Box, weight: 0.2 },
+  { key: 'model_conversion', label: 'Convert', Icon: RefreshCw, weight: 0.05 },
+  { key: 'gaussian_splatting', label: 'Train', Icon: Sparkles, weight: 0.3 },
+  { key: 'finalizing', label: 'Finalize', Icon: Flag, weight: 0.05 },
 ];
 
 const STAGE_WEIGHT_MAP = PIPELINE_STAGES.reduce((acc, stage) => {
@@ -128,6 +138,8 @@ export default function ProjectDetailPage() {
   const [showRetryModal, setShowRetryModal] = useState(false);
   const [selectedRetryStage, setSelectedRetryStage] = useState<string>('ingest');
   const [showLogSidebar, setShowLogSidebar] = useState(true);
+  const [autoScroll, setAutoScroll] = useState(true);
+  const logEndRef = useRef<HTMLDivElement>(null);
   const [retryParams, setRetryParams] = useState({
     // Gaussian Splatting params
     quality_mode: '',
@@ -449,6 +461,13 @@ export default function ProjectDetailPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [showImagePreview, framePreview.length]);
 
+  // Auto-scroll logs to bottom when new logs arrive
+  useEffect(() => {
+    if (autoScroll && logEndRef.current) {
+      logEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [logs, autoScroll]);
+
   const handleRetry = async (fromStage?: string) => {
     try {
       // Build params object for retry
@@ -559,6 +578,20 @@ export default function ProjectDetailPage() {
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
     alert('คัดลอกคำสั่งแล้ว!');
+  };
+
+  const handleDownloadLogs = () => {
+    if (logs.length === 0) return;
+    const logContent = logs.join('\n');
+    const blob = new Blob([logContent], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${project?.metadata?.name || 'project'}_logs_${new Date().toISOString().slice(0, 10)}.txt`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const openRetryModal = () => {
@@ -732,19 +765,13 @@ export default function ProjectDetailPage() {
   }
 
   return (
-    <div className="flex h-screen bg-white">
-      {/* Main Content */}
-      <div className={`flex-1 overflow-y-auto transition-all duration-300 ${showLogSidebar ? 'mr-96' : 'mr-0'}`}>
+    <div className="flex flex-col min-h-screen bg-white">
+      <div className={`flex-1 overflow-y-auto transition-all duration-300 ${showLogSidebar ? 'pb-[45vh]' : 'pb-0'}`}>
         <div className="max-w-7xl mx-auto p-8">
-          <div className="mb-8">
-            <button
-              onClick={() => router.push('/projects')}
-              className="inline-flex items-center text-sm text-gray-900 hover:text-black transition-colors"
-            >
-              <ArrowLeft className="h-4 w-4 mr-2" />
-              Back to Projects
-            </button>
-          </div>
+          <Breadcrumbs items={[
+            { label: 'Projects', href: '/projects' },
+            { label: project?.metadata?.name || 'Project Details' }
+          ]} />
 
           {/* Compact Progress Header */}
           {project.status === 'processing' && (
@@ -980,7 +1007,9 @@ export default function ProjectDetailPage() {
                     <div className="mt-6 border border-gray-200 rounded-xl p-6 bg-gray-50 animate-in slide-in-from-top duration-200">
                       <div className="flex items-start justify-between mb-4">
                         <div className="flex items-center space-x-3">
-                          <div className="text-2xl">{stageConfig?.icon}</div>
+                          <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center">
+                            {stageConfig?.Icon && <stageConfig.Icon className="h-5 w-5 text-gray-700" />}
+                          </div>
                           <div>
                             <h4 className="text-lg font-semibold text-black">{getStageLabelForEngine(stageConfig?.key || '', project?.config?.sfm_engine, project?.config?.feature_method) || stageConfig?.label}</h4>
                             <p className="text-sm text-gray-500 mt-1">
@@ -1228,43 +1257,109 @@ export default function ProjectDetailPage() {
           </div>
         </div>
 
-        {/* Log Sidebar */}
-      <div className={`fixed top-16 right-0 bg-white border-l border-gray-200 transition-transform duration-300 ${
-        showLogSidebar ? 'translate-x-0' : 'translate-x-full'
-      } w-96 flex flex-col z-40`}
-      style={{ height: 'calc(100vh - 4rem)' }}>
-        {/* Sidebar Header */}
-        <div className="p-6 border-b border-gray-200 flex items-center justify-between flex-shrink-0">
-          <h3 className="text-sm font-semibold text-black">Activity Log</h3>
-          <button
-            onClick={() => setShowLogSidebar(false)}
-            className="text-gray-400 hover:text-black transition-colors"
-          >
-            <XCircle className="h-5 w-5" />
-          </button>
+        {/* Log Panel - Full Width Bottom */}
+      <div className={`fixed bottom-0 left-0 right-0 bg-gray-950 border-t border-gray-800 transition-transform duration-300 ${
+        showLogSidebar ? 'translate-y-0' : 'translate-y-full'
+      } flex flex-col z-40`}
+      style={{ height: '45vh', minHeight: '300px' }}>
+        {/* Panel Header */}
+        <div className="px-6 py-3 border-b border-gray-800 flex items-center justify-between flex-shrink-0 bg-gray-900">
+          <div className="flex items-center gap-4">
+            <h3 className="text-sm font-semibold text-gray-100 flex items-center gap-2">
+              <Monitor className="h-4 w-4" />
+              Activity Log
+            </h3>
+            {project?.status === 'processing' && (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                </span>
+                Live Streaming
+              </span>
+            )}
+            <span className="text-xs text-gray-500 bg-gray-800 px-2 py-1 rounded">
+              {logs.length.toLocaleString()} lines
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setAutoScroll(!autoScroll)}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors flex items-center gap-1.5 ${
+                autoScroll 
+                  ? 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 border border-emerald-500/30' 
+                  : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800 border border-gray-700'
+              }`}
+              title={autoScroll ? 'Auto-scroll enabled' : 'Auto-scroll disabled'}
+            >
+              <ArrowDownToLine className="h-3.5 w-3.5" />
+              {autoScroll ? 'Auto-scroll ON' : 'Auto-scroll OFF'}
+            </button>
+            <button
+              onClick={handleDownloadLogs}
+              disabled={logs.length === 0}
+              className="px-3 py-1.5 rounded-md text-xs font-medium text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition-colors disabled:opacity-40 disabled:cursor-not-allowed border border-gray-700 flex items-center gap-1.5"
+              title="Download logs"
+            >
+              <Download className="h-3.5 w-3.5" />
+              Download
+            </button>
+            <button
+              onClick={() => setShowLogSidebar(false)}
+              className="p-1.5 rounded-md text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition-colors ml-2"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
         </div>
 
-        {/* Log Content */}
-        <div className="flex-1 overflow-y-auto p-6 bg-black font-mono text-xs text-gray-300 leading-relaxed overflow-x-auto">
+        {/* Log Content - Full Width Scrollable */}
+        <div className="flex-1 overflow-y-auto overflow-x-auto bg-gray-950 font-mono text-sm leading-relaxed">
           {logs.length > 0 ? (
-            <div className="min-w-max">
+            <div className="p-4 min-w-max">
               {logs.map((log, index) => (
-                <div key={index} className="whitespace-pre mb-1 opacity-80 hover:opacity-100 transition-opacity break-all">{log}</div>
+                <div 
+                  key={index} 
+                  className="whitespace-pre text-gray-300 hover:text-white hover:bg-gray-900/70 transition-colors py-1 px-3 rounded border-l-2 border-transparent hover:border-gray-600"
+                >
+                  <span className="text-gray-600 select-none mr-4 inline-block w-16 text-right">{index + 1}</span>
+                  {log}
+                </div>
               ))}
+              <div ref={logEndRef} className="h-4" />
             </div>
           ) : (
-            <div className="text-gray-600">No activity logs available</div>
+            <div className="flex items-center justify-center h-full text-gray-600">
+              <div className="text-center">
+                <Monitor className="h-12 w-12 mx-auto mb-3 opacity-50" />
+                <p className="text-lg">Waiting for logs...</p>
+                <p className="text-sm text-gray-500 mt-1">Logs will appear here when processing starts</p>
+              </div>
+            </div>
           )}
         </div>
+
+        {/* Footer */}
+        {logs.length >= MAX_LOG_LINES && (
+          <div className="px-6 py-2 border-t border-gray-800 bg-amber-900/20 text-xs text-amber-400 flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4" />
+            Buffer limit reached ({MAX_LOG_LINES.toLocaleString()} lines). Older logs were removed.
+          </div>
+        )}
       </div>
 
-      {/* Toggle Sidebar Button */}
       {!showLogSidebar && (
         <button
           onClick={() => setShowLogSidebar(true)}
-          className="fixed top-24 right-6 bg-black text-white rounded-full p-3 shadow-xl hover:bg-gray-800 transition-all z-30"
+          className="fixed bottom-6 right-6 bg-gray-900 text-white rounded-xl px-4 py-3 shadow-xl hover:bg-gray-800 transition-all z-30 flex items-center gap-2 border border-gray-700"
         >
           <Monitor className="h-5 w-5" />
+          <span className="text-sm font-medium">Show Logs</span>
+          {logs.length > 0 && (
+            <span className="bg-emerald-500 text-white text-xs px-2 py-0.5 rounded-full">
+              {logs.length}
+            </span>
+          )}
         </button>
       )}
 
@@ -1306,10 +1401,10 @@ export default function ProjectDetailPage() {
                     />
                     <div className="flex-1">
                       <div className="flex items-center space-x-3">
-                        <span className="text-xl">{stage.icon}</span>
+                        <stage.Icon className="h-5 w-5 text-gray-600" />
                         <span className="text-sm font-medium text-black">{getStageLabelForEngine(stage.key, project?.config?.sfm_engine, project?.config?.feature_method) || stage.label}</span>
                       </div>
-                      <div className="flex items-center space-x-2 mt-1.5 ml-9">
+                      <div className="flex items-center space-x-2 mt-1.5 ml-8">
                         {isCompleted && (
                           <span className="text-xs text-gray-500 flex items-center">
                             <CheckCircle className="h-3 w-3 mr-1" />

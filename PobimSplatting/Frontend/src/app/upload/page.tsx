@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { Upload, FileVideo, Image, CheckCircle, AlertCircle, Settings, Clock, Info, Zap } from 'lucide-react';
+import { Upload, FileVideo, Image, CheckCircle, AlertCircle, Settings, Clock, Info, Zap, Sliders, Wrench } from 'lucide-react';
+import { Accordion } from '@/components/ui';
 import { api } from '@/lib/api';
 import { useRouter } from 'next/navigation';
 
@@ -345,410 +346,15 @@ export default function UploadPage() {
                 </div>
               </div>
 
-              {/* 8K Optimization - Patch Training */}
-              <div className="bg-gradient-to-r from-purple-50 to-pink-50 rounded-xl p-4 border border-purple-200">
-                <h4 className="font-semibold text-gray-900 mb-3 flex items-center">
-                  <span className="text-xl mr-2">🧩</span>
-                  8K Optimization (Patch-based Training)
-                </h4>
-                <div className="grid md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">Crop Size (pixels)</label>
-                    <input
-                      type="number"
-                      value={config.crop_size}
-                      onChange={(e) => setConfig({ ...config, crop_size: parseInt(e.target.value) || 0 })}
-                      min="0"
-                      max="2048"
-                      step="64"
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-                      placeholder="0"
-                    />
-                    <p className="text-xs text-gray-500 mt-1">
-                      0 = Use full image | 512-1024 = Recommended for 8K images
-                    </p>
-                  </div>
-                  <div className="flex items-center">
-                    <div className="bg-white rounded-lg p-3 border border-purple-100">
-                      <p className="text-sm text-purple-800">
-                        <strong>💡 Tip:</strong> ใช้ค่า 512 หรือ 1024 สำหรับภาพ 8K เพื่อลด VRAM
-                      </p>
-                      <p className="text-xs text-gray-600 mt-1">
-                        ช่วยให้เทรนภาพความละเอียดสูงได้โดยไม่ต้องใช้ GPU ที่มี VRAM เยอะ
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Custom Parameters (only show when custom mode selected) */}
-              {config.quality_mode === 'custom' && (
-                <div className="bg-gray-50 rounded-2xl p-6 space-y-4 border border-gray-200">
-                  <h4 className="font-semibold text-gray-900 mb-3 flex items-center">
-                    <Settings className="h-5 w-5 mr-2" />
-                    Advanced Parameters (starts from High quality baseline)
-                  </h4>
-
-                  {/* OpenSplat Training Parameters */}
-                  <div className="border-b border-purple-200 pb-3">
-                    <h5 className="text-sm font-semibold text-purple-900 mb-2">🎨 OpenSplat Training</h5>
-                    <div className="grid md:grid-cols-2 gap-3">
-                      <div title="จำนวนรอบการเทรน - มากขึ้น = คุณภาพดีขึ้น แต่ใช้เวลานานขึ้น">
-                        <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
-                          Training Iterations ℹ️
-                        </label>
-                        <input
-                          type="number"
-                          value={customParams.iterations}
-                          onChange={(e) => setCustomParams({ ...customParams, iterations: parseInt(e.target.value) || 7000 })}
-                          min="100"
-                          max="50000"
-                          className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
-                        />
-                        <p className="text-xs text-gray-500 mt-0.5">↑ = Better quality but slower (7000)</p>
-                      </div>
-                      <div title="ค่าเกณฑ์การเพิ่ม Gaussian splats - ต่ำกว่า = splats หนาแน่นกว่า = รายละเอียดมากขึ้น">
-                        <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
-                          Densify Grad Threshold ℹ️
-                        </label>
-                        <input
-                          type="number"
-                          value={customParams.densify_grad_threshold}
-                          onChange={(e) => setCustomParams({ ...customParams, densify_grad_threshold: parseFloat(e.target.value) || 0.00015 })}
-                          min="0.00001"
-                          max="0.001"
-                          step="0.00001"
-                          className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
-                        />
-                        <p className="text-xs text-gray-500 mt-0.5">↓ = Denser splats, more detail (0.00015)</p>
-                      </div>
-                      <div title="ความถี่การปรับแต่ง Gaussians - น้อยกว่า = ปรับบ่อยขึ้น = ละเอียดกว่า">
-                        <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
-                          Refine Every (steps) ℹ️
-                        </label>
-                        <input
-                          type="number"
-                          value={customParams.refine_every}
-                          onChange={(e) => setCustomParams({ ...customParams, refine_every: parseInt(e.target.value) || 75 })}
-                          min="10"
-                          max="500"
-                          className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
-                        />
-                        <p className="text-xs text-gray-500 mt-0.5">↓ = More frequent refinement (75)</p>
-                      </div>
-                      <div title="ระยะ warmup ของ learning rate - ยาวขึ้น = training เสถียรกว่า">
-                        <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
-                          Warmup Length ℹ️
-                        </label>
-                        <input
-                          type="number"
-                          value={customParams.warmup_length}
-                          onChange={(e) => setCustomParams({ ...customParams, warmup_length: parseInt(e.target.value) || 750 })}
-                          min="100"
-                          max="2000"
-                          className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
-                        />
-                        <p className="text-xs text-gray-500 mt-0.5">↑ = More stable training (750)</p>
-                      </div>
-                      <div title="น้ำหนักของ SSIM loss - สูงขึ้น = รักษาโครงสร้างได้ดีกว่า">
-                        <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
-                          SSIM Weight ℹ️
-                        </label>
-                        <input
-                          type="number"
-                          value={customParams.ssim_weight}
-                          onChange={(e) => setCustomParams({ ...customParams, ssim_weight: parseFloat(e.target.value) || 0.25 })}
-                          min="0"
-                          max="1"
-                          step="0.01"
-                          className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
-                        />
-                        <p className="text-xs text-gray-500 mt-0.5">↑ = Better structure preservation (0.25)</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* OpenSplat Learning Rates */}
-                  <div className="pt-2 border-b border-purple-200 pb-3">
-                    <h5 className="text-sm font-semibold text-purple-900 mb-2">📊 OpenSplat Learning Rates (High quality)</h5>
-                    <div className="grid md:grid-cols-2 gap-3">
-                      <div title="Main learning rate - ต่ำกว่า = training เสถียรกว่า">
-                        <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
-                          Learning Rate ℹ️
-                        </label>
-                        <input
-                          type="number"
-                          value={customParams.learning_rate}
-                          onChange={(e) => setCustomParams({ ...customParams, learning_rate: parseFloat(e.target.value) || 0.0025 })}
-                          min="0.0001"
-                          max="0.01"
-                          step="0.0001"
-                          className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
-                        />
-                        <p className="text-xs text-gray-500 mt-0.5">↓ = More stable training (0.0025)</p>
-                      </div>
-                      <div title="Initial position learning rate">
-                        <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
-                          Position LR Init ℹ️
-                        </label>
-                        <input
-                          type="number"
-                          value={customParams.position_lr_init}
-                          onChange={(e) => setCustomParams({ ...customParams, position_lr_init: parseFloat(e.target.value) || 0.00016 })}
-                          min="0.00001"
-                          max="0.001"
-                          step="0.00001"
-                          className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
-                        />
-                        <p className="text-xs text-gray-500 mt-0.5">Starting position LR (0.00016)</p>
-                      </div>
-                      <div title="Final position learning rate">
-                        <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
-                          Position LR Final ℹ️
-                        </label>
-                        <input
-                          type="number"
-                          value={customParams.position_lr_final}
-                          onChange={(e) => setCustomParams({ ...customParams, position_lr_final: parseFloat(e.target.value) || 0.0000016 })}
-                          min="0.0000001"
-                          max="0.0001"
-                          step="0.0000001"
-                          className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
-                        />
-                        <p className="text-xs text-gray-500 mt-0.5">Ending position LR (0.0000016)</p>
-                      </div>
-                      <div title="Feature learning rate">
-                        <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
-                          Feature LR ℹ️
-                        </label>
-                        <input
-                          type="number"
-                          value={customParams.feature_lr}
-                          onChange={(e) => setCustomParams({ ...customParams, feature_lr: parseFloat(e.target.value) || 0.0025 })}
-                          min="0.0001"
-                          max="0.01"
-                          step="0.0001"
-                          className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
-                        />
-                        <p className="text-xs text-gray-500 mt-0.5">Feature learning rate (0.0025)</p>
-                      </div>
-                      <div title="Opacity learning rate">
-                        <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
-                          Opacity LR ℹ️
-                        </label>
-                        <input
-                          type="number"
-                          value={customParams.opacity_lr}
-                          onChange={(e) => setCustomParams({ ...customParams, opacity_lr: parseFloat(e.target.value) || 0.05 })}
-                          min="0.001"
-                          max="0.5"
-                          step="0.001"
-                          className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
-                        />
-                        <p className="text-xs text-gray-500 mt-0.5">Opacity LR (0.05)</p>
-                      </div>
-                      <div title="Scaling learning rate">
-                        <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
-                          Scaling LR ℹ️
-                        </label>
-                        <input
-                          type="number"
-                          value={customParams.scaling_lr}
-                          onChange={(e) => setCustomParams({ ...customParams, scaling_lr: parseFloat(e.target.value) || 0.005 })}
-                          min="0.0001"
-                          max="0.05"
-                          step="0.0001"
-                          className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
-                        />
-                        <p className="text-xs text-gray-500 mt-0.5">Scaling LR (0.005)</p>
-                      </div>
-                      <div title="Rotation learning rate">
-                        <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
-                          Rotation LR ℹ️
-                        </label>
-                        <input
-                          type="number"
-                          value={customParams.rotation_lr}
-                          onChange={(e) => setCustomParams({ ...customParams, rotation_lr: parseFloat(e.target.value) || 0.001 })}
-                          min="0.0001"
-                          max="0.01"
-                          step="0.0001"
-                          className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
-                        />
-                        <p className="text-xs text-gray-500 mt-0.5">Rotation LR (0.001)</p>
-                      </div>
-                      <div title="Percentage of dense points">
-                        <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
-                          Percent Dense ℹ️
-                        </label>
-                        <input
-                          type="number"
-                          value={customParams.percent_dense}
-                          onChange={(e) => setCustomParams({ ...customParams, percent_dense: parseFloat(e.target.value) || 0.01 })}
-                          min="0.001"
-                          max="0.5"
-                          step="0.001"
-                          className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
-                        />
-                        <p className="text-xs text-gray-500 mt-0.5">Dense point percentage (0.01)</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* COLMAP SIFT Feature Parameters */}
-                  <div className="pt-2 border-b border-purple-200 pb-3">
-                    <h5 className="text-sm font-semibold text-purple-900 mb-2">🎯 COLMAP SIFT Feature Quality</h5>
-                    <div className="grid md:grid-cols-2 gap-3">
-                      <div title="SIFT peak threshold - สูงขึ้น = features ที่ robust กว่า">
-                        <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
-                          Peak Threshold ℹ️
-                        </label>
-                        <input
-                          type="number"
-                          value={customParams.peak_threshold}
-                          onChange={(e) => setCustomParams({ ...customParams, peak_threshold: parseFloat(e.target.value) || 0.01 })}
-                          min="0.001"
-                          max="0.1"
-                          step="0.001"
-                          className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
-                        />
-                        <p className="text-xs text-gray-500 mt-0.5">↑ = More robust features (0.01)</p>
-                      </div>
-                      <div title="SIFT edge threshold - สูงขึ้น = กรอง false edges ได้ดีกว่า">
-                        <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
-                          Edge Threshold ℹ️
-                        </label>
-                        <input
-                          type="number"
-                          value={customParams.edge_threshold}
-                          onChange={(e) => setCustomParams({ ...customParams, edge_threshold: parseFloat(e.target.value) || 15 })}
-                          min="5"
-                          max="30"
-                          step="1"
-                          className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
-                        />
-                        <p className="text-xs text-gray-500 mt-0.5">↑ = Reduce false edges (15)</p>
-                      </div>
-                      <div title="จำนวน orientations ต่อ keypoint - มากขึ้น = รับรู้ได้หลากหลายกว่า">
-                        <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
-                          Max Num Orientations ℹ️
-                        </label>
-                        <input
-                          type="number"
-                          value={customParams.max_num_orientations}
-                          onChange={(e) => setCustomParams({ ...customParams, max_num_orientations: parseInt(e.target.value) || 2 })}
-                          min="1"
-                          max="5"
-                          className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
-                        />
-                        <p className="text-xs text-gray-500 mt-0.5">↑ = More orientation variety (2)</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* COLMAP Feature Extraction & Matching */}
-                  <div className="pt-2 border-b border-purple-200 pb-3">
-                    <h5 className="text-sm font-semibold text-purple-900 mb-2">🔍 COLMAP Feature Extraction & Matching</h5>
-                    <div className="grid md:grid-cols-2 gap-3">
-                      <div title="จำนวน SIFT features สูงสุดต่อภาพ - มากขึ้น = ดึงรายละเอียดได้มากขึ้น = จับคู่ได้ดีขึ้น">
-                        <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
-                          Max Features per Image ℹ️
-                        </label>
-                        <input
-                          type="number"
-                          value={customParams.max_num_features}
-                          onChange={(e) => setCustomParams({ ...customParams, max_num_features: parseInt(e.target.value) || 12288 })}
-                          min="1024"
-                          max="32768"
-                          step="1024"
-                          className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
-                        />
-                        <p className="text-xs text-gray-500 mt-0.5">↑ = More feature points = Better coverage (12288)</p>
-                      </div>
-                      <div title="จำนวน match points สูงสุดต่อ image pair - มากขึ้น = การจับคู่แม่นยำกว่า">
-                        <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
-                          Max Matches per Pair ℹ️
-                        </label>
-                        <input
-                          type="number"
-                          value={customParams.max_num_matches}
-                          onChange={(e) => setCustomParams({ ...customParams, max_num_matches: parseInt(e.target.value) || 32768 })}
-                          min="4096"
-                          max="65536"
-                          step="4096"
-                          className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
-                        />
-                        <p className="text-xs text-gray-500 mt-0.5">↑ = More accurate matching (32768)</p>
-                      </div>
-                      <div title="จำนวนภาพที่แต่ละภาพจะจับคู่ด้วย - มากขึ้น = connectivity ดีกว่า">
-                        <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
-                          Sequential Overlap ℹ️
-                        </label>
-                        <input
-                          type="number"
-                          value={customParams.sequential_overlap}
-                          onChange={(e) => setCustomParams({ ...customParams, sequential_overlap: parseInt(e.target.value) || 18 })}
-                          min="5"
-                          max="50"
-                          className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
-                        />
-                        <p className="text-xs text-gray-500 mt-0.5">↑ = Better image connectivity (18)</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* COLMAP Mapper (Reconstruction) */}
-                  <div className="pt-2">
-                    <h5 className="text-sm font-semibold text-purple-900 mb-2">🏗️ COLMAP Sparse Reconstruction (Mapper)</h5>
-                    <div className="grid md:grid-cols-2 gap-3">
-                      <div title="จำนวน matches ขั้นต่ำที่ยอมรับ - น้อยกว่า = ยอมรับภาพที่ match ยากขึ้น = register ได้มากขึ้น">
-                        <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
-                          Min Num Matches ℹ️
-                        </label>
-                        <input
-                          type="number"
-                          value={customParams.min_num_matches}
-                          onChange={(e) => setCustomParams({ ...customParams, min_num_matches: parseInt(e.target.value) || 16 })}
-                          min="6"
-                          max="50"
-                          className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
-                        />
-                        <p className="text-xs text-gray-500 mt-0.5">↓ = Accept weaker matches = More images registered (16)</p>
-                      </div>
-                      <div title="จำนวนโมเดลสูงสุดที่ลองสร้าง - มากขึ้น = โอกาสได้โมเดลที่ดีสูงขึ้น">
-                        <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
-                          Max Num Models ℹ️
-                        </label>
-                        <input
-                          type="number"
-                          value={customParams.max_num_models}
-                          onChange={(e) => setCustomParams({ ...customParams, max_num_models: parseInt(e.target.value) || 40 })}
-                          min="5"
-                          max="100"
-                          className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
-                        />
-                        <p className="text-xs text-gray-500 mt-0.5">↑ = Try more models = Higher chance of good result (40)</p>
-                      </div>
-                      <div title="จำนวนครั้งที่ลอง initialize reconstruction - มากขึ้น = โอกาสสำเร็จสูงขึ้น">
-                        <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
-                          Init Num Trials ℹ️
-                        </label>
-                        <input
-                          type="number"
-                          value={customParams.init_num_trials}
-                          onChange={(e) => setCustomParams({ ...customParams, init_num_trials: parseInt(e.target.value) || 225 })}
-                          min="50"
-                          max="500"
-                          className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
-                        />
-                        <p className="text-xs text-gray-500 mt-0.5">↑ = More init attempts = Higher success rate (225)</p>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* SfM Engine Selection */}
+              {/* Advanced Options Accordion */}
+              <Accordion 
+                title="Advanced Options" 
+                icon={<Sliders className="h-5 w-5" />}
+                badge="Optional"
+                badgeColor="bg-blue-100 text-blue-700"
+              >
+                <div className="space-y-6">
+                  {/* SfM Engine Selection */}
               <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl p-4 border border-green-200">
                 <h4 className="font-semibold text-gray-900 mb-3 flex items-center">
                   <span className="text-xl mr-2">⚡</span>
@@ -849,7 +455,7 @@ export default function UploadPage() {
                 </div>
               </div>
 
-              {/* Feature Extraction Method Selection */}
+                  {/* Feature Extraction Method Selection */}
               <div className="bg-gradient-to-r from-cyan-50 to-teal-50 rounded-xl p-4">
                 <div className="flex items-center justify-between mb-3">
                   <h4 className="font-semibold text-gray-900 flex items-center">
@@ -935,212 +541,593 @@ export default function UploadPage() {
                 </div>
               </div>
 
-              {/* COLMAP Options */}
-              <div className="grid md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Feature Matching</label>
-                  <select
-                    value={config.matcher_type}
-                    onChange={(e) => setConfig({ ...config, matcher_type: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  >
-                    <option value="sequential">Sequential (Fast, good for sequences)</option>
-                    <option value="exhaustive">Exhaustive (Slower, better coverage)</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Camera Model</label>
-                  <select
-                    value={config.camera_model}
-                    onChange={(e) => setConfig({ ...config, camera_model: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                  >
-                    <option value="SIMPLE_RADIAL">SIMPLE_RADIAL (Recommended)</option>
-                    <option value="SIMPLE_PINHOLE">SIMPLE_PINHOLE</option>
-                    <option value="PINHOLE">PINHOLE</option>
-                    <option value="OPENCV">OPENCV</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Video Options */}
-              {hasVideo && (
-                <div className="bg-blue-50 rounded-xl p-4">
-                  <h4 className="font-semibold text-gray-900 mb-3 flex items-center">
-                    <FileVideo className="h-5 w-5 mr-2" />
-                    Video Frame Extraction Settings
-                  </h4>
-
-                  {/* GPU Acceleration Toggle */}
-                  <div className="mb-4 p-3 bg-gradient-to-r from-yellow-50 to-orange-50 rounded-lg border border-yellow-200">
-                    <label className="flex items-center justify-between cursor-pointer">
-                      <div className="flex items-center">
-                        <Zap className="h-5 w-5 text-yellow-600 mr-2" />
-                        <div>
-                          <span className="font-medium text-gray-900">GPU Acceleration</span>
-                          <p className="text-xs text-gray-600">5-10x faster video decoding with NVIDIA NVDEC</p>
-                        </div>
-                      </div>
-                      <div className="relative">
-                        <input
-                          type="checkbox"
-                          checked={config.use_gpu_extraction}
-                          onChange={(e) => setConfig({ ...config, use_gpu_extraction: e.target.checked })}
-                          className="sr-only peer"
-                        />
-                        <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:bg-yellow-500 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
-                      </div>
-                    </label>
-                    {config.use_gpu_extraction && (
-                      <p className="text-xs text-yellow-700 mt-2 flex items-center">
-                        <span className="mr-1">🚀</span>
-                        Auto-detects GPU and falls back to CPU if unavailable
-                      </p>
-                    )}
-                  </div>
-
-                  <div className="mb-4 p-3 bg-gradient-to-r from-yellow-50 to-orange-50 rounded-lg border border-yellow-200">
-                    <label className="flex items-center justify-between cursor-pointer">
-                      <div className="flex items-center">
-                        <Zap className="h-5 w-5 text-yellow-600 mr-2" />
-                        <div>
-                          <span className="font-medium text-gray-900">Mixed Precision (FP16)</span>
-                          <p className="text-xs text-gray-600">30-50% lower VRAM usage with gradient scaling</p>
-                        </div>
-                      </div>
-                      <div className="relative">
-                        <input
-                          type="checkbox"
-                          checked={config.mixed_precision}
-                          onChange={(e) => setConfig({ ...config, mixed_precision: e.target.checked })}
-                          className="sr-only peer"
-                        />
-                        <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:bg-yellow-500 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
-                      </div>
-                    </label>
-                    {config.mixed_precision && (
-                      <p className="text-xs text-yellow-700 mt-2 flex items-center">
-                        <span className="mr-1">⚡</span>
-                        Enables automatic gradient scaling for stable FP16 training
-                      </p>
-                    )}
-                  </div>
-
+                  {/* Resolution Settings */}
                   <div className="grid md:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">Extraction Mode</label>
-                      <select
-                        value={config.extraction_mode}
-                        onChange={(e) => setConfig({ ...config, extraction_mode: e.target.value })}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      >
-                        <option value="frames">Fixed Frame Count</option>
-                        <option value="fps">Target FPS</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        {config.use_separate_training_images ? 'COLMAP Resolution' : 'Frame Resolution'}
-                      </label>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">COLMAP Resolution</label>
                       <select
                         value={config.colmap_resolution}
                         onChange={(e) => setConfig({ ...config, colmap_resolution: e.target.value })}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       >
-                        <option value="720p">720p (1280×720) - Fast</option>
-                        <option value="1080p">1080p (1920×1080) - Standard</option>
-                        <option value="2K">2K (2560×1440) - Recommended</option>
-                        <option value="4K">4K (3840×2160) - High Quality</option>
-                        <option value="8K">8K (7680×4320) - Maximum</option>
+                        <option value="720p">720p (1280x720) - Fast</option>
+                        <option value="1080p">1080p (1920x1080) - Standard</option>
+                        <option value="2K">2K (2560x1440) - Recommended</option>
+                        <option value="4K">4K (3840x2160) - High Quality</option>
+                        <option value="8K">8K (7680x4320) - Maximum</option>
                         <option value="original">Original Resolution</option>
                       </select>
-                      <p className="text-xs text-gray-500 mt-1">
-                        {config.use_separate_training_images
-                          ? 'Used for camera pose estimation'
-                          : 'Resolution for extracted frames'}
-                      </p>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Training Resolution</label>
+                      <select
+                        value={config.training_resolution}
+                        onChange={(e) => setConfig({ ...config, training_resolution: e.target.value })}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      >
+                        <option value="1080p">1080p (1920x1080)</option>
+                        <option value="2K">2K (2560x1440)</option>
+                        <option value="4K">4K (3840x2160) - Recommended</option>
+                        <option value="8K">8K (7680x4320) - Maximum</option>
+                        <option value="original">Original Resolution</option>
+                      </select>
                     </div>
                   </div>
 
-                  {/* Separate Training Images Option */}
-                  <div className="mt-4 p-3 bg-gradient-to-r from-purple-50 to-indigo-50 rounded-lg border border-purple-200">
-                    <label className="flex items-center justify-between cursor-pointer">
-                      <div className="flex items-center">
-                        <Image className="h-5 w-5 text-purple-600 mr-2" />
-                        <div>
-                          <span className="font-medium text-gray-900">Use High-Res Training Images</span>
-                          <p className="text-xs text-gray-600">Extract separate higher resolution images for 3DGS training</p>
+                  {/* GPU Toggles */}
+                  <div className="grid md:grid-cols-2 gap-4">
+                    <div className="p-3 bg-gradient-to-r from-yellow-50 to-orange-50 rounded-lg border border-yellow-200">
+                      <label className="flex items-center justify-between cursor-pointer">
+                        <div className="flex items-center">
+                          <Zap className="h-5 w-5 text-yellow-600 mr-2" />
+                          <div>
+                            <span className="font-medium text-gray-900">GPU Extraction</span>
+                            <p className="text-xs text-gray-600">5-10x faster video decoding</p>
+                          </div>
                         </div>
-                      </div>
-                      <div className="relative">
+                        <div className="relative">
+                          <input
+                            type="checkbox"
+                            checked={config.use_gpu_extraction}
+                            onChange={(e) => setConfig({ ...config, use_gpu_extraction: e.target.checked })}
+                            className="sr-only peer"
+                          />
+                          <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:bg-yellow-500 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+                        </div>
+                      </label>
+                    </div>
+                    <div className="p-3 bg-gradient-to-r from-yellow-50 to-orange-50 rounded-lg border border-yellow-200">
+                      <label className="flex items-center justify-between cursor-pointer">
+                        <div className="flex items-center">
+                          <Zap className="h-5 w-5 text-yellow-600 mr-2" />
+                          <div>
+                            <span className="font-medium text-gray-900">Mixed Precision (FP16)</span>
+                            <p className="text-xs text-gray-600">30-50% lower VRAM usage</p>
+                          </div>
+                        </div>
+                        <div className="relative">
+                          <input
+                            type="checkbox"
+                            checked={config.mixed_precision}
+                            onChange={(e) => setConfig({ ...config, mixed_precision: e.target.checked })}
+                            className="sr-only peer"
+                          />
+                          <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:bg-yellow-500 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+                        </div>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* 8K Optimization - Patch Training */}
+                  <div className="bg-gradient-to-r from-purple-50 to-pink-50 rounded-xl p-4 border border-purple-200">
+                    <h4 className="font-semibold text-gray-900 mb-3 flex items-center">
+                      <span className="text-xl mr-2">🧩</span>
+                      8K Optimization (Patch-based Training)
+                    </h4>
+                    <div className="grid md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Crop Size (pixels)</label>
                         <input
-                          type="checkbox"
-                          checked={config.use_separate_training_images}
-                          onChange={(e) => setConfig({ ...config, use_separate_training_images: e.target.checked })}
-                          className="sr-only peer"
+                          type="number"
+                          value={config.crop_size}
+                          onChange={(e) => setConfig({ ...config, crop_size: parseInt(e.target.value) || 0 })}
+                          min="0"
+                          max="2048"
+                          step="64"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                          placeholder="0"
                         />
-                        <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:bg-purple-500 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
-                      </div>
-                    </label>
-                    {config.use_separate_training_images && (
-                      <div className="mt-3 space-y-2">
-                        <p className="text-xs text-purple-700 flex items-center">
-                          <span className="mr-1">💡</span>
-                          COLMAP uses lower resolution for faster/stable pose estimation, then 3DGS trains on higher resolution for better quality
+                        <p className="text-xs text-gray-500 mt-1">
+                          0 = Use full image | 512-1024 = Recommended for 8K images
                         </p>
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-1">Training Resolution</label>
-                          <select
-                            value={config.training_resolution}
-                            onChange={(e) => setConfig({ ...config, training_resolution: e.target.value })}
-                            className="w-full px-3 py-2 border border-purple-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent bg-white"
-                          >
-                            <option value="1080p">1080p (1920×1080)</option>
-                            <option value="2K">2K (2560×1440)</option>
-                            <option value="4K">4K (3840×2160) - Recommended</option>
-                            <option value="8K">8K (7680×4320) - Maximum</option>
-                            <option value="original">Original Resolution</option>
-                          </select>
-                          <p className="text-xs text-gray-500 mt-1">Higher resolution images for 3DGS training (uses more disk space)</p>
+                      </div>
+                      <div className="flex items-center">
+                        <div className="bg-white rounded-lg p-3 border border-purple-100">
+                          <p className="text-sm text-purple-800">
+                            <strong>💡 Tip:</strong> ใช้ค่า 512 หรือ 1024 สำหรับภาพ 8K เพื่อลด VRAM
+                          </p>
+                          <p className="text-xs text-gray-600 mt-1">
+                            ช่วยให้เทรนภาพความละเอียดสูงได้โดยไม่ต้องใช้ GPU ที่มี VRAM เยอะ
+                          </p>
                         </div>
                       </div>
-                    )}
+                    </div>
                   </div>
-                  <div className="mt-4">
-                    {config.extraction_mode === 'frames' ? (
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">Maximum Frames</label>
-                        <select
-                          value={config.max_frames}
-                          onChange={(e) => setConfig({ ...config, max_frames: parseInt(e.target.value) })}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                        >
-                          <option value={50}>50 frames (Quick)</option>
-                          <option value={100}>100 frames (Standard)</option>
-                          <option value={200}>200 frames (Detailed)</option>
-                          <option value={500}>500 frames (High quality)</option>
-                        </select>
-                      </div>
-                    ) : (
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">Target FPS</label>
-                        <select
-                          value={config.target_fps}
-                          onChange={(e) => setConfig({ ...config, target_fps: parseFloat(e.target.value) })}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                        >
-                          <option value={0.5}>0.5 FPS (1 frame every 2 seconds)</option>
-                          <option value={1}>1 FPS (1 frame per second)</option>
-                          <option value={2}>2 FPS (2 frames per second)</option>
-                          <option value={5}>5 FPS (5 frames per second)</option>
-                          <option value={10}>10 FPS (High density)</option>
-                          <option value={15}>15 FPS (Maximum density)</option>
-                        </select>
-                      </div>
-                    )}
+
+                      {/* COLMAP Options */}
+                  <div className="grid md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Feature Matching</label>
+                      <select
+                        value={config.matcher_type}
+                        onChange={(e) => setConfig({ ...config, matcher_type: e.target.value })}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      >
+                        <option value="sequential">Sequential (Fast, good for sequences)</option>
+                        <option value="exhaustive">Exhaustive (Slower, better coverage)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">Camera Model</label>
+                      <select
+                        value={config.camera_model}
+                        onChange={(e) => setConfig({ ...config, camera_model: e.target.value })}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      >
+                        <option value="SIMPLE_RADIAL">SIMPLE_RADIAL (Recommended)</option>
+                        <option value="SIMPLE_PINHOLE">SIMPLE_PINHOLE</option>
+                        <option value="PINHOLE">PINHOLE</option>
+                        <option value="OPENCV">OPENCV</option>
+                      </select>
+                    </div>
                   </div>
+
+                  {/* Video Options */}
+                  {hasVideo && (
+                    <div className="bg-blue-50 rounded-xl p-4">
+                      <h4 className="font-semibold text-gray-900 mb-3 flex items-center">
+                        <FileVideo className="h-5 w-5 mr-2" />
+                        Video Frame Extraction Settings
+                      </h4>
+                      <div className="grid md:grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">Extraction Mode</label>
+                          <select
+                            value={config.extraction_mode}
+                            onChange={(e) => setConfig({ ...config, extraction_mode: e.target.value })}
+                            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                          >
+                            <option value="frames">Fixed Frame Count</option>
+                            <option value="fps">Target FPS</option>
+                          </select>
+                        </div>
+                        <div>
+                          {config.extraction_mode === 'frames' ? (
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700 mb-2">Maximum Frames</label>
+                              <select
+                                value={config.max_frames}
+                                onChange={(e) => setConfig({ ...config, max_frames: parseInt(e.target.value) })}
+                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                              >
+                                <option value={50}>50 frames (Quick)</option>
+                                <option value={100}>100 frames (Standard)</option>
+                                <option value={200}>200 frames (Detailed)</option>
+                                <option value={500}>500 frames (High quality)</option>
+                              </select>
+                            </div>
+                          ) : (
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700 mb-2">Target FPS</label>
+                              <select
+                                value={config.target_fps}
+                                onChange={(e) => setConfig({ ...config, target_fps: parseFloat(e.target.value) })}
+                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                              >
+                                <option value={0.5}>0.5 FPS (1 frame every 2 seconds)</option>
+                                <option value={1}>1 FPS (1 frame per second)</option>
+                                <option value={2}>2 FPS (2 frames per second)</option>
+                                <option value={5}>5 FPS (5 frames per second)</option>
+                                <option value={10}>10 FPS (High density)</option>
+                                <option value={15}>15 FPS (Maximum density)</option>
+                              </select>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <div className="mt-3 p-3 bg-gradient-to-r from-purple-50 to-indigo-50 rounded-lg border border-purple-200">
+                        <label className="flex items-center justify-between cursor-pointer">
+                          <div className="flex items-center">
+                            <Image className="h-5 w-5 text-purple-600 mr-2" />
+                            <div>
+                              <span className="font-medium text-gray-900">Use High-Res Training Images</span>
+                              <p className="text-xs text-gray-600">Extract separate higher resolution images for 3DGS training</p>
+                            </div>
+                          </div>
+                          <div className="relative">
+                            <input
+                              type="checkbox"
+                              checked={config.use_separate_training_images}
+                              onChange={(e) => setConfig({ ...config, use_separate_training_images: e.target.checked })}
+                              className="sr-only peer"
+                            />
+                            <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:bg-purple-500 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+                          </div>
+                        </label>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Expert Settings - Nested Accordion (only show when custom mode selected) */}
+                  {config.quality_mode === 'custom' && (
+                    <Accordion 
+                      title="Expert Settings" 
+                      icon={<Wrench className="h-5 w-5" />}
+                      badge="Custom Parameters"
+                      badgeColor="bg-purple-100 text-purple-700"
+                    >
+                      <div className="space-y-4">
+                        {/* OpenSplat Training Parameters */}
+                        <div className="border-b border-purple-200 pb-3">
+                          <h5 className="text-sm font-semibold text-purple-900 mb-2">🎨 OpenSplat Training</h5>
+                          <div className="grid md:grid-cols-2 gap-3">
+                            <div title="จำนวนรอบการเทรน - มากขึ้น = คุณภาพดีขึ้น แต่ใช้เวลานานขึ้น">
+                              <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
+                                Training Iterations
+                              </label>
+                              <input
+                                type="number"
+                                value={customParams.iterations}
+                                onChange={(e) => setCustomParams({ ...customParams, iterations: parseInt(e.target.value) || 7000 })}
+                                min="100"
+                                max="50000"
+                                className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
+                              />
+                              <p className="text-xs text-gray-500 mt-0.5">Better quality but slower (7000)</p>
+                            </div>
+                            <div title="ค่าเกณฑ์การเพิ่ม Gaussian splats - ต่ำกว่า = splats หนาแน่นกว่า = รายละเอียดมากขึ้น">
+                              <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
+                                Densify Grad Threshold
+                              </label>
+                              <input
+                                type="number"
+                                value={customParams.densify_grad_threshold}
+                                onChange={(e) => setCustomParams({ ...customParams, densify_grad_threshold: parseFloat(e.target.value) || 0.00015 })}
+                                min="0.00001"
+                                max="0.001"
+                                step="0.00001"
+                                className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
+                              />
+                              <p className="text-xs text-gray-500 mt-0.5">Denser splats, more detail (0.00015)</p>
+                            </div>
+                            <div title="ความถี่การปรับแต่ง Gaussians - น้อยกว่า = ปรับบ่อยขึ้น = ละเอียดกว่า">
+                              <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
+                                Refine Every (steps)
+                              </label>
+                              <input
+                                type="number"
+                                value={customParams.refine_every}
+                                onChange={(e) => setCustomParams({ ...customParams, refine_every: parseInt(e.target.value) || 75 })}
+                                min="10"
+                                max="500"
+                                className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
+                              />
+                              <p className="text-xs text-gray-500 mt-0.5">More frequent refinement (75)</p>
+                            </div>
+                            <div title="ระยะ warmup ของ learning rate - ยาวขึ้น = training เสถียรกว่า">
+                              <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
+                                Warmup Length
+                              </label>
+                              <input
+                                type="number"
+                                value={customParams.warmup_length}
+                                onChange={(e) => setCustomParams({ ...customParams, warmup_length: parseInt(e.target.value) || 750 })}
+                                min="100"
+                                max="2000"
+                                className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
+                              />
+                              <p className="text-xs text-gray-500 mt-0.5">More stable training (750)</p>
+                            </div>
+                            <div title="น้ำหนักของ SSIM loss - สูงขึ้น = รักษาโครงสร้างได้ดีกว่า">
+                              <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
+                                SSIM Weight
+                              </label>
+                              <input
+                                type="number"
+                                value={customParams.ssim_weight}
+                                onChange={(e) => setCustomParams({ ...customParams, ssim_weight: parseFloat(e.target.value) || 0.25 })}
+                                min="0"
+                                max="1"
+                                step="0.01"
+                                className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
+                              />
+                              <p className="text-xs text-gray-500 mt-0.5">Better structure preservation (0.25)</p>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* OpenSplat Learning Rates */}
+                        <div className="pt-2 border-b border-purple-200 pb-3">
+                          <h5 className="text-sm font-semibold text-purple-900 mb-2">📊 OpenSplat Learning Rates</h5>
+                          <div className="grid md:grid-cols-2 gap-3">
+                            <div title="Main learning rate - ต่ำกว่า = training เสถียรกว่า">
+                              <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
+                                Learning Rate
+                              </label>
+                              <input
+                                type="number"
+                                value={customParams.learning_rate}
+                                onChange={(e) => setCustomParams({ ...customParams, learning_rate: parseFloat(e.target.value) || 0.0025 })}
+                                min="0.0001"
+                                max="0.01"
+                                step="0.0001"
+                                className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
+                              />
+                              <p className="text-xs text-gray-500 mt-0.5">More stable training (0.0025)</p>
+                            </div>
+                            <div title="Initial position learning rate">
+                              <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
+                                Position LR Init
+                              </label>
+                              <input
+                                type="number"
+                                value={customParams.position_lr_init}
+                                onChange={(e) => setCustomParams({ ...customParams, position_lr_init: parseFloat(e.target.value) || 0.00016 })}
+                                min="0.00001"
+                                max="0.001"
+                                step="0.00001"
+                                className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
+                              />
+                              <p className="text-xs text-gray-500 mt-0.5">Starting position LR (0.00016)</p>
+                            </div>
+                            <div title="Final position learning rate">
+                              <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
+                                Position LR Final
+                              </label>
+                              <input
+                                type="number"
+                                value={customParams.position_lr_final}
+                                onChange={(e) => setCustomParams({ ...customParams, position_lr_final: parseFloat(e.target.value) || 0.0000016 })}
+                                min="0.0000001"
+                                max="0.0001"
+                                step="0.0000001"
+                                className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
+                              />
+                              <p className="text-xs text-gray-500 mt-0.5">Ending position LR (0.0000016)</p>
+                            </div>
+                            <div title="Feature learning rate">
+                              <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
+                                Feature LR
+                              </label>
+                              <input
+                                type="number"
+                                value={customParams.feature_lr}
+                                onChange={(e) => setCustomParams({ ...customParams, feature_lr: parseFloat(e.target.value) || 0.0025 })}
+                                min="0.0001"
+                                max="0.01"
+                                step="0.0001"
+                                className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
+                              />
+                              <p className="text-xs text-gray-500 mt-0.5">Feature learning rate (0.0025)</p>
+                            </div>
+                            <div title="Opacity learning rate">
+                              <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
+                                Opacity LR
+                              </label>
+                              <input
+                                type="number"
+                                value={customParams.opacity_lr}
+                                onChange={(e) => setCustomParams({ ...customParams, opacity_lr: parseFloat(e.target.value) || 0.05 })}
+                                min="0.001"
+                                max="0.5"
+                                step="0.001"
+                                className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
+                              />
+                              <p className="text-xs text-gray-500 mt-0.5">Opacity LR (0.05)</p>
+                            </div>
+                            <div title="Scaling learning rate">
+                              <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
+                                Scaling LR
+                              </label>
+                              <input
+                                type="number"
+                                value={customParams.scaling_lr}
+                                onChange={(e) => setCustomParams({ ...customParams, scaling_lr: parseFloat(e.target.value) || 0.005 })}
+                                min="0.0001"
+                                max="0.05"
+                                step="0.0001"
+                                className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
+                              />
+                              <p className="text-xs text-gray-500 mt-0.5">Scaling LR (0.005)</p>
+                            </div>
+                            <div title="Rotation learning rate">
+                              <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
+                                Rotation LR
+                              </label>
+                              <input
+                                type="number"
+                                value={customParams.rotation_lr}
+                                onChange={(e) => setCustomParams({ ...customParams, rotation_lr: parseFloat(e.target.value) || 0.001 })}
+                                min="0.0001"
+                                max="0.01"
+                                step="0.0001"
+                                className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
+                              />
+                              <p className="text-xs text-gray-500 mt-0.5">Rotation LR (0.001)</p>
+                            </div>
+                            <div title="Percentage of dense points">
+                              <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
+                                Percent Dense
+                              </label>
+                              <input
+                                type="number"
+                                value={customParams.percent_dense}
+                                onChange={(e) => setCustomParams({ ...customParams, percent_dense: parseFloat(e.target.value) || 0.01 })}
+                                min="0.001"
+                                max="0.5"
+                                step="0.001"
+                                className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
+                              />
+                              <p className="text-xs text-gray-500 mt-0.5">Dense point percentage (0.01)</p>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* COLMAP SIFT Feature Parameters */}
+                        <div className="pt-2 border-b border-purple-200 pb-3">
+                          <h5 className="text-sm font-semibold text-purple-900 mb-2">🎯 COLMAP SIFT Feature Quality</h5>
+                          <div className="grid md:grid-cols-2 gap-3">
+                            <div title="SIFT peak threshold - สูงขึ้น = features ที่ robust กว่า">
+                              <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
+                                Peak Threshold
+                              </label>
+                              <input
+                                type="number"
+                                value={customParams.peak_threshold}
+                                onChange={(e) => setCustomParams({ ...customParams, peak_threshold: parseFloat(e.target.value) || 0.01 })}
+                                min="0.001"
+                                max="0.1"
+                                step="0.001"
+                                className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
+                              />
+                              <p className="text-xs text-gray-500 mt-0.5">More robust features (0.01)</p>
+                            </div>
+                            <div title="SIFT edge threshold - สูงขึ้น = กรอง false edges ได้ดีกว่า">
+                              <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
+                                Edge Threshold
+                              </label>
+                              <input
+                                type="number"
+                                value={customParams.edge_threshold}
+                                onChange={(e) => setCustomParams({ ...customParams, edge_threshold: parseFloat(e.target.value) || 15 })}
+                                min="5"
+                                max="30"
+                                step="1"
+                                className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
+                              />
+                              <p className="text-xs text-gray-500 mt-0.5">Reduce false edges (15)</p>
+                            </div>
+                            <div title="จำนวน orientations ต่อ keypoint - มากขึ้น = รับรู้ได้หลากหลายกว่า">
+                              <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
+                                Max Num Orientations
+                              </label>
+                              <input
+                                type="number"
+                                value={customParams.max_num_orientations}
+                                onChange={(e) => setCustomParams({ ...customParams, max_num_orientations: parseInt(e.target.value) || 2 })}
+                                min="1"
+                                max="5"
+                                className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
+                              />
+                              <p className="text-xs text-gray-500 mt-0.5">More orientation variety (2)</p>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* COLMAP Feature Extraction & Matching */}
+                        <div className="pt-2 border-b border-purple-200 pb-3">
+                          <h5 className="text-sm font-semibold text-purple-900 mb-2">🔍 COLMAP Feature Extraction & Matching</h5>
+                          <div className="grid md:grid-cols-2 gap-3">
+                            <div title="จำนวน SIFT features สูงสุดต่อภาพ - มากขึ้น = ดึงรายละเอียดได้มากขึ้น = จับคู่ได้ดีขึ้น">
+                              <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
+                                Max Features per Image
+                              </label>
+                              <input
+                                type="number"
+                                value={customParams.max_num_features}
+                                onChange={(e) => setCustomParams({ ...customParams, max_num_features: parseInt(e.target.value) || 12288 })}
+                                min="1024"
+                                max="32768"
+                                step="1024"
+                                className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
+                              />
+                              <p className="text-xs text-gray-500 mt-0.5">More feature points = Better coverage (12288)</p>
+                            </div>
+                            <div title="จำนวน match points สูงสุดต่อ image pair - มากขึ้น = การจับคู่แม่นยำกว่า">
+                              <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
+                                Max Matches per Pair
+                              </label>
+                              <input
+                                type="number"
+                                value={customParams.max_num_matches}
+                                onChange={(e) => setCustomParams({ ...customParams, max_num_matches: parseInt(e.target.value) || 32768 })}
+                                min="4096"
+                                max="65536"
+                                step="4096"
+                                className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
+                              />
+                              <p className="text-xs text-gray-500 mt-0.5">More accurate matching (32768)</p>
+                            </div>
+                            <div title="จำนวนภาพที่แต่ละภาพจะจับคู่ด้วย - มากขึ้น = connectivity ดีกว่า">
+                              <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
+                                Sequential Overlap
+                              </label>
+                              <input
+                                type="number"
+                                value={customParams.sequential_overlap}
+                                onChange={(e) => setCustomParams({ ...customParams, sequential_overlap: parseInt(e.target.value) || 18 })}
+                                min="5"
+                                max="50"
+                                className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
+                              />
+                              <p className="text-xs text-gray-500 mt-0.5">Better image connectivity (18)</p>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* COLMAP Mapper (Reconstruction) */}
+                        <div className="pt-2">
+                          <h5 className="text-sm font-semibold text-purple-900 mb-2">🏗️ COLMAP Sparse Reconstruction (Mapper)</h5>
+                          <div className="grid md:grid-cols-2 gap-3">
+                            <div title="จำนวน matches ขั้นต่ำที่ยอมรับ - น้อยกว่า = ยอมรับภาพที่ match ยากขึ้น = register ได้มากขึ้น">
+                              <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
+                                Min Num Matches
+                              </label>
+                              <input
+                                type="number"
+                                value={customParams.min_num_matches}
+                                onChange={(e) => setCustomParams({ ...customParams, min_num_matches: parseInt(e.target.value) || 16 })}
+                                min="6"
+                                max="50"
+                                className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
+                              />
+                              <p className="text-xs text-gray-500 mt-0.5">Accept weaker matches = More images registered (16)</p>
+                            </div>
+                            <div title="จำนวนโมเดลสูงสุดที่ลองสร้าง - มากขึ้น = โอกาสได้โมเดลที่ดีสูงขึ้น">
+                              <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
+                                Max Num Models
+                              </label>
+                              <input
+                                type="number"
+                                value={customParams.max_num_models}
+                                onChange={(e) => setCustomParams({ ...customParams, max_num_models: parseInt(e.target.value) || 40 })}
+                                min="5"
+                                max="100"
+                                className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
+                              />
+                              <p className="text-xs text-gray-500 mt-0.5">Try more models = Higher chance of good result (40)</p>
+                            </div>
+                            <div title="จำนวนครั้งที่ลอง initialize reconstruction - มากขึ้น = โอกาสสำเร็จสูงขึ้น">
+                              <label className="block text-xs font-medium text-gray-700 mb-1 cursor-help">
+                                Init Num Trials
+                              </label>
+                              <input
+                                type="number"
+                                value={customParams.init_num_trials}
+                                onChange={(e) => setCustomParams({ ...customParams, init_num_trials: parseInt(e.target.value) || 225 })}
+                                min="50"
+                                max="500"
+                                className="w-full px-2 py-1 text-sm border border-gray-300 rounded focus:ring-2 focus:ring-blue-500"
+                              />
+                              <p className="text-xs text-gray-500 mt-0.5">More init attempts = Higher success rate (225)</p>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </Accordion>
+                  )}
                 </div>
-              )}
+              </Accordion>
 
               {/* Requirements Info */}
               <div className="bg-gray-50 rounded-xl p-4">

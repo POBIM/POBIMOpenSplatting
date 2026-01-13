@@ -11,9 +11,11 @@
 # 5. Build COLMAP with CUDA support
 # 6. Build GLOMAP (10-100x faster sparse reconstruction)
 # 7. Build OpenSplat
-# 8. Setup Python environments
-# 9. Setup Node.js frontend
-# 10. Create quick-start script
+# 8. Setup hloc (neural feature matching with SuperPoint/SuperGlue/LightGlue)
+# 9. Setup FastMap (fast first-order SfM optimization)
+# 10. Setup Python environments (with reportlab for ArUco markers)
+# 11. Setup Node.js frontend
+# 12. Create quick-start script
 # =============================================================================
 
 set -e  # Exit on error
@@ -509,10 +511,21 @@ install_system_dependencies() {
         # OpenCV
         libopencv-dev
 
+        # HDF5 for hloc feature storage
+        libhdf5-dev
+        hdf5-tools
+
+        # OpenGL/Mesa for pyrender (FastMap visualization)
+        libosmesa6-dev
+        libgl1-mesa-dev
+        libglu1-mesa-dev
+        freeglut3-dev
+
         # Additional utilities
         lsof
         psmisc
         htop
+        ninja-build
     )
     
     print_info "Installing required packages..."
@@ -1005,6 +1018,124 @@ build_glomap_internal() {
 }
 
 # =============================================================================
+# Setup hloc (Hierarchical Localization - Neural Feature Matching)
+# =============================================================================
+
+setup_hloc() {
+    print_header "Setting up hloc (Neural Feature Matching)"
+    
+    HLOC_DIR="$PROJECT_ROOT/hloc"
+    
+    if [ ! -d "$HLOC_DIR" ]; then
+        print_warning "hloc directory not found at $HLOC_DIR"
+        print_info "hloc should be included as a git submodule"
+        return 1
+    fi
+    
+    print_info "hloc provides neural feature extraction and matching:"
+    echo "  - SuperPoint: State-of-the-art feature detection"
+    echo "  - SuperGlue/LightGlue: Neural feature matching"
+    echo "  - NetVLAD: Image retrieval for localization"
+    echo ""
+    
+    cd "$HLOC_DIR"
+    
+    if [ -d "$BACKEND_DIR/venv" ]; then
+        print_info "Installing hloc into backend virtual environment..."
+        source "$BACKEND_DIR/venv/bin/activate"
+        
+        print_info "Installing hloc dependencies..."
+        pip install --quiet torch torchvision 2>/dev/null || print_warning "PyTorch may need manual installation"
+        pip install --quiet tqdm matplotlib plotly scipy h5py kornia gdown pycolmap 2>/dev/null || true
+        
+        print_info "Installing LightGlue (fast feature matcher)..."
+        pip install --quiet "git+https://github.com/cvg/LightGlue" 2>/dev/null || print_warning "LightGlue installation may have failed"
+        
+        print_info "Installing hloc package..."
+        pip install -e . --quiet 2>/dev/null
+        
+        if [ $? -eq 0 ]; then
+            print_success "hloc installed successfully"
+        else
+            print_warning "hloc installation had some issues - check manually"
+        fi
+        
+        deactivate
+    else
+        print_warning "Backend venv not found - install Python backend first"
+        print_info "You can install hloc manually later with: pip install -e $HLOC_DIR"
+    fi
+    
+    cd "$PROJECT_ROOT"
+    echo ""
+}
+
+# =============================================================================
+# Setup FastMap (Fast First-Order SfM Optimization)
+# =============================================================================
+
+setup_fastmap() {
+    print_header "Setting up FastMap (Fast SfM Optimization)"
+    
+    FASTMAP_DIR="$PROJECT_ROOT/fastmap"
+    
+    if [ ! -d "$FASTMAP_DIR" ]; then
+        print_warning "FastMap directory not found at $FASTMAP_DIR"
+        print_info "FastMap should be included as a git submodule"
+        return 1
+    fi
+    
+    print_info "FastMap provides fast structure-from-motion optimization:"
+    echo "  - First-order optimization for camera poses"
+    echo "  - Optional CUDA acceleration"
+    echo "  - Faster than traditional bundle adjustment"
+    echo ""
+    
+    cd "$FASTMAP_DIR"
+    
+    if [ -d "$BACKEND_DIR/venv" ]; then
+        print_info "Installing FastMap into backend virtual environment..."
+        source "$BACKEND_DIR/venv/bin/activate"
+        
+        print_info "Installing FastMap Python dependencies..."
+        pip install --quiet trimesh pyyaml dacite loguru prettytable psutil 2>/dev/null || true
+        pip install --quiet "pyglet<2" 2>/dev/null || true
+        
+        print_info "Installing pyrender for visualization..."
+        pip install --quiet "git+https://github.com/jiahaoli95/pyrender.git" 2>/dev/null || print_warning "pyrender installation may have failed"
+        
+        if [ "$CUDA_ENABLED" = "ON" ] && [ -n "$CUDA_HOME" ]; then
+            print_info "Building FastMap CUDA kernels..."
+            export PATH="$CUDA_HOME/bin:$PATH"
+            export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$LD_LIBRARY_PATH"
+            
+            python setup.py build_ext --inplace 2>/dev/null
+            
+            if [ $? -eq 0 ]; then
+                print_success "FastMap CUDA kernels built successfully"
+            else
+                print_warning "FastMap CUDA build failed - will use CPU fallback"
+            fi
+        else
+            print_info "Skipping CUDA kernel build (CPU mode)"
+        fi
+        
+        print_info "Installing FastMap package..."
+        pip install -e . --quiet 2>/dev/null || true
+        
+        print_success "FastMap setup complete"
+        
+        deactivate
+    else
+        print_warning "Backend venv not found - install Python backend first"
+        print_info "You can install FastMap manually later"
+    fi
+    
+    cd "$PROJECT_ROOT"
+    echo ""
+}
+
+# =============================================================================
 # Build OpenSplat (uses global CUDA settings)
 # =============================================================================
 
@@ -1224,12 +1355,20 @@ setup_python_backend() {
     pip install --upgrade pip --quiet
     
     if [ -f "requirements.txt" ]; then
-        print_info "Installing Python dependencies..."
+        print_info "Installing Python dependencies from requirements.txt..."
         pip install -r requirements.txt --quiet
-        print_success "Python dependencies installed"
+        print_success "Base Python dependencies installed"
     else
         print_warning "requirements.txt not found"
     fi
+    
+    print_info "Installing additional dependencies for new features..."
+    
+    pip install --quiet reportlab 2>/dev/null && print_success "reportlab installed (ArUco marker PDF generation)" || true
+    
+    pip install --quiet h5py pycolmap 2>/dev/null && print_success "h5py, pycolmap installed (hloc support)" || true
+    
+    pip install --quiet kornia gdown 2>/dev/null && print_success "kornia, gdown installed (neural feature support)" || true
     
     deactivate
     
@@ -1402,7 +1541,6 @@ print_summary() {
     echo -e "${CYAN}Installation Summary:${NC}"
     echo "  • OpenSplat: $BUILD_DIR/opensplat"
     
-    # COLMAP location
     if command -v colmap &> /dev/null; then
         COLMAP_PATH=$(which colmap)
         echo "  • COLMAP: $COLMAP_PATH"
@@ -1414,7 +1552,6 @@ print_summary() {
         echo "  • COLMAP: $COLMAP_BUILD_DIR/src/colmap/exe/colmap"
     fi
     
-    # GLOMAP location (now part of COLMAP build)
     if [ -f "$COLMAP_BUILD_DIR/src/glomap/glomap" ]; then
         echo -e "  • GLOMAP: $COLMAP_BUILD_DIR/src/glomap/glomap ${GREEN}(built with COLMAP)${NC}"
     elif command -v glomap &> /dev/null; then
@@ -1422,9 +1559,16 @@ print_summary() {
         echo -e "  • GLOMAP: $GLOMAP_PATH ${GREEN}(10-100x faster sparse reconstruction)${NC}"
     fi
     
+    if [ -d "$PROJECT_ROOT/hloc" ]; then
+        echo -e "  • hloc: $PROJECT_ROOT/hloc ${GREEN}(SuperPoint/LightGlue neural matching)${NC}"
+    fi
+    
+    if [ -d "$PROJECT_ROOT/fastmap" ]; then
+        echo -e "  • FastMap: $PROJECT_ROOT/fastmap ${GREEN}(fast first-order SfM)${NC}"
+    fi
+    
     echo "  • LibTorch: $LIBTORCH_DIR"
     
-    # Show CUDA info if available
     if [ -n "$CUDA_VERSION" ]; then
         echo "  • CUDA: Version $CUDA_VERSION"
     fi
@@ -1436,6 +1580,11 @@ print_summary() {
     echo "  • GLOMAP: Recommended for faster processing (10-100x faster mapper)"
     echo "  • COLMAP: Classic option, more stable but slower"
     echo "  • Select engine in Frontend upload page"
+    echo ""
+    echo -e "${CYAN}Feature Matching Options:${NC}"
+    echo "  • SIFT: Classic feature matching (default, fast)"
+    echo "  • SuperPoint + LightGlue: Neural matching via hloc (higher quality)"
+    echo "  • Select in Frontend upload page under 'Feature Method'"
     echo ""
     echo -e "${CYAN}Quick Start Commands:${NC}"
     echo ""
@@ -1463,11 +1612,15 @@ print_summary() {
 build_sfm_engines() {
     print_header "Building SfM Engines (COLMAP + GLOMAP)"
     
-    echo -e "${CYAN}This will build both COLMAP and GLOMAP with the same CUDA configuration:${NC}"
+    echo -e "${CYAN}This will build COLMAP and GLOMAP with the same CUDA configuration:${NC}"
     echo ""
     echo "  • COLMAP: Feature extraction, matching, dense reconstruction"
     echo "  • GLOMAP: Fast global mapper (10-100x faster than COLMAP mapper)"
     echo "  • Both tools share COLMAP libraries for consistency"
+    echo ""
+    echo -e "${CYAN}Additional tools available after build:${NC}"
+    echo "  • hloc: Neural feature matching (SuperPoint/LightGlue)"
+    echo "  • FastMap: Fast first-order SfM optimization"
     echo ""
     
     if [ "$CUDA_ENABLED" = "ON" ]; then
@@ -1607,20 +1760,34 @@ main() {
         fi
     fi
     
-    # Step 9: Setup Node.js frontend
+    # Step 9: Setup hloc (neural feature matching)
+    if [ -d "$PROJECT_ROOT/hloc" ]; then
+        if prompt_yes_no "Setup hloc (neural feature matching with SuperPoint/LightGlue)?" "y"; then
+            setup_hloc
+        fi
+    fi
+    
+    # Step 10: Setup FastMap (fast SfM)
+    if [ -d "$PROJECT_ROOT/fastmap" ]; then
+        if prompt_yes_no "Setup FastMap (fast first-order SfM optimization)?" "y"; then
+            setup_fastmap
+        fi
+    fi
+    
+    # Step 11: Setup Node.js frontend
     if [ -d "$FRONTEND_DIR" ]; then
         if prompt_yes_no "Setup Node.js frontend?" "y"; then
             setup_nodejs_frontend
         fi
     fi
     
-    # Step 10: Create quick start script
+    # Step 12: Create quick start script
     create_quick_start_script
     
-    # Step 11: Create environment config
+    # Step 13: Create environment config
     create_env_config
     
-    # Step 12: Summary
+    # Step 14: Summary
     print_summary
     
     # Ask to start now

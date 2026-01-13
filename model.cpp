@@ -114,7 +114,13 @@ torch::Tensor Model::forward(Camera& cam, int step){
     float fovY = 2.0f * std::atan(height / (2.0f * fy));
 
     torch::Tensor projMat = projectionMatrix(0.001f, 1000.0f, fovX, fovY, width, height, cx, cy, device);
-    torch::Tensor colors =  torch::cat({featuresDc.index({Slice(), None, Slice()}), featuresRest}, 1);
+    
+    torch::Tensor featuresDcForColors = featuresDc;
+    torch::Tensor featuresRestForColors = featuresRest;
+    if (featuresRest.scalar_type() == torch::kFloat16) {
+        featuresRestForColors = featuresRest.to(torch::kFloat32);
+    }
+    torch::Tensor colors = torch::cat({featuresDcForColors.index({Slice(), None, Slice()}), featuresRestForColors}, 1);
 
     torch::Tensor conics;
     torch::Tensor depths; // GPU-only

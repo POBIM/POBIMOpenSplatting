@@ -44,7 +44,7 @@ export interface Project {
   camera_model?: string;
   thumbnail_url?: string;
   config?: {
-    sfm_engine?: 'glomap' | 'colmap';
+    sfm_engine?: 'glomap' | 'colmap' | 'fastmap';
     [key: string]: any;
   };
 }
@@ -163,6 +163,8 @@ export const api = {
     if (config.quality_mode) formData.append('quality_mode', config.quality_mode);
     if (config.camera_model) formData.append('camera_model', config.camera_model);
     if (config.matcher_type) formData.append('matcher_type', config.matcher_type);
+    if (config.sfm_engine) formData.append('sfm_engine', config.sfm_engine);
+    if (config.fast_sfm !== undefined) formData.append('fast_sfm', config.fast_sfm.toString());
 
     // Frame extraction config for videos
     if (config.extraction_mode) formData.append('extraction_mode', config.extraction_mode);

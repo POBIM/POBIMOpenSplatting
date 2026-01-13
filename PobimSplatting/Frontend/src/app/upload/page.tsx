@@ -27,6 +27,7 @@ export default function UploadPage() {
     preview_count: 10,
     sfm_engine: 'glomap',  // 'colmap' or 'glomap' - default to GLOMAP for 10-100x faster reconstruction
     use_gpu_extraction: true,  // GPU-accelerated video frame extraction (5-10x faster)
+    mixed_precision: false,
     // New resolution-based extraction settings
     colmap_resolution: '2K',  // Resolution for COLMAP feature extraction (720p, 1080p, 2K, 4K, 8K, original)
     training_resolution: '4K',  // Resolution for 3DGS training (higher quality)
@@ -781,6 +782,32 @@ export default function UploadPage() {
                         <p className="text-xs text-green-600 mt-1">✓ Same quality as COLMAP ✓ Much faster ✓ GPU accelerated</p>
                       </label>
 
+                      <label className={`flex-1 p-4 rounded-xl border-2 cursor-pointer transition-all ${config.sfm_engine === 'fastmap'
+                        ? 'border-purple-500 bg-purple-50 shadow-md'
+                        : 'border-gray-200 bg-white hover:border-purple-300'
+                        }`}>
+                        <input
+                          type="radio"
+                          name="sfm_engine"
+                          value="fastmap"
+                          checked={config.sfm_engine === 'fastmap'}
+                          onChange={(e) => setConfig({ ...config, sfm_engine: e.target.value })}
+                          className="sr-only"
+                        />
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <span className="font-bold text-purple-700 text-lg">⚡ FastMap</span>
+                            <span className="ml-2 px-2 py-0.5 bg-purple-500 text-white text-xs rounded-full">NEW</span>
+                          </div>
+                          <span className="text-purple-600 font-semibold">GPU-First</span>
+                        </div>
+                        <p className="text-sm text-gray-600 mt-2">
+                          First-order SfM optimized for GPU.
+                          <strong className="text-purple-700"> Best for video/dense scenes.</strong>
+                        </p>
+                        <p className="text-xs text-purple-600 mt-1">✓ GPU-native ✓ Dense coverage ⚠️ Less robust</p>
+                      </label>
+
                       <label className={`flex-1 p-4 rounded-xl border-2 cursor-pointer transition-all ${config.sfm_engine === 'colmap'
                         ? 'border-blue-500 bg-blue-100 shadow-md'
                         : 'border-gray-200 bg-white hover:border-blue-300'
@@ -807,6 +834,16 @@ export default function UploadPage() {
                         <p className="text-xs text-blue-600 mt-1">✓ Battle-tested ✓ Handles edge cases ✓ More options</p>
                       </label>
                     </div>
+
+                    {config.sfm_engine === 'fastmap' && (
+                      <div className="mt-3 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                        <p className="text-sm text-yellow-800">
+                          <strong>⚠️ FastMap Notice:</strong> Best for video frames with dense scene coverage. 
+                          May fail on sparse photo collections or low-quality images. 
+                          Use GLOMAP or COLMAP for more robust results.
+                        </p>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -871,6 +908,33 @@ export default function UploadPage() {
                       <p className="text-xs text-yellow-700 mt-2 flex items-center">
                         <span className="mr-1">🚀</span>
                         Auto-detects GPU and falls back to CPU if unavailable
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="mb-4 p-3 bg-gradient-to-r from-yellow-50 to-orange-50 rounded-lg border border-yellow-200">
+                    <label className="flex items-center justify-between cursor-pointer">
+                      <div className="flex items-center">
+                        <Zap className="h-5 w-5 text-yellow-600 mr-2" />
+                        <div>
+                          <span className="font-medium text-gray-900">Mixed Precision (FP16)</span>
+                          <p className="text-xs text-gray-600">30-50% lower VRAM usage with gradient scaling</p>
+                        </div>
+                      </div>
+                      <div className="relative">
+                        <input
+                          type="checkbox"
+                          checked={config.mixed_precision}
+                          onChange={(e) => setConfig({ ...config, mixed_precision: e.target.checked })}
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:bg-yellow-500 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+                      </div>
+                    </label>
+                    {config.mixed_precision && (
+                      <p className="text-xs text-yellow-700 mt-2 flex items-center">
+                        <span className="mr-1">⚡</span>
+                        Enables automatic gradient scaling for stable FP16 training
                       </p>
                     )}
                   </div>

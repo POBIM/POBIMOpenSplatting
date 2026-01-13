@@ -54,6 +54,13 @@ def get_glomap_executable():
 
 GLOMAP_PATH = get_glomap_executable()
 
+def get_fastmap_executable():
+    if hasattr(app_config, 'FASTMAP_PATH') and app_config.FASTMAP_PATH:
+        return app_config.FASTMAP_PATH
+    return None
+
+FASTMAP_PATH = get_fastmap_executable()
+
 def run_processing_pipeline_from_stage(project_id, paths, config, video_files, image_files, from_stage='ingest'):
     """Run the processing pipeline from a specific stage."""
     try:
@@ -1142,24 +1149,71 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
     if colmap_config:
         colmap_cfg = colmap_config
     
-    # Determine which SfM engine to use
-    sfm_engine = config.get('sfm_engine', 'glomap')  # Default to GLOMAP
+    sfm_engine = config.get('sfm_engine', 'glomap')
     use_glomap = sfm_engine == 'glomap' and GLOMAP_PATH is not None
+    use_fastmap = sfm_engine == 'fastmap' and FASTMAP_PATH is not None
+    fastmap_temp_dir = None  # Will be set if using FastMap
     
     update_state(project_id, 'sparse_reconstruction', status='running')
     update_stage_detail(project_id, 'sparse_reconstruction', text=f'Initializing...', subtext=f'{num_images} images')
     
-    if use_glomap:
+    if use_fastmap:
+        import sys
+        import shutil
+        import tempfile
+        append_log_line(project_id, "⚡ Running FastMap Structure-from-Motion (First-Order Optimization)")
+        append_log_line(project_id, f"🎯 GPU-native SfM for {num_images} images (best for dense coverage)")
+        
+        # FastMap requires output_dir to NOT exist - create unique path then remove it
+        fastmap_temp_dir = Path(tempfile.mkdtemp(prefix='fastmap_'))
+        shutil.rmtree(fastmap_temp_dir)  # Remove so FastMap can create it
+        
+        cmd = [
+            sys.executable or 'python3',
+            FASTMAP_PATH,
+            '--database', str(paths['database_path']),
+            '--image_dir', str(paths['images_path']),
+            '--output_dir', str(fastmap_temp_dir),
+            '--headless'
+        ]
+        
+        try:
+            import torch
+            if torch.cuda.is_available():
+                cmd.extend(['--device', 'cuda:0'])
+                append_log_line(project_id, "🎮 CUDA acceleration enabled")
+        except ImportError:
+            pass
+        
+        append_log_line(project_id, f"🔧 FastMap path: {FASTMAP_PATH}")
+        
+    elif use_glomap:
         append_log_line(project_id, "🚀 Running GLOMAP Global Structure-from-Motion (10-100x faster)")
         append_log_line(project_id, f"⚡ Global SfM mapper for {num_images} images")
         
-        # GLOMAP command - simpler than COLMAP, uses database directly
         cmd = [
             GLOMAP_PATH, 'mapper',
             '--database_path', str(paths['database_path']),
             '--image_path', str(paths['images_path']),
             '--output_path', str(paths['sparse_path'])
         ]
+        
+        if has_cuda:
+            cmd.extend([
+                '--GlobalPositioning.use_gpu', '1',
+                '--GlobalPositioning.gpu_index', '0',
+                '--BundleAdjustment.use_gpu', '1',
+                '--BundleAdjustment.gpu_index', '0',
+            ])
+            append_log_line(project_id, "🚀 GLOMAP GPU acceleration enabled (Global Positioning + Bundle Adjustment)")
+        
+        fast_sfm = config.get('fast_sfm', False)
+        if fast_sfm:
+            cmd.extend([
+                '--ba_iteration_num', '2',
+                '--retriangulation_iteration_num', '0',
+            ])
+            append_log_line(project_id, "⚡ Fast SfM mode: reduced iterations for speed")
         
         append_log_line(project_id, f"🔧 GLOMAP path: {GLOMAP_PATH}")
         
@@ -1215,6 +1269,18 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
         'ba_total': 3,  # Default BA iterations
     }
     
+    fastmap_stages = {
+        'focal_estimation': {'progress': 5, 'label': '🔍 Focal Length Estimation'},
+        'fundamental': {'progress': 15, 'label': '📐 Fundamental Matrix'},
+        'decompose': {'progress': 25, 'label': '🧩 Essential Decomposition'},
+        'rotation': {'progress': 40, 'label': '🔄 Global Rotation'},
+        'translation': {'progress': 55, 'label': '📍 Global Translation'},
+        'tracks': {'progress': 65, 'label': '🔗 Track Building'},
+        'epipolar': {'progress': 80, 'label': '⚡ Epipolar Adjustment'},
+        'sparse': {'progress': 92, 'label': '🏗️ Sparse Reconstruction'},
+        'output': {'progress': 98, 'label': '💾 Writing Results'},
+    }
+    
     def sparse_line_handler(line):
         if num_images == 0:
             return
@@ -1222,7 +1288,46 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
         line_lower = line.lower()
         line_stripped = line.strip()
         
-        # === GLOMAP-specific stage detection ===
+        if use_fastmap:
+            fastmap_patterns = [
+                ('focal_estimation', r'(estimating focal|focal length)'),
+                ('fundamental', r'(fundamental matrix|estimate fundamental)'),
+                ('decompose', r'(decompos|essential matrix)'),
+                ('rotation', r'(global rotation|rotation averaging)'),
+                ('translation', r'(global translation|translation estimation)'),
+                ('tracks', r'(build.*track|track.*build|establishing track)'),
+                ('epipolar', r'(epipolar adjustment|epipolar optimization)'),
+                ('sparse', r'(sparse reconstruction|triangulat)'),
+                ('output', r'(write|writing|output|saving)'),
+            ]
+            
+            for stage_key, pattern in fastmap_patterns:
+                if re.search(pattern, line_lower):
+                    stage_info = fastmap_stages[stage_key]
+                    progress = stage_info['progress']
+                    
+                    append_log_line(project_id, f"[FastMap] {stage_info['label']}")
+                    
+                    details = {
+                        'text': stage_info['label'],
+                        'current_item': progress,
+                        'total_items': 100,
+                        'item_name': stage_key,
+                        'fastmap_stage': stage_key,
+                        'sfm_engine': 'fastmap'
+                    }
+                    emit_stage_progress(project_id, 'sparse_reconstruction', progress, details)
+                    update_state(project_id, 'sparse_reconstruction', progress=progress, details=details)
+                    update_stage_detail(project_id, 'sparse_reconstruction', 
+                                      text=stage_info['label'], 
+                                      subtext=f'FastMap - {num_images} images')
+                    return
+            
+            important_keywords = ['error', 'warning', 'failed', 'done', 'finished', 'seconds', 'images', 'cameras', 'iter', 'loss']
+            if any(kw in line_lower for kw in important_keywords):
+                append_log_line(project_id, f"[FastMap] {line_stripped}")
+            return
+        
         if use_glomap:
             # Detect GLOMAP sub-stages from output
             stage_patterns = [
@@ -1411,9 +1516,40 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
     
     run_command_with_logs(project_id, cmd, line_handler=sparse_line_handler)
     
+    # FastMap outputs to temp dir - move to sparse_path/0/
+    if use_fastmap and fastmap_temp_dir is not None:
+        import shutil
+        fastmap_output = fastmap_temp_dir / 'sparse' / '0'
+        target_path = paths['sparse_path'] / '0'
+        
+        if fastmap_output.exists():
+            # Ensure target directory exists
+            target_path.mkdir(parents=True, exist_ok=True)
+            
+            # Move all files from FastMap output to target
+            for item in fastmap_output.iterdir():
+                dest = target_path / item.name
+                if dest.exists():
+                    if dest.is_dir():
+                        shutil.rmtree(dest)
+                    else:
+                        dest.unlink()
+                shutil.move(str(item), str(dest))
+            
+            append_log_line(project_id, f"📁 Moved FastMap output to {target_path}")
+        else:
+            append_log_line(project_id, f"⚠️ FastMap output not found at {fastmap_output}")
+        
+        # Cleanup temp directory
+        try:
+            shutil.rmtree(fastmap_temp_dir)
+            append_log_line(project_id, "🧹 Cleaned up FastMap temp directory")
+        except Exception as e:
+            append_log_line(project_id, f"⚠️ Could not cleanup temp dir: {e}")
+    
     update_state(project_id, 'sparse_reconstruction', status='completed', progress=100)
     registered = sparse_tracker['registered'] if sparse_tracker['registered'] else num_images
-    engine_name = "GLOMAP" if use_glomap else "COLMAP"
+    engine_name = "FastMap" if use_fastmap else ("GLOMAP" if use_glomap else "COLMAP")
     update_stage_detail(project_id, 'sparse_reconstruction', text=f'Images registered: {min(registered, num_images)}/{num_images}', subtext=f'{engine_name} reconstruction complete')
     append_log_line(project_id, f"✅ Sparse Reconstruction completed using {engine_name}")
     
@@ -1706,6 +1842,12 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
 
             append_log_line(project_id, f"⚡ Enhanced parameters: densify_threshold={densify_threshold}, refine_every={refine_every}")
 
+        # Mixed Precision (FP16) Training - reduces VRAM usage by ~30-50%
+        mixed_precision = config.get('mixed_precision', False)
+        if mixed_precision:
+            cmd.extend(['--mixed-precision'])
+            append_log_line(project_id, "🔥 Mixed Precision (FP16) enabled - faster training, lower VRAM usage")
+
         iteration_total = enhanced_iterations
 
         training_progress = {'current': 0, 'total': iteration_total}
@@ -1975,6 +2117,12 @@ def run_opensplat_training(project_id, paths, config, processing_start_time, tim
                 cmd.extend(['--reset-alpha-every', '20'])
 
             append_log_line(project_id, f"⚡ Enhanced parameters: densify_threshold={densify_threshold}")
+
+        # Mixed Precision (FP16) Training - reduces VRAM usage by ~30-50%
+        mixed_precision = config.get('mixed_precision', False)
+        if mixed_precision:
+            cmd.extend(['--mixed-precision'])
+            append_log_line(project_id, "🔥 Mixed Precision (FP16) enabled - faster training, lower VRAM usage")
 
         iteration_total = enhanced_iterations
         training_progress = {'current': 0, 'total': iteration_total}

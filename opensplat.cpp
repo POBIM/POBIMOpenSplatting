@@ -44,6 +44,10 @@ int main(int argc, char *argv[]){
         ("colmap-image-path", "Override the default image path for COLMAP-based input", cxxopts::value<std::string>()->default_value(""))
         ("crop-size", "Random crop size for training (0 to disable)", cxxopts::value<int>()->default_value("0"))
 
+        ("mixed-precision", "Enable mixed precision (FP16) training for faster speed and lower VRAM")
+        ("fp16-level", "FP16 precision level: 1=AMP autocast, 2=selective storage, 3=CUDA kernels (default: 1)", cxxopts::value<int>()->default_value("1"))
+        ("amp-warmup", "Number of iterations to run in FP32 before enabling AMP (default: 500)", cxxopts::value<int>()->default_value("500"))
+
         ("h,help", "Print usage")
         ("version", "Print version")
         ;
@@ -94,6 +98,11 @@ int main(int argc, char *argv[]){
     const float splitScreenSize = result["split-screen-size"].as<float>();
     const std::string colmapImageSourcePath = result["colmap-image-path"].as<std::string>();
     const int cropSize = result["crop-size"].as<int>();
+    
+    // Mixed precision options
+    const bool mixedPrecision = result.count("mixed-precision") > 0;
+    const int fp16Level = result["fp16-level"].as<int>();
+    const int ampWarmup = result["amp-warmup"].as<int>();
 
     torch::Device device = torch::kCPU;
     int displayStep = 10;
@@ -107,6 +116,12 @@ int main(int argc, char *argv[]){
     }else{
         std::cout << "Using CPU" << std::endl;
         displayStep = 1;
+    }
+
+    if (mixedPrecision && device != torch::kCPU) {
+        std::cout << "Mixed Precision: ENABLED (Level " << fp16Level << ", warmup " << ampWarmup << " iters)" << std::endl;
+    } else if (mixedPrecision && device == torch::kCPU) {
+        std::cout << "Mixed Precision: DISABLED (CPU mode does not support FP16)" << std::endl;
     }
 
 #ifdef USE_VISUALIZATION
@@ -150,6 +165,7 @@ int main(int argc, char *argv[]){
                     numDownscales, resolutionSchedule, shDegree, shDegreeInterval, 
                     refineEvery, warmupLength, resetAlphaEvery, densifyGradThresh, densifySizeThresh, stopScreenSizeAt, splitScreenSize,
                     numIters, keepCrs,
+                    mixedPrecision, fp16Level, ampWarmup,
                     device);
 
         std::vector< size_t > camIndices( cams.size() );
@@ -210,14 +226,33 @@ int main(int argc, char *argv[]){
             gt = gt.to(device);
 
             torch::Tensor mainLoss = model.mainLoss(rgb, gt, ssimWeight);
-            mainLoss.backward();
+            
+            bool useAMP = mixedPrecision && device != torch::kCPU && step >= ampWarmup;
+            torch::Tensor scaledLoss = useAMP ? model.gradScaler.scaleGradients(mainLoss) : mainLoss;
+            scaledLoss.backward();
+            
+            bool shouldStep = true;
+            if (useAMP) {
+                std::vector<torch::Tensor> params = {model.means, model.scales, model.quats, 
+                                                     model.featuresDc, model.featuresRest, model.opacities};
+                for (auto& p : params) {
+                    if (p.grad().defined()) {
+                        model.gradScaler.unscaleGradients(p.mutable_grad());
+                    }
+                }
+                shouldStep = model.gradScaler.step(params);
+            }
             
             if (step % displayStep == 0) {
                 const float percentage = static_cast<float>(step) / numIters;
-                std::cout << "Step " << step << ": " << mainLoss.item<float>() << " (" << floor(percentage * 100) << "%)" <<  std::endl;
+                std::cout << "Step " << step << ": " << mainLoss.item<float>() << " (" << floor(percentage * 100) << "%)";
+                if (useAMP) std::cout << " [AMP scale=" << model.gradScaler.scale << "]";
+                std::cout << std::endl;
             }
 
-            model.optimizersStep();
+            if (shouldStep) {
+                model.optimizersStep();
+            }
             model.schedulersStep(step);
             model.afterTrain(step);
 

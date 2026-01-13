@@ -164,6 +164,29 @@ GLOMAP_CANDIDATE_PATHS.extend(
     ]
 )
 
+FASTMAP_ENV_PATH = os.getenv("FASTMAP_PATH")
+FASTMAP_CANDIDATE_PATHS = []
+if FASTMAP_ENV_PATH:
+    FASTMAP_CANDIDATE_PATHS.append(Path(FASTMAP_ENV_PATH).expanduser())
+
+FASTMAP_CANDIDATE_PATHS.extend(
+    [
+        (REPO_ROOT / "fastmap" / "run.py").resolve(),
+        Path("/usr/local/bin/fastmap"),
+    ]
+)
+
+def get_fastmap_executable():
+    for candidate in FASTMAP_CANDIDATE_PATHS:
+        try:
+            if candidate.is_file():
+                return str(candidate)
+        except OSError:
+            continue
+    return None
+
+FASTMAP_PATH = get_fastmap_executable()
+
 # Vocabulary tree configuration
 VOCAB_TREE_URL = "https://demuc.de/colmap/vocab_tree_flickr100K_words32K.bin"
 VOCAB_TREE_FILENAME = "vocab_tree_flickr100K_words32K.bin"

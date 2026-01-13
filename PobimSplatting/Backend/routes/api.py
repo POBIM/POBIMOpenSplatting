@@ -119,6 +119,8 @@ def upload_files():
         'camera_model': request.form.get('camera_model', 'SIMPLE_RADIAL'),
         'matcher_type': request.form.get('matcher_type', 'sequential'),
         'quality_mode': quality_mode,
+        'sfm_engine': request.form.get('sfm_engine', 'glomap'),
+        'fast_sfm': request.form.get('fast_sfm', 'false').lower() == 'true',
 
         # Frame extraction configuration for videos
         'extraction_mode': request.form.get('extraction_mode', 'frames'),  # 'frames' or 'fps'
@@ -135,7 +137,9 @@ def upload_files():
         'use_separate_training_images': request.form.get('use_separate_training_images', 'false').lower() == 'true',
         
         # 8K Optimization - Patch-based training (works with all quality modes)
-        'crop_size': int(request.form.get('crop_size', 0))
+        'crop_size': int(request.form.get('crop_size', 0)),
+        # Mixed Precision (FP16) training for reduced VRAM usage
+        'mixed_precision': request.form.get('mixed_precision', 'false').lower() == 'true'
     }
 
     # Add custom parameters if in custom mode

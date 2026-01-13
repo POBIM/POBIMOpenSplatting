@@ -32,10 +32,13 @@ import {
 } from 'lucide-react';
 
 // Function to get stage labels based on SfM engine
-const getStageLabelForEngine = (stageKey: string, sfmEngine: 'glomap' | 'colmap' = 'glomap') => {
-  const isGlomap = sfmEngine === 'glomap';
+const getStageLabelForEngine = (stageKey: string, sfmEngine: 'glomap' | 'colmap' | 'fastmap' = 'glomap') => {
   const labels: Record<string, string> = {
-    'sparse_reconstruction': isGlomap ? 'GLOMAP Sparse Reconstruction' : 'COLMAP Sparse Reconstruction',
+    'sparse_reconstruction': sfmEngine === 'glomap' 
+      ? 'GLOMAP Sparse Reconstruction' 
+      : sfmEngine === 'fastmap'
+        ? 'FastMap Sparse Reconstruction'
+        : 'COLMAP Sparse Reconstruction',
   };
   return labels[stageKey];
 };
@@ -767,11 +770,10 @@ export default function ProjectDetailPage() {
 
               <div className="text-sm text-gray-500">
                 {getCurrentStage() ? (getStageLabelForEngine(getCurrentStage()?.key || '', project?.config?.sfm_engine) || PIPELINE_STAGES.find(s => s.key === getCurrentStage()?.key)?.label) : 'Initializing...'}
-                {/* Show GLOMAP sub-stage detail if available */}
                 {getCurrentStage()?.key === 'sparse_reconstruction' && 
-                 project?.config?.sfm_engine === 'glomap' && 
+                 (project?.config?.sfm_engine === 'glomap' || project?.config?.sfm_engine === 'fastmap') && 
                  stageDetails['sparse_reconstruction']?.text && (
-                  <span className="ml-2 text-blue-600">
+                  <span className={`ml-2 ${project?.config?.sfm_engine === 'fastmap' ? 'text-purple-600' : 'text-blue-600'}`}>
                     • {stageDetails['sparse_reconstruction'].text}
                   </span>
                 )}
@@ -791,7 +793,7 @@ export default function ProjectDetailPage() {
                       <Eye className="h-4 w-4 mr-2" />
                       ตรวจสอบ Sparse Model
                     </button>
-                    <p className="text-xs text-gray-500 mt-2">เปิด COLMAP GUI เพื่อตรวจสอบผล {project?.config?.sfm_engine === 'glomap' ? 'GLOMAP' : 'COLMAP'} sparse reconstruction</p>
+                    <p className="text-xs text-gray-500 mt-2">เปิด COLMAP GUI เพื่อตรวจสอบผล {project?.config?.sfm_engine === 'glomap' ? 'GLOMAP' : project?.config?.sfm_engine === 'fastmap' ? 'FastMap' : 'COLMAP'} sparse reconstruction</p>
                   </div>
                 );
               })()}
@@ -824,10 +826,12 @@ export default function ProjectDetailPage() {
                       </button>
                       <button
                         onClick={handleOpenColmapGUI}
-                        className="inline-flex items-center px-4 py-2 border border-gray-200 text-sm font-medium rounded-lg text-blue-600 hover:bg-blue-50 transition-colors"
+                        className={`inline-flex items-center px-4 py-2 border border-gray-200 text-sm font-medium rounded-lg transition-colors ${
+                          project?.config?.sfm_engine === 'fastmap' ? 'text-purple-600 hover:bg-purple-50' : 'text-blue-600 hover:bg-blue-50'
+                        }`}
                       >
                         <Eye className="h-4 w-4 mr-2" />
-                        {project?.config?.sfm_engine === 'glomap' ? 'GLOMAP' : 'COLMAP'}
+                        {project?.config?.sfm_engine === 'glomap' ? 'GLOMAP' : project?.config?.sfm_engine === 'fastmap' ? 'FastMap' : 'COLMAP'}
                       </button>
                       <button
                         onClick={handleDownload}
@@ -1049,6 +1053,37 @@ export default function ProjectDetailPage() {
                                 const isSubActive = currentProgress >= (subStage.progress - 10) && currentProgress < subStage.progress + 5;
                                 return (
                                   <div key={subStage.key} className={`flex items-center space-x-2 text-xs ${isSubCompleted ? 'text-green-600' : isSubActive ? 'text-blue-600 font-medium' : 'text-gray-400'}`}>
+                                    <span>{isSubCompleted ? '✓' : isSubActive ? '▶' : '○'}</span>
+                                    <span>{subStage.icon}</span>
+                                    <span>{subStage.label}</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* FastMap Sub-stages for sparse_reconstruction */}
+                        {expandedStage === 'sparse_reconstruction' && project?.config?.sfm_engine === 'fastmap' && stage.status === 'running' && (
+                          <div className="border-t border-gray-200 pt-4">
+                            <p className="text-xs font-medium text-purple-600 mb-3">⚡ FastMap Pipeline Steps</p>
+                            <div className="space-y-2">
+                              {[
+                                { key: 'focal_estimation', icon: '🔍', label: 'Focal Length Estimation', progress: 5 },
+                                { key: 'fundamental', icon: '📐', label: 'Fundamental Matrix', progress: 15 },
+                                { key: 'decompose', icon: '🧩', label: 'Essential Decomposition', progress: 25 },
+                                { key: 'rotation', icon: '🔄', label: 'Global Rotation', progress: 40 },
+                                { key: 'translation', icon: '📍', label: 'Global Translation', progress: 55 },
+                                { key: 'tracks', icon: '🔗', label: 'Track Building', progress: 65 },
+                                { key: 'epipolar', icon: '⚡', label: 'Epipolar Adjustment', progress: 80 },
+                                { key: 'sparse', icon: '🏗️', label: 'Sparse Reconstruction', progress: 92 },
+                                { key: 'output', icon: '💾', label: 'Writing Results', progress: 98 },
+                              ].map((subStage) => {
+                                const currentProgress = progress;
+                                const isSubCompleted = currentProgress >= subStage.progress;
+                                const isSubActive = currentProgress >= (subStage.progress - 10) && currentProgress < subStage.progress + 5;
+                                return (
+                                  <div key={subStage.key} className={`flex items-center space-x-2 text-xs ${isSubCompleted ? 'text-green-600' : isSubActive ? 'text-purple-600 font-medium' : 'text-gray-400'}`}>
                                     <span>{isSubCompleted ? '✓' : isSubActive ? '▶' : '○'}</span>
                                     <span>{subStage.icon}</span>
                                     <span>{subStage.label}</span>

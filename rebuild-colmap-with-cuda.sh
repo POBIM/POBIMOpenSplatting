@@ -126,6 +126,7 @@ cmake "$PROJECT_ROOT/colmap" \
     -DCMAKE_CUDA_COMPILER="$CUDA_HOME/bin/nvcc" \
     -DCUDA_TOOLKIT_ROOT_DIR="$CUDA_HOME" \
     -DCUDA_ENABLED=ON \
+    -DGLOMAP_CUDA_ENABLED=ON \
     -DGUI_ENABLED=$GUI_FLAG \
     -DCMAKE_INSTALL_PREFIX="$COLMAP_BUILD_DIR/install"
 
@@ -150,14 +151,34 @@ echo ""
 echo -e "${GREEN}✓ COLMAP build complete${NC}"
 echo ""
 
-# Update symlink
+# Update symlinks for COLMAP and GLOMAP
 COLMAP_BIN="$COLMAP_BUILD_DIR/src/colmap/exe/colmap"
+GLOMAP_BIN="$COLMAP_BUILD_DIR/src/glomap/glomap"
+
 if [ -f "$COLMAP_BIN" ]; then
-    echo -e "${CYAN}Updating symlink...${NC}"
+    echo -e "${CYAN}Updating COLMAP symlink...${NC}"
     sudo ln -sf "$COLMAP_BIN" /usr/local/bin/colmap
-    echo -e "${GREEN}✓ Symlink updated${NC}"
-    echo ""
+    echo -e "${GREEN}✓ COLMAP symlink updated${NC}"
 fi
+
+if [ -f "$GLOMAP_BIN" ]; then
+    echo -e "${CYAN}Updating GLOMAP symlink...${NC}"
+    sudo ln -sf "$GLOMAP_BIN" /usr/local/bin/glomap
+    echo -e "${GREEN}✓ GLOMAP symlink updated${NC}"
+    echo ""
+    
+    echo -e "${CYAN}Testing GLOMAP...${NC}"
+    GLOMAP_INFO=$("$GLOMAP_BIN" --help 2>&1 | head -n 3)
+    echo "$GLOMAP_INFO"
+    if echo "$GLOMAP_INFO" | grep -q "NOT compiled"; then
+        echo -e "${YELLOW}⚠ GLOMAP built WITHOUT CUDA${NC}"
+    elif echo "$GLOMAP_INFO" | grep -q "CUDA"; then
+        echo -e "${GREEN}✓ GLOMAP built with CUDA support!${NC}"
+    fi
+else
+    echo -e "${YELLOW}⚠ GLOMAP binary not found (may need COLMAP 3.14+)${NC}"
+fi
+echo ""
 
 # Test COLMAP
 echo -e "${CYAN}Testing COLMAP binary...${NC}"

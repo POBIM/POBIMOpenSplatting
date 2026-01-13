@@ -45,6 +45,7 @@ export interface Project {
   thumbnail_url?: string;
   config?: {
     sfm_engine?: 'glomap' | 'colmap' | 'fastmap';
+    feature_method?: 'sift' | 'aliked' | 'superpoint';
     [key: string]: any;
   };
 }
@@ -165,6 +166,7 @@ export const api = {
     if (config.matcher_type) formData.append('matcher_type', config.matcher_type);
     if (config.sfm_engine) formData.append('sfm_engine', config.sfm_engine);
     if (config.fast_sfm !== undefined) formData.append('fast_sfm', config.fast_sfm.toString());
+    if (config.feature_method) formData.append('feature_method', config.feature_method);
 
     // Frame extraction config for videos
     if (config.extraction_mode) formData.append('extraction_mode', config.extraction_mode);

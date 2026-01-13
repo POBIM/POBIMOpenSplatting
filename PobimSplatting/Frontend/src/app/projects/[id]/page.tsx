@@ -31,9 +31,21 @@ import {
   FileBox
 } from 'lucide-react';
 
-// Function to get stage labels based on SfM engine
-const getStageLabelForEngine = (stageKey: string, sfmEngine: 'glomap' | 'colmap' | 'fastmap' = 'glomap') => {
+const getStageLabelForEngine = (
+  stageKey: string, 
+  sfmEngine: 'glomap' | 'colmap' | 'fastmap' = 'glomap',
+  featureMethod: 'sift' | 'aliked' | 'superpoint' = 'sift'
+) => {
+  const isNeuralFeatures = featureMethod === 'aliked' || featureMethod === 'superpoint';
+  const featureLabel = featureMethod === 'aliked' ? 'ALIKED' : featureMethod === 'superpoint' ? 'SuperPoint' : 'SIFT';
+  
   const labels: Record<string, string> = {
+    'feature_extraction': isNeuralFeatures 
+      ? `hloc ${featureLabel} Extraction`
+      : 'COLMAP Feature Extraction',
+    'feature_matching': isNeuralFeatures
+      ? 'LightGlue Neural Matching'
+      : 'COLMAP Feature Matching',
     'sparse_reconstruction': sfmEngine === 'glomap' 
       ? 'GLOMAP Sparse Reconstruction' 
       : sfmEngine === 'fastmap'
@@ -769,7 +781,7 @@ export default function ProjectDetailPage() {
               </div>
 
               <div className="text-sm text-gray-500">
-                {getCurrentStage() ? (getStageLabelForEngine(getCurrentStage()?.key || '', project?.config?.sfm_engine) || PIPELINE_STAGES.find(s => s.key === getCurrentStage()?.key)?.label) : 'Initializing...'}
+                {getCurrentStage() ? (getStageLabelForEngine(getCurrentStage()?.key || '', project?.config?.sfm_engine, project?.config?.feature_method) || PIPELINE_STAGES.find(s => s.key === getCurrentStage()?.key)?.label) : 'Initializing...'}
                 {getCurrentStage()?.key === 'sparse_reconstruction' && 
                  (project?.config?.sfm_engine === 'glomap' || project?.config?.sfm_engine === 'fastmap') && 
                  stageDetails['sparse_reconstruction']?.text && (
@@ -947,7 +959,7 @@ export default function ProjectDetailPage() {
                               isStageError ? 'text-red-500 font-medium' :
                               'text-gray-400'
                             }`}>
-                              {getStageLabelForEngine(stageConfig.key, project?.config?.sfm_engine) || stageConfig.label}
+                              {getStageLabelForEngine(stageConfig.key, project?.config?.sfm_engine, project?.config?.feature_method) || stageConfig.label}
                             </p>
                           </div>
                         </div>
@@ -970,7 +982,7 @@ export default function ProjectDetailPage() {
                         <div className="flex items-center space-x-3">
                           <div className="text-2xl">{stageConfig?.icon}</div>
                           <div>
-                            <h4 className="text-lg font-semibold text-black">{getStageLabelForEngine(stageConfig?.key || '', project?.config?.sfm_engine) || stageConfig?.label}</h4>
+                            <h4 className="text-lg font-semibold text-black">{getStageLabelForEngine(stageConfig?.key || '', project?.config?.sfm_engine, project?.config?.feature_method) || stageConfig?.label}</h4>
                             <p className="text-sm text-gray-500 mt-1">
                               {stage.status === 'completed' ? '✓ Completed' :
                                stage.status === 'running' ? `⏳ In progress (${progress}%)` :
@@ -1295,7 +1307,7 @@ export default function ProjectDetailPage() {
                     <div className="flex-1">
                       <div className="flex items-center space-x-3">
                         <span className="text-xl">{stage.icon}</span>
-                        <span className="text-sm font-medium text-black">{getStageLabelForEngine(stage.key, project?.config?.sfm_engine) || stage.label}</span>
+                        <span className="text-sm font-medium text-black">{getStageLabelForEngine(stage.key, project?.config?.sfm_engine, project?.config?.feature_method) || stage.label}</span>
                       </div>
                       <div className="flex items-center space-x-2 mt-1.5 ml-9">
                         {isCompleted && (

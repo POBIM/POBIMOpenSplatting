@@ -26,6 +26,7 @@ export default function UploadPage() {
     quality: 100,  // Legacy - kept for backward compatibility
     preview_count: 10,
     sfm_engine: 'glomap',  // 'colmap' or 'glomap' - default to GLOMAP for 10-100x faster reconstruction
+    feature_method: 'sift',  // 'sift' (COLMAP), 'aliked' (hloc), 'superpoint' (hloc) - neural features are 10-20x faster
     use_gpu_extraction: true,  // GPU-accelerated video frame extraction (5-10x faster)
     mixed_precision: false,
     // New resolution-based extraction settings
@@ -845,6 +846,92 @@ export default function UploadPage() {
                       </div>
                     )}
                   </div>
+                </div>
+              </div>
+
+              {/* Feature Extraction Method Selection */}
+              <div className="bg-gradient-to-r from-cyan-50 to-teal-50 rounded-xl p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="font-semibold text-gray-900 flex items-center">
+                    <span className="mr-2">🔬</span>
+                    Feature Extraction Method
+                    <span className="ml-2 text-xs bg-cyan-100 text-cyan-700 px-2 py-1 rounded-full">ULTRA SPEED</span>
+                  </h4>
+                </div>
+                <p className="text-sm text-gray-600 mb-4">
+                  Neural features (ALIKED/SuperPoint) are <strong>10-20x faster</strong> than traditional SIFT for high-resolution images
+                </p>
+                <div className="space-y-3">
+                  <div className="flex flex-wrap gap-3">
+                    <label className={`flex-1 min-w-[200px] p-4 rounded-xl border-2 cursor-pointer transition-all ${config.feature_method === 'aliked'
+                      ? 'border-cyan-500 bg-cyan-50 shadow-lg shadow-cyan-100'
+                      : 'border-gray-200 bg-white hover:border-cyan-300'}`}>
+                      <div className="flex items-center">
+                        <input
+                          type="radio"
+                          name="feature_method"
+                          value="aliked"
+                          checked={config.feature_method === 'aliked'}
+                          onChange={(e) => setConfig({ ...config, feature_method: e.target.value })}
+                          className="sr-only"
+                        />
+                        <div>
+                          <span className="font-bold text-cyan-700 text-lg">⚡ ALIKED</span>
+                          <span className="ml-2 text-xs bg-cyan-200 text-cyan-800 px-2 py-0.5 rounded">Fastest</span>
+                          <p className="text-xs text-gray-500 mt-1">Neural features @ 125+ FPS</p>
+                          <p className="text-xs text-cyan-600 mt-1">+ LightGlue matching (10-20x faster)</p>
+                        </div>
+                      </div>
+                    </label>
+                    <label className={`flex-1 min-w-[200px] p-4 rounded-xl border-2 cursor-pointer transition-all ${config.feature_method === 'superpoint'
+                      ? 'border-indigo-500 bg-indigo-50 shadow-lg shadow-indigo-100'
+                      : 'border-gray-200 bg-white hover:border-indigo-300'}`}>
+                      <div className="flex items-center">
+                        <input
+                          type="radio"
+                          name="feature_method"
+                          value="superpoint"
+                          checked={config.feature_method === 'superpoint'}
+                          onChange={(e) => setConfig({ ...config, feature_method: e.target.value })}
+                          className="sr-only"
+                        />
+                        <div>
+                          <span className="font-bold text-indigo-700 text-lg">🎯 SuperPoint</span>
+                          <span className="ml-2 text-xs bg-indigo-200 text-indigo-800 px-2 py-0.5 rounded">Best Quality</span>
+                          <p className="text-xs text-gray-500 mt-1">Deep learning features @ 45 FPS</p>
+                          <p className="text-xs text-indigo-600 mt-1">+ LightGlue matching (excellent accuracy)</p>
+                        </div>
+                      </div>
+                    </label>
+                    <label className={`flex-1 min-w-[200px] p-4 rounded-xl border-2 cursor-pointer transition-all ${config.feature_method === 'sift'
+                      ? 'border-gray-500 bg-gray-50 shadow-lg shadow-gray-100'
+                      : 'border-gray-200 bg-white hover:border-gray-300'}`}>
+                      <div className="flex items-center">
+                        <input
+                          type="radio"
+                          name="feature_method"
+                          value="sift"
+                          checked={config.feature_method === 'sift'}
+                          onChange={(e) => setConfig({ ...config, feature_method: e.target.value })}
+                          className="sr-only"
+                        />
+                        <div>
+                          <span className="font-bold text-gray-700 text-lg">📐 SIFT</span>
+                          <span className="ml-2 text-xs bg-gray-200 text-gray-800 px-2 py-0.5 rounded">Classic</span>
+                          <p className="text-xs text-gray-500 mt-1">Traditional COLMAP features</p>
+                          <p className="text-xs text-gray-500 mt-1">Slower but most compatible</p>
+                        </div>
+                      </div>
+                    </label>
+                  </div>
+                  {(config.feature_method === 'aliked' || config.feature_method === 'superpoint') && (
+                    <div className="mt-3 p-3 bg-cyan-50 border border-cyan-200 rounded-lg">
+                      <p className="text-sm text-cyan-800">
+                        <strong>🚀 Neural Features:</strong> Using hloc with {config.feature_method === 'aliked' ? 'ALIKED' : 'SuperPoint'} + LightGlue. 
+                        Dramatically faster for high-resolution images (4K/8K). Results are imported into COLMAP database for SfM reconstruction.
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
 

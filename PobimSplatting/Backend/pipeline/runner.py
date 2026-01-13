@@ -61,6 +61,19 @@ def get_fastmap_executable():
 
 FASTMAP_PATH = get_fastmap_executable()
 
+def check_hloc_available():
+    """Check if hloc is available for neural feature extraction."""
+    if hasattr(app_config, 'HLOC_INSTALLED') and app_config.HLOC_INSTALLED:
+        return True
+    try:
+        import hloc
+        from lightglue import LightGlue, ALIKED
+        return True
+    except ImportError:
+        return False
+
+HLOC_AVAILABLE = check_hloc_available()
+
 def run_processing_pipeline_from_stage(project_id, paths, config, video_files, image_files, from_stage='ingest'):
     """Run the processing pipeline from a specific stage."""
     try:
@@ -936,6 +949,221 @@ def get_colmap_config_for_pipeline(paths, config, project_id=None):
     return num_images, colmap_config, colmap_exe, has_cuda
 
 
+# ===========================================================================
+# HLOC Neural Feature Extraction & Matching (ALIKED + LightGlue)
+# ===========================================================================
+
+def run_hloc_feature_extraction_stage(project_id, paths, config, colmap_config=None):
+    """Run hloc neural feature extraction (ALIKED or SuperPoint) - 10-20x faster than SIFT."""
+    num_images, colmap_cfg, colmap_exe, has_cuda = get_colmap_config_for_pipeline(paths, config, project_id)
+    
+    update_state(project_id, 'feature_extraction', status='running')
+    update_stage_detail(project_id, 'feature_extraction', text='Initializing neural features...', subtext='hloc ALIKED')
+    append_log_line(project_id, "⚡ Running hloc Neural Feature Extraction (ALIKED + LightGlue)")
+    append_log_line(project_id, f"🎯 Processing {num_images} images with GPU-accelerated neural features")
+    
+    try:
+        from pathlib import Path
+        from hloc import extract_features
+        from hloc.utils.io import list_h5_names
+        import pycolmap
+        import torch
+        
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        append_log_line(project_id, f"🎮 Using device: {device}")
+        
+        images_path = Path(paths['images_path'])
+        output_path = Path(paths['project_path'])
+        
+        # Use ALIKED for fastest extraction (125+ FPS)
+        feature_method = config.get('feature_method', 'aliked')
+        
+        if feature_method == 'superpoint':
+            feature_conf = extract_features.confs['superpoint_max']
+            append_log_line(project_id, "📌 Using SuperPoint features (best accuracy)")
+        else:
+            # ALIKED is default - fastest
+            feature_conf = extract_features.confs['aliked-n16']
+            append_log_line(project_id, "📌 Using ALIKED features (fastest - 125+ FPS)")
+        
+        # Adjust max keypoints based on quality mode
+        quality_mode = config.get('quality_mode', 'balanced')
+        if quality_mode == 'fast':
+            feature_conf = {**feature_conf, 'max_keypoints': 2048}
+        elif quality_mode == 'quality':
+            feature_conf = {**feature_conf, 'max_keypoints': 8192}
+        else:
+            feature_conf = {**feature_conf, 'max_keypoints': 4096}
+        
+        append_log_line(project_id, f"🔧 Max keypoints: {feature_conf.get('max_keypoints', 4096)}")
+        
+        # Run feature extraction
+        features_path = output_path / 'features.h5'
+        
+        # Progress callback
+        def progress_callback(current, total):
+            percent = int((current / total) * 100) if total > 0 else 0
+            details = {
+                'text': f'Images processed: {current}/{total}',
+                'current_item': current,
+                'total_items': total,
+                'item_name': f'Image {current}',
+                'feature_method': feature_method
+            }
+            emit_stage_progress(project_id, 'feature_extraction', percent, details)
+            update_state(project_id, 'feature_extraction', progress=min(percent, 99), details=details)
+            update_stage_detail(project_id, 'feature_extraction', 
+                              text=f'Images processed: {current}/{total}', 
+                              subtext=f'hloc {feature_method.upper()}')
+        
+        # Extract features
+        append_log_line(project_id, f"🚀 Starting feature extraction...")
+        features_path = extract_features.main(
+            feature_conf, 
+            images_path, 
+            output_path,
+            as_half=True  # Use FP16 for speed
+        )
+        
+        append_log_line(project_id, f"✅ Features saved to {features_path}")
+        
+        # Count extracted features
+        feature_names = list_h5_names(features_path)
+        append_log_line(project_id, f"📊 Extracted features from {len(feature_names)} images")
+        
+        update_state(project_id, 'feature_extraction', status='completed', progress=100)
+        update_stage_detail(project_id, 'feature_extraction', 
+                          text=f'Images processed: {num_images}/{num_images}', 
+                          subtext=f'hloc {feature_method.upper()} complete')
+        append_log_line(project_id, f"✅ hloc Feature Extraction completed ({feature_method.upper()})")
+        
+        # Store features path for matching stage
+        return {'features_path': str(features_path), 'feature_conf': feature_conf, 'colmap_config': colmap_cfg}
+        
+    except Exception as e:
+        append_log_line(project_id, f"❌ hloc feature extraction failed: {e}")
+        append_log_line(project_id, "⚠️ Falling back to COLMAP SIFT...")
+        # Fall back to COLMAP
+        return run_feature_extraction_stage(project_id, paths, config, colmap_config)
+
+
+def run_hloc_feature_matching_stage(project_id, paths, config, hloc_data=None):
+    """Run hloc LightGlue matching - 4-10x faster than nearest neighbor."""
+    num_images, colmap_cfg, colmap_exe, has_cuda = get_colmap_config_for_pipeline(paths, config, project_id)
+    
+    update_state(project_id, 'feature_matching', status='running')
+    update_stage_detail(project_id, 'feature_matching', text='Initializing LightGlue...', subtext='Neural matching')
+    append_log_line(project_id, "⚡ Running hloc LightGlue Matching (4-10x faster)")
+    
+    try:
+        from pathlib import Path
+        from hloc import match_features, pairs_from_exhaustive
+        from hloc.utils.io import list_h5_names
+        import pycolmap
+        import torch
+        
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        append_log_line(project_id, f"🎮 Using device: {device}")
+        
+        images_path = Path(paths['images_path'])
+        output_path = Path(paths['project_path'])
+        database_path = Path(paths['database_path'])
+        
+        # Get features path from previous stage
+        if hloc_data and 'features_path' in hloc_data:
+            features_path = Path(hloc_data['features_path'])
+            feature_conf = hloc_data.get('feature_conf', {})
+        else:
+            features_path = output_path / 'features.h5'
+            feature_conf = {}
+        
+        if not features_path.exists():
+            raise FileNotFoundError(f"Features file not found: {features_path}")
+        
+        # Generate image pairs (exhaustive for small datasets, sequential for large)
+        pairs_path = output_path / 'pairs.txt'
+        
+        # Get list of images
+        image_list = [f.name for f in images_path.iterdir() 
+                     if f.suffix.lower() in {'.jpg', '.jpeg', '.png', '.bmp', '.tiff'}]
+        
+        append_log_line(project_id, f"📊 Found {len(image_list)} images to match")
+        
+        # Calculate total pairs
+        total_pairs = len(image_list) * (len(image_list) - 1) // 2
+        append_log_line(project_id, f"🔗 Total pairs to match: {total_pairs}")
+        
+        # Generate pairs file
+        append_log_line(project_id, "📝 Generating image pairs...")
+        pairs_from_exhaustive.main(pairs_path, image_list=image_list)
+        
+        feature_method = config.get('feature_method', 'aliked')
+        
+        if feature_method == 'superpoint':
+            matcher_conf = match_features.confs['superpoint+lightglue']
+        else:
+            matcher_conf = match_features.confs['aliked+lightglue']
+        
+        append_log_line(project_id, f"⚡ Using LightGlue matcher for {feature_method.upper()} features")
+        
+        # Run matching
+        matches_path = output_path / 'matches.h5'
+        
+        append_log_line(project_id, "🚀 Starting LightGlue matching...")
+        
+        # Update progress periodically
+        update_stage_detail(project_id, 'feature_matching', 
+                          text=f'Matching pairs...', 
+                          subtext='LightGlue neural matching')
+        
+        matches_path = match_features.main(
+            matcher_conf,
+            pairs_path,
+            feature_conf.get('output', 'feats-aliked-n16'),
+            output_path
+        )
+        
+        append_log_line(project_id, f"✅ Matches saved to {matches_path}")
+        
+        # Import matches into COLMAP database
+        append_log_line(project_id, "📥 Importing features and matches to COLMAP database...")
+        
+        from hloc.triangulation import import_features, import_matches
+        
+        # Create fresh database if needed
+        if not database_path.exists():
+            db = pycolmap.Database(str(database_path))
+            db.create_tables()
+        
+        # Import features into database
+        import_features(images_path, database_path, features_path)
+        append_log_line(project_id, "✅ Features imported to database")
+        
+        # Import matches into database  
+        import_matches(images_path, database_path, pairs_path, matches_path)
+        append_log_line(project_id, "✅ Matches imported to database")
+        
+        update_state(project_id, 'feature_matching', status='completed', progress=100)
+        update_stage_detail(project_id, 'feature_matching', 
+                          text=f'Matched {total_pairs} pairs', 
+                          subtext='LightGlue complete')
+        append_log_line(project_id, f"✅ hloc LightGlue Matching completed")
+        
+        return colmap_cfg
+        
+    except Exception as e:
+        import traceback
+        append_log_line(project_id, f"❌ hloc matching failed: {e}")
+        append_log_line(project_id, traceback.format_exc())
+        append_log_line(project_id, "⚠️ Falling back to COLMAP matching...")
+        # Fall back to COLMAP
+        return run_feature_matching_stage(project_id, paths, config, hloc_data.get('colmap_config') if hloc_data else None)
+
+
+# ===========================================================================
+# COLMAP Feature Extraction & Matching (Original)
+# ===========================================================================
+
 def run_feature_extraction_stage(project_id, paths, config, colmap_config=None):
     """Run COLMAP Feature Extraction stage only."""
     num_images, colmap_cfg, colmap_exe, has_cuda = get_colmap_config_for_pipeline(paths, config, project_id)
@@ -1617,13 +1845,34 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
         colmap_stages = ['feature_extraction', 'feature_matching', 'sparse_reconstruction', 'model_conversion']
         start_index = colmap_stages.index(from_stage) if from_stage in colmap_stages else 0
 
+        # Check if using hloc neural features (ALIKED/SuperPoint + LightGlue)
+        feature_method = config.get('feature_method', 'sift')
+        use_hloc = feature_method in ['aliked', 'superpoint'] and HLOC_AVAILABLE
+        
+        hloc_data = None  # Will store hloc feature data for matching stage
+
         # 1. Feature Extraction (skip if starting from later stage)
         if start_index <= colmap_stages.index('feature_extraction'):
-            colmap_config = run_feature_extraction_stage(project_id, paths, config, colmap_config)
+            if use_hloc:
+                append_log_line(project_id, f"⚡ Using hloc neural features ({feature_method.upper()}) - 10-20x faster")
+                hloc_data = run_hloc_feature_extraction_stage(project_id, paths, config, colmap_config)
+                if isinstance(hloc_data, dict) and 'features_path' in hloc_data:
+                    colmap_config = hloc_data.get('colmap_config', colmap_config)
+                else:
+                    # Fallback occurred, hloc_data is actually colmap_config
+                    colmap_config = hloc_data
+                    hloc_data = None
+                    use_hloc = False
+            else:
+                colmap_config = run_feature_extraction_stage(project_id, paths, config, colmap_config)
 
         # 2. Feature Matching (skip if starting from later stage)
         if start_index <= colmap_stages.index('feature_matching'):
-            colmap_config = run_feature_matching_stage(project_id, paths, config, colmap_config)
+            if use_hloc and hloc_data:
+                append_log_line(project_id, "⚡ Using LightGlue neural matching - 4-10x faster")
+                colmap_config = run_hloc_feature_matching_stage(project_id, paths, config, hloc_data)
+            else:
+                colmap_config = run_feature_matching_stage(project_id, paths, config, colmap_config)
 
         # 3. Sparse Reconstruction (skip if starting from later stage)
         if start_index <= colmap_stages.index('sparse_reconstruction'):

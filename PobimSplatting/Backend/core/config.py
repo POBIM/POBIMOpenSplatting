@@ -187,6 +187,23 @@ def get_fastmap_executable():
 
 FASTMAP_PATH = get_fastmap_executable()
 
+# hloc (Hierarchical Localization) configuration
+# hloc provides neural feature extraction (ALIKED/SuperPoint) + LightGlue matching
+# Much faster than COLMAP SIFT for high-resolution images
+HLOC_PATH = (REPO_ROOT / "hloc").resolve()
+HLOC_AVAILABLE = HLOC_PATH.exists() and (HLOC_PATH / "hloc").exists()
+
+def check_hloc_available():
+    """Check if hloc is available and properly installed."""
+    try:
+        import hloc
+        from lightglue import LightGlue, ALIKED
+        return True
+    except ImportError:
+        return False
+
+HLOC_INSTALLED = check_hloc_available()
+
 # Vocabulary tree configuration
 VOCAB_TREE_URL = "https://demuc.de/colmap/vocab_tree_flickr100K_words32K.bin"
 VOCAB_TREE_FILENAME = "vocab_tree_flickr100K_words32K.bin"

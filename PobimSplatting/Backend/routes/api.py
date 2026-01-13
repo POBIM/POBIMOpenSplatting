@@ -121,6 +121,7 @@ def upload_files():
         'quality_mode': quality_mode,
         'sfm_engine': request.form.get('sfm_engine', 'glomap'),
         'fast_sfm': request.form.get('fast_sfm', 'false').lower() == 'true',
+        'feature_method': request.form.get('feature_method', 'sift'),
 
         # Frame extraction configuration for videos
         'extraction_mode': request.form.get('extraction_mode', 'frames'),  # 'frames' or 'fps'

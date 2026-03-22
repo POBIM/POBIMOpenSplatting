@@ -110,6 +110,31 @@ clear_sudo_credentials() {
     SUDO_AUTHENTICATED=false
 }
 
+select_python_cmd() {
+    if command -v python3.12 >/dev/null 2>&1; then
+        printf '%s' "python3.12"
+        return 0
+    fi
+
+    if command -v python3.11 >/dev/null 2>&1; then
+        printf '%s' "python3.11"
+        return 0
+    fi
+
+    if command -v python3 >/dev/null 2>&1; then
+        local version major minor
+        version=$(python3 --version | awk '{print $2}')
+        major=$(echo "$version" | cut -d. -f1)
+        minor=$(echo "$version" | cut -d. -f2)
+        if [ "$major" -eq 3 ] && [ "$minor" -ge 10 ] && [ "$minor" -le 12 ]; then
+            printf '%s' "python3"
+            return 0
+        fi
+    fi
+
+    return 1
+}
+
 # Function to check if a port is in use
 check_port() {
     local port=$1
@@ -359,13 +384,19 @@ check_system_status() {
 start_backend() {
     echo -e "${BLUE}Starting Backend Server...${NC}"
 
+    local python_cmd
+    if ! python_cmd=$(select_python_cmd); then
+        echo -e "${RED}✗ Python 3.10-3.12 is required for the backend (3.12 recommended).${NC}"
+        return 1
+    fi
+
     stop_backend_process true
     cd "$BACKEND_DIR"
 
     # Check if virtual environment exists
     if [ ! -d "venv" ]; then
-        echo -e "${YELLOW}Virtual environment not found. Creating...${NC}"
-        python3 -m venv venv
+        echo -e "${YELLOW}Virtual environment not found. Creating with ${python_cmd}...${NC}"
+        "$python_cmd" -m venv venv
         source venv/bin/activate
         pip install --upgrade pip
         pip install -r requirements.txt
@@ -376,8 +407,11 @@ start_backend() {
     # Kill existing process on port 5000
     kill_port 5000
 
-    # Start Flask server in background
-    python app.py > backend.log 2>&1 &
+    if [ "${FLASK_ENV:-development}" = "production" ]; then
+        gunicorn --config gunicorn.conf.py "PobimSplatting.Backend.app:app" > backend.log 2>&1 &
+    else
+        python app.py > backend.log 2>&1 &
+    fi
     BACKEND_PID=$!
     echo "$BACKEND_PID" > "$BACKEND_PID_FILE"
 
@@ -386,6 +420,11 @@ start_backend() {
     fi
     echo -e "${GREEN}✓ Backend started (PID: $BACKEND_PID)${NC}"
     echo -e "  URL: http://localhost:5000"
+    if [ "${FLASK_ENV:-development}" = "production" ]; then
+        echo -e "  Mode: gunicorn (production)"
+    else
+        echo -e "  Mode: python app.py (development)"
+    fi
     echo ""
 }
 

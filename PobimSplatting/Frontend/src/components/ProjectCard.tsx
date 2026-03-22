@@ -1,7 +1,6 @@
 'use client';
 
 import { useState } from 'react';
-import Image from 'next/image';
 import Link from 'next/link';
 import {
   Clock,
@@ -151,6 +150,7 @@ export default function ProjectCard({ project, onDelete, onDownload }: ProjectCa
                 ดู 3D
               </Link>
               <button
+                type="button"
                 onClick={() => onDownload(project.id, project.metadata?.name)}
                 className="btn-secondary text-xs py-1.5 flex-1 min-w-[80px] justify-center"
               >
@@ -161,6 +161,7 @@ export default function ProjectCard({ project, onDelete, onDownload }: ProjectCa
           )}
 
           <button
+            type="button"
             onClick={() => onDelete(project.id)}
             className="inline-flex items-center justify-center px-3 py-1.5 border border-gray-200 text-xs font-medium rounded-xl text-gray-600 hover:text-red-600 hover:border-red-200 transition-colors"
           >

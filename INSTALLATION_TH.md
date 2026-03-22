@@ -12,6 +12,18 @@
 - ✅ **OS**: Ubuntu 20.04/22.04 หรือ Debian-based Linux
 - ✅ **NVIDIA Driver**: เวอร์ชันล่าสุด
 - ✅ **CUDA Toolkit**: 11.8, 12.1 หรือ 12.6 (ติดตั้งก่อนใช้ script)
+- ✅ **Python**: รองรับ 3.10-3.12 (แนะนำ 3.12; `install.sh` จะเลือก 3.12 ก่อนถ้ามี)
+
+### Runtime Matrix
+
+| Platform | GPU Runtime | สถานะ | หมายเหตุ |
+|----------|-------------|-------|----------|
+| Ubuntu 20.04/22.04/24.04 | NVIDIA CUDA 11.8 / 12.1 / 12.6 | เส้นทางหลัก | `install.sh` และ `quick-start.sh` รองรับ flow นี้เป็นหลัก โดยแนะนำ CUDA 12.6 |
+| Ubuntu 22.04 | AMD ROCm 5.7 / 6.0 / 6.3 (HIP) | ขั้นสูง / Docker | ดู `Dockerfile.rocm`, `Dockerfile.rocm6`, และ `Dockerfile.rocm6.3.3` |
+| Ubuntu 24.04 | AMD ROCm 6.4 (HIP) | ขั้นสูง / Docker | ดู `Dockerfile.rocm6.4.0` |
+| macOS (Apple Silicon) | Metal / MPS | build แบบ manual | อ้างอิงขั้นตอนใน `README.md` หลักของโปรเจค |
+| Windows | CUDA 11.8 | build แบบ manual | อ้างอิงขั้นตอน Windows ใน `README.md` หลักของโปรเจค |
+| ทุกระบบที่รองรับ | CPU-only | รองรับ | ใช้งานได้แม้ไม่มี GPU แต่จะช้ากว่า CUDA/HIP/MPS มาก |
 
 ---
 

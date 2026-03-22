@@ -9,7 +9,7 @@ Build the native engine via:
 mkdir -p build && cd build
 cmake -DCMAKE_PREFIX_PATH=/path/to/libtorch .. && make -j$(nproc)
 ```
-Add `-DGPU_RUNTIME=HIP` or `-DGPU_RUNTIME=MPS` for AMD or Apple targets. Start PobimSplats with `cd PobimSplats && ./start.sh`. For PobimSplatting run `npm run dev` inside `PobimSplatting/Frontend` and `source venv/bin/activate && python app.py` inside `PobimSplatting/Backend`. Validate GPU integration through `./simple_gpu_test.sh` or `python test_gpu_colmap.py`.
+Add `-DGPU_RUNTIME=HIP` or `-DGPU_RUNTIME=MPS` for AMD or Apple targets. The primary tested runtime is Ubuntu + NVIDIA CUDA, while ROCm/HIP flows are maintained through the `Dockerfile.rocm*` images and Apple Silicon uses manual MPS builds from the root `README.md`. For PobimSplatting, use Python 3.10-3.12 with 3.12 preferred, run `npm run dev` inside `PobimSplatting/Frontend`, and run `source venv/bin/activate && python app.py` inside `PobimSplatting/Backend`. Validate GPU integration through `./simple_gpu_test.sh` or `python test_gpu_colmap.py`.
 
 ## Coding Style & Naming Conventions
 C++ sources use 4-space indentation, braces on the same line, camelCase functions, and PascalCase types; keep constants in ALL_CAPS and prefer `torch::` utilities over raw CUDA calls. Python services follow snake_case functions with module-level ALL_CAPS configuration, while React/Next components stay PascalCase with kebab-case filenames and Tailwind utilities rather than bespoke CSS. Apply `clang-format` or `black` only if you introduce tooling hooks—otherwise mirror the surrounding style.

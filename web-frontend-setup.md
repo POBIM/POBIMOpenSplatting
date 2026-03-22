@@ -15,7 +15,7 @@
 
 ### ความต้องการระบบ
 
-- Python 3.8+
+- Python 3.10-3.12 (3.12 recommended)
 - OpenSplat (compiled ด้วย CUDA support)
 - COLMAP
 - Flask และ dependencies

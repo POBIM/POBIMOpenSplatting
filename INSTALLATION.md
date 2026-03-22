@@ -12,6 +12,18 @@
 - ✅ **OS**: Ubuntu 20.04/22.04 or Debian-based Linux
 - ✅ **NVIDIA Driver**: Latest version
 - ✅ **CUDA Toolkit**: 11.8, 12.1, or 12.6 (must be installed before running script)
+- ✅ **Python**: 3.10-3.12 supported (3.12 recommended; `install.sh` will prefer 3.12 when available)
+
+### Runtime Matrix
+
+| Platform | GPU Runtime | Status | Notes |
+|----------|-------------|--------|-------|
+| Ubuntu 20.04/22.04/24.04 | NVIDIA CUDA 11.8 / 12.1 / 12.6 | Primary path | `install.sh` and `quick-start.sh` target this flow; CUDA 12.6 is the recommended default |
+| Ubuntu 22.04 | AMD ROCm 5.7 / 6.0 / 6.3 (HIP) | Advanced / Docker path | See `Dockerfile.rocm`, `Dockerfile.rocm6`, and `Dockerfile.rocm6.3.3` |
+| Ubuntu 24.04 | AMD ROCm 6.4 (HIP) | Advanced / Docker path | See `Dockerfile.rocm6.4.0` |
+| macOS (Apple Silicon) | Metal / MPS | Manual build | Follow the root `README.md` manual build steps |
+| Windows | CUDA 11.8 | Manual build | Follow the root `README.md` Windows build instructions |
+| Any supported OS | CPU-only | Supported | Works without GPU, but substantially slower than CUDA/HIP/MPS |
 
 ---
 
@@ -156,7 +168,7 @@ cd PobimSplatting/Backend
 rm -rf venv
 
 # Create new environment
-python3 -m venv venv
+python3 -m venv venv  # ensure python3 is 3.10-3.12
 source venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt

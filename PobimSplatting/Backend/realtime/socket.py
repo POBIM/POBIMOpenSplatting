@@ -5,7 +5,7 @@ Socket.IO initialisation and helpers.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
 
 from flask import request
 
@@ -14,17 +14,25 @@ from ..core.projects import register_emitters
 
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:
+    from flask_socketio import SocketIO as FlaskSocketIO
+
+SocketIOImport = Callable[..., Any] | None
+EmitCallable = Callable[..., Any] | None
+
 try:
     from flask_socketio import SocketIO, emit, join_room, leave_room
 except ImportError:  # pragma: no cover - optional dependency
-    SocketIO = None  # type: ignore[assignment]
-    emit = join_room = leave_room = None  # type: ignore[assignment]
+    SocketIO: SocketIOImport = None
+    emit: EmitCallable = None
+    join_room: EmitCallable = None
+    leave_room: EmitCallable = None
     logger.warning("Flask-SocketIO not available. Real-time updates disabled.")
 
-socketio: Optional["SocketIO"] = None
+socketio: Optional["FlaskSocketIO"] = None
 
 
-def init_socketio(app) -> Optional["SocketIO"]:
+def init_socketio(app) -> Optional["FlaskSocketIO"]:
     """
     Initialise Socket.IO if the dependency is available.
     """
@@ -34,7 +42,7 @@ def init_socketio(app) -> Optional["SocketIO"]:
         register_emitters()
         return None
 
-    socketio = SocketIO(app, cors_allowed_origins="*", logger=True)
+    socketio = SocketIO(app, cors_allowed_origins="*", logger=True, async_mode="threading")
     register_emitters(
         emit_stage_progress=_emit_stage_progress,
         emit_log_message=_emit_log_message,
@@ -49,7 +57,7 @@ def _emit_progress_update(project_id: str, event_type: str, data: Dict[str, Any]
         return
 
     try:
-        socketio.emit(event_type, data, room=project_id)
+        socketio.emit(event_type, data, to=project_id)
         logger.debug("Emitted %s to room %s: %s", event_type, project_id, data)
     except Exception as exc:  # pragma: no cover - logging only
         logger.error("Failed to emit progress update: %s", exc)
@@ -75,31 +83,42 @@ def _register_handlers() -> None:
     if not socketio or SocketIO is None:
         return
 
+    if emit is None or join_room is None or leave_room is None:
+        logger.warning("Socket.IO helpers are unavailable. Skipping realtime handlers.")
+        return
+
+    emit_fn: Callable[..., Any] = emit
+    join_room_fn: Callable[..., Any] = join_room
+    leave_room_fn: Callable[..., Any] = leave_room
+
+    def _request_sid() -> str:
+        return str(getattr(request, "sid", "unknown"))
+
     @socketio.on("connect")
     def on_connect():
-        logger.info("Client connected: %s", request.sid)
-        emit("connected", {"status": "Connected to PobimSplats"})
+        logger.info("Client connected: %s", _request_sid())
+        emit_fn("connected", {"status": "Connected to PobimSplats"})
 
     @socketio.on("disconnect")
     def on_disconnect():
-        logger.info("Client disconnected: %s", request.sid)
+        logger.info("Client disconnected: %s", _request_sid())
 
     @socketio.on("join_project")
     def on_join_project(data):
         project_id = data.get("project_id")
         if project_id and project_id in project_store.processing_status:
-            join_room(project_id)
-            logger.info("Client %s joined project %s", request.sid, project_id)
+            join_room_fn(project_id)
+            logger.info("Client %s joined project %s", _request_sid(), project_id)
 
             with project_store.status_lock:
                 project_data = project_store.processing_status[project_id].copy()
-            emit("project_status", project_data)
+            emit_fn("project_status", project_data)
         else:
-            emit("error", {"message": "Invalid project ID"})
+            emit_fn("error", {"message": "Invalid project ID"})
 
     @socketio.on("leave_project")
     def on_leave_project(data):
         project_id = data.get("project_id")
         if project_id:
-            leave_room(project_id)
-            logger.info("Client %s left project %s", request.sid, project_id)
+            leave_room_fn(project_id)
+            logger.info("Client %s left project %s", _request_sid(), project_id)

@@ -22,7 +22,7 @@
 
 1. **Python 3.12** (แนะนำ) ✅
 2. **Python 3.11** (รองรับ) ✅  
-3. **Python 3.10+** (ใช้งานได้) ✅
+3. **Python 3.10-3.12** (ใช้งานได้) ✅
 4. **ติดตั้ง Python 3.12** (ถ้าต้องการ) 🔧
 
 ## การทำงาน
@@ -38,12 +38,12 @@ if command -v python3.12; then
 elif command -v python3.11; then
     ⚠ "Using Python 3.11 instead"
     
-# ถ้าไม่มี ลอง Python 3.10+
+# ถ้าไม่มี ลอง Python 3.10-3.12
 elif command -v python3; then
     if version >= 3.10; then
         ⚠ "Using Python 3.x"
     else
-        ✗ "Python 3.10+ required"
+        ✗ "Python 3.10-3.12 required"
     fi
 fi
 ```
@@ -63,7 +63,7 @@ Install Python 3.12? [Y/n]: _
 - ตรวจสอบการติดตั้งสำเร็จ
 
 **ตอบ n:**
-- ใช้ Python version ที่มีอยู่ (3.10+)
+- ใช้ Python version ที่มีอยู่ (3.10-3.12)
 - แสดงคำเตือนและดำเนินการต่อ
 
 ### ✅ ขั้นตอนที่ 3: สร้าง Virtual Environment
@@ -134,7 +134,7 @@ Install Python 3.12? [Y/n]: n
 $ ./install.sh
 
 === Setting up Python Backend ===
-✗ Python 3.10+ required, found Python 2.7.18
+✗ Python 3.10-3.12 required, found Python 2.7.18
 
 ℹ Python 3.12 is recommended for best compatibility
 Install Python 3.12? [Y/n]: y
@@ -185,7 +185,8 @@ python3.12 --version
 | 3.12.x | ✅ Recommended | ทดสอบแล้ว ทำงานได้ดีที่สุด |
 | 3.11.x | ✅ Supported | ใช้งานได้ดี |
 | 3.10.x | ✅ Minimum | เวอร์ชันต่ำสุดที่รองรับ |
-| 3.9.x | ⚠️ May work | อาจใช้งานได้แต่ไม่แนะนำ |
+| 3.13.x | ⚠️ Not yet supported | dependencies บางตัวใน backend ยังไม่มี wheel ที่เข้ากัน |
+| 3.9.x | ❌ Unsupported | ต่ำกว่า baseline ที่รองรับ |
 | 3.8.x | ❌ Too old | ไม่รองรับ |
 | 2.7.x | ❌ Deprecated | ไม่รองรับเลย |
 
@@ -332,7 +333,7 @@ Total:              ~62 MB
 
 ### Q: ต้องใช้ Python 3.12 เท่านั้นหรือ?
 
-**A:** ไม่จำเป็น Python 3.10+ ก็ใช้งานได้ แต่ Python 3.12 แนะนำเพราะมี:
+**A:** ไม่จำเป็นต้องใช้ Python 3.12 เท่านั้น โดย Python 3.10-3.12 ก็ใช้งานได้ แต่ Python 3.12 แนะนำเพราะมี:
 - Performance ดีกว่า (~10-15% เร็วขึ้น)
 - Type hints ดีกว่า
 - Error messages ชัดเจนกว่า
@@ -345,7 +346,7 @@ Total:              ~62 MB
 
 **A:** ต้องดาวน์โหลดและติดตั้ง Python offline:
 1. ดาวน์โหลด `.deb` packages ล่วงหน้า
-2. หรือใช้ Python version ที่มีในระบบ (3.10+)
+2. หรือใช้ Python version ที่มีในระบบ (3.10-3.12)
 
 ### Q: Mac/Windows รองรับหรือไม่?
 
@@ -355,7 +356,7 @@ Total:              ~62 MB
 ## สรุป
 
 ✨ **ติดตั้งอัตโนมัติ** - ตรวจสอบและติดตั้ง Python 3.12  
-✨ **รองรับหลาย versions** - Python 3.10+ ใช้งานได้  
+✨ **รองรับหลาย versions** - Python 3.10-3.12 ใช้งานได้
 ✨ **Error handling ดี** - แสดงข้อความชัดเจนและแนะนำวิธีแก้  
 ✨ **User-friendly** - ถามผู้ใช้ก่อนติดตั้ง  
 ✨ **Fallback options** - มีทางเลือกถ้าไม่ต้องการติดตั้ง
@@ -363,4 +364,3 @@ Total:              ~62 MB
 ---
 
 **หมายเหตุ:** การเปลี่ยนแปลงนี้ทำให้ `install.sh` มั่นคงและใช้งานง่ายขึ้นมาก ผู้ใช้ไม่ต้องกังวลเรื่อง Python version อีกต่อไป!
-

@@ -73,7 +73,7 @@ rm -rf build colmap-build
 ```bash
 cd PobimSplatting/Backend
 rm -rf venv
-python3 -m venv venv
+python3 -m venv venv   # ensure python3 is 3.10-3.12
 source venv/bin/activate
 pip install -r requirements.txt
 ```

@@ -191,10 +191,12 @@ if command -v python3 &> /dev/null; then
     PYTHON_MAJOR=$(echo "$PYTHON_VERSION" | cut -d. -f1)
     PYTHON_MINOR=$(echo "$PYTHON_VERSION" | cut -d. -f2)
     
-    if [ "$PYTHON_MAJOR" -ge 3 ] && [ "$PYTHON_MINOR" -ge 8 ]; then
-        check_pass "Python $PYTHON_VERSION (required: 3.8+)"
+    if [ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -ge 10 ] && [ "$PYTHON_MINOR" -le 12 ]; then
+        check_pass "Python $PYTHON_VERSION (supported: 3.10-3.12, 3.12 recommended)"
+    elif [ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -ge 13 ]; then
+        check_warn "Python $PYTHON_VERSION detected (backend currently supports 3.10-3.12; 3.12 recommended)"
     else
-        check_warn "Python $PYTHON_VERSION (recommended: 3.8+)"
+        check_warn "Python $PYTHON_VERSION (backend requires Python 3.10-3.12; 3.12 recommended)"
     fi
 else
     check_fail "Python3 not installed"

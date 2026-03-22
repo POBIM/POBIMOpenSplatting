@@ -1276,11 +1276,11 @@ setup_python_backend() {
         PYTHON_MAJOR=$(echo $PYTHON_VERSION | cut -d'.' -f1)
         PYTHON_MINOR=$(echo $PYTHON_VERSION | cut -d'.' -f2)
         
-        if [ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -ge 10 ]; then
+        if [ "$PYTHON_MAJOR" -eq 3 ] && [ "$PYTHON_MINOR" -ge 10 ] && [ "$PYTHON_MINOR" -le 12 ]; then
             PYTHON_CMD="python3"
             print_warning "Python 3.12 not found, using Python $PYTHON_VERSION"
         else
-            print_error "Python 3.10+ required, found Python $PYTHON_VERSION"
+            print_error "Python 3.10-3.12 supported, found Python $PYTHON_VERSION"
         fi
     fi
     
@@ -1324,7 +1324,7 @@ setup_python_backend() {
             fi
         else
             if [ -z "$PYTHON_CMD" ]; then
-                print_error "Cannot continue without Python 3.10+"
+                print_error "Cannot continue without Python 3.10-3.12"
                 return 1
             fi
             print_info "Continuing with $PYTHON_CMD"

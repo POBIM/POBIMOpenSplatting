@@ -21,7 +21,7 @@ A modern web platform for 3D reconstruction using OpenSplat, featuring a Next.js
 
 ```
 PobimSplatting/
-├── Frontend/          # Next.js 15 with TypeScript
+├── Frontend/          # Next.js 16 with TypeScript
 │   ├── src/
 │   │   ├── app/      # App router pages
 │   │   ├── components/
@@ -43,7 +43,7 @@ PobimSplatting/
 ### Prerequisites
 
 - Node.js 20+
-- Python 3.8+
+- Python 3.10-3.12 (3.12 recommended)
 - NVIDIA GPU with CUDA (optional but recommended)
 - OpenSplat built and ready
 - COLMAP (optional for SfM)
@@ -61,7 +61,7 @@ npm install
 cd Backend
 ./setup_env.sh
 # Or manually:
-python3 -m venv venv
+python3 -m venv venv  # ensure python3 is 3.10-3.12
 source venv/bin/activate
 pip install -r requirements.txt
 ```
@@ -134,6 +134,22 @@ source venv/bin/activate
 python app.py
 ```
 
+### Backend Production-Style Start
+
+```bash
+cd Backend
+source venv/bin/activate
+gunicorn --config gunicorn.conf.py "PobimSplatting.Backend.app:app"
+```
+
+Or use the launcher from the `PobimSplatting/` directory:
+
+```bash
+FLASK_ENV=production ./start.sh start
+```
+
+The production config keeps `workers=1` and uses threaded Gunicorn so Flask-SocketIO room state stays in-process and compatible with the current backend threading model.
+
 ## Configuration
 
 ### Frontend (.env.local)
@@ -192,18 +208,18 @@ Ensure CUDA is installed and nvidia-smi is accessible.
 ## Tech Stack
 
 ### Frontend
-- Next.js 15
+- Next.js 16
 - TypeScript
 - Tailwind CSS
 - Lucide Icons
 - Socket.IO Client
 
 ### Backend
-- Flask 3.0
+- Flask 3.1
 - Flask-CORS
 - Flask-SocketIO
 - SQLite3
-- Python 3.8+
+- Python 3.10-3.12 (3.12 recommended)
 
 ## License
 

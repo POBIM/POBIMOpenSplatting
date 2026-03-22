@@ -42,9 +42,16 @@ cd Backend
 git pull
 source venv/bin/activate
 pip install -r requirements.txt
-# Restart backend
-./restart_backend.sh  # หรือคำสั่งที่ใช้ restart
+
+# Production-style backend start
+gunicorn --config gunicorn.conf.py "PobimSplatting.Backend.app:app"
+
+# หรือใช้ launcher จาก root ของ PobimSplatting
+cd ..
+FLASK_ENV=production ./start.sh start
 ```
+
+> หมายเหตุ: production path นี้ใช้ Gunicorn แบบ `gthread` และเก็บ `workers=1` เพื่อให้ Flask-SocketIO ที่ใช้ room state ใน process เดียวกันทำงานได้อย่างปลอดภัย
 
 ### 2. Frontend
 ```bash

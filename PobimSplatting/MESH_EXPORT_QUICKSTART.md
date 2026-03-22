@@ -42,6 +42,14 @@ source venv/bin/activate
 python app.py
 ```
 
+สำหรับ production-style run:
+
+```bash
+cd /home/pobimgroup/POBIMOpenSplat/PobimSplatting/Backend
+source venv/bin/activate
+gunicorn --config gunicorn.conf.py "PobimSplatting.Backend.app:app"
+```
+
 ### 2.2 ทดสอบ API Endpoints
 
 ```bash

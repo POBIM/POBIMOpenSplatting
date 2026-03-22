@@ -105,7 +105,7 @@ PobimSplatting/Backend/.env
 
 # Node.js
 node_modules/
-PobimSplatting/Frontend/package-lock.json
+PobimSplatting/package-lock.json
 
 # Generated scripts
 quick-start.sh

@@ -109,7 +109,7 @@ Comprehensive user guide available at:
 
 ### Backend not responding during mesh export
 - Normal - dense reconstruction takes time
-- Check `backend.log` for progress
+- Check `logs/backend.log` for progress
 - Monitor COLMAP processes: `ps aux | grep colmap`
 
 ### Out of memory

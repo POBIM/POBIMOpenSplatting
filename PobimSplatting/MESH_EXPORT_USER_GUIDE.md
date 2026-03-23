@@ -300,7 +300,7 @@ Low Quality (5 min) → ดูผลลัพธ์
 
 ## 📞 ต้องการความช่วยเหลือ?
 
-- **Backend Logs**: ดูที่ `Backend/backend.log`
+- **Backend Logs**: ดูที่ `logs/backend.log`
 - **Frontend Console**: กด F12 ใน browser
 - **GitHub Issues**: https://github.com/your-repo/issues
 

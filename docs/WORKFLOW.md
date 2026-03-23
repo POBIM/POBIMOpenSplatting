@@ -269,17 +269,22 @@ POBIMOpenSplat/
 ├── PobimSplatting/
 │   ├── start.sh ................... Server manager
 │   │
+│   ├── logs/
+│   │   ├── backend.log ............ Runtime log
+│   │   └── frontend.log ........... Runtime log
+│   │
+│   ├── runtime/
+│   │   ├── backend.pid ............ Backend PID file
+│   │   └── frontend.pid ........... Frontend PID file
+│   │
 │   ├── Backend/
 │   │   ├── venv/ .................. ✓ Python environment
 │   │   ├── requirements.txt ....... Python deps
 │   │   ├── app.py ................. Flask app
-│   │   ├── backend.log ............ Runtime log
-│   │   └── ...
 │   │
 │   └── Frontend/
 │       ├── node_modules/ .......... ✓ Node.js deps
 │       ├── package.json ........... Node.js deps
-│       ├── frontend.log ........... Runtime log
 │       └── ...
 │
 ├── datasets/ ...................... Input datasets

@@ -46,9 +46,9 @@ Then access the web interface at:
 - **Frontend**: http://localhost:3000
 - **Backend API**: http://localhost:5000
 
-📖 **Full Installation Guide**: See [INSTALLATION.md](INSTALLATION.md) (English) or [INSTALLATION_TH.md](INSTALLATION_TH.md) (ภาษาไทย)
+📖 **Full Installation Guide**: See [INSTALLATION.md](docs/INSTALLATION.md) (English) or [INSTALLATION_TH.md](docs/INSTALLATION_TH.md) (ภาษาไทย)
 
-📋 **Quick Reference**: See [QUICK_REFERENCE.md](QUICK_REFERENCE.md)
+📋 **Quick Reference**: See [QUICK_REFERENCE.md](docs/QUICK_REFERENCE.md)
 
 ---
 

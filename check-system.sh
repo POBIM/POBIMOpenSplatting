@@ -348,8 +348,8 @@ fi
 
 echo ""
 echo -e "${CYAN}For detailed installation instructions, see:${NC}"
-echo "  INSTALLATION.md (English)"
-echo "  INSTALLATION_TH.md (ภาษาไทย)"
+echo "  docs/INSTALLATION.md (English)"
+echo "  docs/INSTALLATION_TH.md (ภาษาไทย)"
 echo ""
 
 exit $FAIL_COUNT

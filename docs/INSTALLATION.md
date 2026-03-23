@@ -1,5 +1,7 @@
 # POBIMOpenSplat Installation Guide
 
+> Canonical navigation note: use [DOCS_INDEX.md](DOCS_INDEX.md) as the main documentation hub, and use the repo root `README.md` for the project overview.
+
 ## 📋 System Requirements
 
 ### Hardware Requirements

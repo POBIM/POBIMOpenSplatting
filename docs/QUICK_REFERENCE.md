@@ -1,5 +1,7 @@
 # POBIMOpenSplat - Quick Reference Card
 
+> This page is the day-to-day command sheet. For the canonical documentation map, start from [DOCS_INDEX.md](DOCS_INDEX.md).
+
 ## 🚀 Installation (First Time Only)
 
 ```bash

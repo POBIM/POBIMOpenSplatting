@@ -1,5 +1,7 @@
 # POBIMOpenSplat Installation Workflow
 
+> Documentation scope note: this file is the visual workflow companion. For primary navigation across docs, use [DOCS_INDEX.md](DOCS_INDEX.md).
+
 ```
 ╔═══════════════════════════════════════════════════════════════════════════╗
 ║                   POBIMOpenSplat Installation System                      ║

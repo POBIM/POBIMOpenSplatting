@@ -1,6 +1,7 @@
 # 📚 POBIMOpenSplat - Complete Installation System Documentation
 
 > This file is the canonical documentation hub for the reorganized repository. Use it to navigate installation, operations, troubleshooting, and supporting guides.
+> Start at the repo root `README.md` for the project overview, then use this page for day-to-day documentation navigation.
 
 ## 🎯 Overview
 
@@ -78,7 +79,15 @@ chmod +x check-system.sh
 | [**README.md**](../README.md) | Project overview และ original OpenSplat documentation |
 | [**AGENTS.md**](../AGENTS.md) | Repository guidelines และ development practices |
 
-### 5️⃣ **Repository Layout Policy**
+### 5️⃣ **Specialized / Legacy Notes**
+
+| Document | Status | Description |
+|----------|--------|-------------|
+| [**compile.md**](compile.md) | Legacy reference | Older manual compile notes; prefer `README.md` and installation docs for current flows |
+| [**compile-cuda.md**](compile-cuda.md) | Specialized | CUDA-focused manual compile notes for advanced users |
+| [**web-frontend-setup.md**](web-frontend-setup.md) | Legacy reference | Historical standalone web frontend notes; not the canonical platform setup path |
+
+### 6️⃣ **Repository Layout Policy**
 
 - `README.md` at the repo root is the project overview and first-stop entrypoint.
 - `docs/DOCS_INDEX.md` is the canonical documentation hub for ongoing navigation.
@@ -336,8 +345,8 @@ git clone https://github.com/POBIM/POBIMOpenSplat.git
 cd POBIMOpenSplat
 
 # 2. อ่านคู่มือ (เลือก 1 อย่าง)
-less INSTALLATION_TH.md  # ภาษาไทย
-less INSTALLATION.md     # English
+less docs/INSTALLATION_TH.md  # ภาษาไทย
+less docs/INSTALLATION.md     # English
 
 # 3. ตรวจสอบระบบ (ถ้าไม่แน่ใจ)
 ./check-system.sh

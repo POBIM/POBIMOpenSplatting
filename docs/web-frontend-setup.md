@@ -1,5 +1,7 @@
 # OpenSplat Web Frontend
 
+> Legacy note: this document describes an older standalone web-frontend flow and contains historical path assumptions. For the current supported platform setup, use the repo root `README.md`, [DOCS_INDEX.md](DOCS_INDEX.md), and the installation guides.
+
 เว็บอินเตอร์เฟสสำหรับการใช้งาน OpenSplat แบบง่าย สามารถอัพโหลดรูปภาพและสร้างโมเดล 3D Gaussian Splatting ได้โดยอัตโนมัติ
 
 ## ฟีเจอร์หลัก

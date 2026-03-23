@@ -1,5 +1,7 @@
 # POBIMOpenSplat - Complete Installation System
 
+> Documentation scope note: this file explains the installation system itself. For the canonical docs map, use [DOCS_INDEX.md](DOCS_INDEX.md).
+
 ## 📁 ไฟล์ที่สร้างขึ้น
 
 ### 1. **install.sh** - Installation Script หลัก

@@ -94,10 +94,10 @@ npm install
 tail -f install.log
 
 # Backend log
-tail -f PobimSplatting/Backend/backend.log
+tail -f PobimSplatting/logs/backend.log
 
 # Frontend log
-tail -f PobimSplatting/Frontend/frontend.log
+tail -f PobimSplatting/logs/frontend.log
 
 # Or use the menu
 cd PobimSplatting && ./start.sh

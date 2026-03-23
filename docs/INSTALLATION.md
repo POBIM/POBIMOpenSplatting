@@ -219,8 +219,8 @@ docker run -it --gpus all -p 3000:3000 -p 5000:5000 pobim-opensplat
 Installation and runtime logs:
 
 - **Installation log**: `install.log` (in root directory)
-- **Backend log**: `PobimSplatting/Backend/backend.log`
-- **Frontend log**: `PobimSplatting/Frontend/frontend.log`
+- **Backend log**: `PobimSplatting/logs/backend.log`
+- **Frontend log**: `PobimSplatting/logs/frontend.log`
 
 View logs with:
 
@@ -229,10 +229,10 @@ View logs with:
 tail -f install.log
 
 # View backend log
-tail -f PobimSplatting/Backend/backend.log
+tail -f PobimSplatting/logs/backend.log
 
 # View frontend log
-tail -f PobimSplatting/Frontend/frontend.log
+tail -f PobimSplatting/logs/frontend.log
 ```
 
 ---

@@ -219,8 +219,8 @@ docker run -it --gpus all -p 3000:3000 -p 5000:5000 pobim-opensplat
 การติดตั้งและการทำงานจะมี log files ดังนี้:
 
 - **Installation log**: `install.log` (ในโฟลเดอร์หลัก)
-- **Backend log**: `PobimSplatting/Backend/backend.log`
-- **Frontend log**: `PobimSplatting/Frontend/frontend.log`
+- **Backend log**: `PobimSplatting/logs/backend.log`
+- **Frontend log**: `PobimSplatting/logs/frontend.log`
 
 สามารถดู log ได้ด้วยคำสั่ง:
 
@@ -229,10 +229,10 @@ docker run -it --gpus all -p 3000:3000 -p 5000:5000 pobim-opensplat
 tail -f install.log
 
 # ดู backend log
-tail -f PobimSplatting/Backend/backend.log
+tail -f PobimSplatting/logs/backend.log
 
 # ดู frontend log
-tail -f PobimSplatting/Frontend/frontend.log
+tail -f PobimSplatting/logs/frontend.log
 ```
 
 ---

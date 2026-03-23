@@ -256,9 +256,9 @@ cd PobimSplatting
 
 1. **ตรวจสอบ logs**
    ```bash
-   cat install.log                           # Installation
-   tail -f PobimSplatting/Backend/backend.log   # Backend
-   tail -f PobimSplatting/Frontend/frontend.log # Frontend
+cat install.log                           # Installation
+tail -f PobimSplatting/logs/backend.log   # Backend
+tail -f PobimSplatting/logs/frontend.log  # Frontend
    ```
 
 2. **รัน system check**

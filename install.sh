@@ -1389,13 +1389,10 @@ setup_nodejs_frontend() {
         print_info "Installing Node.js dependencies (this may take a while)..."
         npm install
         print_success "Node.js dependencies installed"
-        
-        # Build Next.js production files (optional)
-        if prompt_yes_no "Build Next.js production bundle?" "n"; then
-            print_info "Building Next.js production bundle..."
-            npm run build
-            print_success "Production build complete"
-        fi
+
+        print_info "Building Next.js production bundle..."
+        npm run build
+        print_success "Production build complete"
     else
         print_warning "package.json not found in Frontend directory"
     fi

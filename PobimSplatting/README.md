@@ -54,6 +54,7 @@ PobimSplatting/
 ```bash
 cd Frontend
 npm install
+npm run build
 ```
 
 2. **Setup Backend Environment**:
@@ -123,6 +124,13 @@ The system will be available at:
 
 ```bash
 cd Frontend
+npm run build
+npm run start
+```
+
+For local hot-reload development only:
+
+```bash
 npm run dev
 ```
 

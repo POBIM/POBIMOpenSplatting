@@ -441,15 +441,23 @@ start_frontend() {
         npm install
     fi
 
+    if [ ! -d ".next" ]; then
+        echo -e "${YELLOW}Frontend production build not found. Building...${NC}"
+        if ! npm run build; then
+            echo -e "${RED}✗ Frontend build failed${NC}"
+            return 1
+        fi
+    fi
+
     # Kill existing process on port 3000
     kill_port 3000
 
-    # Start Next.js server in background
-    npm run dev > frontend.log 2>&1 &
+    npm run start > frontend.log 2>&1 &
     FRONTEND_PID=$!
     echo "$FRONTEND_PID" > "$FRONTEND_PID_FILE"
     echo -e "${GREEN}✓ Frontend started (PID: $FRONTEND_PID)${NC}"
     echo -e "  URL: http://localhost:3000"
+    echo -e "  Mode: next start (production)"
     echo ""
 }
 

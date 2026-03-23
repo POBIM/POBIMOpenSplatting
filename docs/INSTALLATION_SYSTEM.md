@@ -160,7 +160,7 @@ chmod +x check-system.sh
 - แสดง summary
 - เสนอให้เริ่ม server ทันที
 
-> Policy note: `install.log` and `.env.local` currently stay at the repository root by design because the installer owns them directly.
+> Policy note: the installer now writes logs to `PobimSplatting/logs/install.log`, while the root `.env.local` still stays at the repository root because the installer owns it directly.
 
 ---
 
@@ -306,7 +306,7 @@ cd POBIMOpenSplat
 
 1. **ดู logs ก่อน**
    ```bash
-   cat install.log
+   cat PobimSplatting/logs/install.log
    ```
 
 2. **รัน system check**

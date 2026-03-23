@@ -248,7 +248,7 @@ sudo apt-get install cuda-toolkit-12-x
 
 หากพบปัญหาหรือต้องการความช่วยเหลือ:
 - เปิด Issue บน GitHub repository
-- ตรวจสอบ log file: `install.log`
+- ตรวจสอบ log file: `PobimSplatting/logs/install.log`
 - อ่าน troubleshooting guide ด้านบน
 
 ---

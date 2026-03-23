@@ -37,6 +37,7 @@ COLMAP_BUILD_DIR="$PROJECT_ROOT/colmap-build"
 POBIM_SPLATTING_DIR="$PROJECT_ROOT/PobimSplatting"
 FRONTEND_DIR="$POBIM_SPLATTING_DIR/Frontend"
 BACKEND_DIR="$POBIM_SPLATTING_DIR/Backend"
+LOGS_DIR="$POBIM_SPLATTING_DIR/logs"
 
 # Configuration
 FRONTEND_PORT=3000
@@ -55,7 +56,8 @@ GPU_COMPUTE_CAP=""
 YES_TO_ALL="false"
 
 # Log file
-LOG_FILE="$PROJECT_ROOT/install.log"
+mkdir -p "$LOGS_DIR"
+LOG_FILE="$LOGS_DIR/install.log"
 exec > >(tee -a "$LOG_FILE")
 exec 2>&1
 

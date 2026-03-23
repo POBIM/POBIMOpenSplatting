@@ -40,7 +40,6 @@ cuda-keyring*.deb
 
 # Logs
 *.log
-install.log
 
 # Temporary files
 *.tmp
@@ -87,9 +86,6 @@ PobimSplatting/Backend/test_exports/
 .env
 .env.local
 PobimSplatting/Backend/.env
-
-# Root installer artifacts (kept at repo root by design for now)
-install.log
 
 # Node.js
 node_modules/

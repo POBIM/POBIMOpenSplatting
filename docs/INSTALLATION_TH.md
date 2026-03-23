@@ -220,7 +220,7 @@ docker run -it --gpus all -p 3000:3000 -p 5000:5000 pobim-opensplat
 
 การติดตั้งและการทำงานจะมี log files ดังนี้:
 
-- **Installation log**: `install.log` (ในโฟลเดอร์หลัก)
+- **Installation log**: `PobimSplatting/logs/install.log`
 - **Backend log**: `PobimSplatting/logs/backend.log`
 - **Frontend log**: `PobimSplatting/logs/frontend.log`
 
@@ -228,7 +228,7 @@ docker run -it --gpus all -p 3000:3000 -p 5000:5000 pobim-opensplat
 
 ```bash
 # ดู installation log
-tail -f install.log
+tail -f PobimSplatting/logs/install.log
 
 # ดู backend log
 tail -f PobimSplatting/logs/backend.log
@@ -243,7 +243,7 @@ tail -f PobimSplatting/logs/frontend.log
 
 ถ้าพบปัญหาในการติดตั้ง:
 
-1. ตรวจสอบ `install.log` ก่อนเสมอ
+1. ตรวจสอบ `PobimSplatting/logs/install.log` ก่อนเสมอ
 2. ตรวจสอบว่า GPU และ CUDA ทำงานได้ด้วย `nvidia-smi`
 3. ตรวจสอบว่ามีพื้นที่ว่างเพียงพอด้วย `df -h`
 4. ติดต่อทีมพัฒนาพร้อม log file

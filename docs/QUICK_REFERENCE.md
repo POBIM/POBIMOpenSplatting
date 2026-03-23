@@ -93,7 +93,7 @@ npm install
 
 ```bash
 # Installation log
-tail -f install.log
+tail -f PobimSplatting/logs/install.log
 
 # Backend log
 tail -f PobimSplatting/logs/backend.log
@@ -235,7 +235,7 @@ pkill -f "python app.py"
 ## 🌟 Pro Tips
 
 - **Bookmark this page** for quick reference
-- **Keep install.log** for troubleshooting
+- **Keep PobimSplatting/logs/install.log** for troubleshooting
 - **Run status check** before reporting issues
 - **Clear ports** if server won't start
 - **Use quick-start.sh** instead of manual commands

@@ -346,8 +346,8 @@ $ docker system prune -a  # ถ้าใช้ Docker
 
 หากพบปัญหาหรือต้องการความช่วยเหลือ:
 
-1. ตรวจสอบ install.log
-   $ tail -100 install.log
+1. ตรวจสอบ PobimSplatting/logs/install.log
+   $ tail -100 PobimSplatting/logs/install.log
 
 2. รัน test script
    $ ./test-cuda-check.sh

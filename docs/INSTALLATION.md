@@ -220,7 +220,7 @@ docker run -it --gpus all -p 3000:3000 -p 5000:5000 pobim-opensplat
 
 Installation and runtime logs:
 
-- **Installation log**: `install.log` (in root directory)
+- **Installation log**: `PobimSplatting/logs/install.log`
 - **Backend log**: `PobimSplatting/logs/backend.log`
 - **Frontend log**: `PobimSplatting/logs/frontend.log`
 
@@ -228,7 +228,7 @@ View logs with:
 
 ```bash
 # View installation log
-tail -f install.log
+tail -f PobimSplatting/logs/install.log
 
 # View backend log
 tail -f PobimSplatting/logs/backend.log
@@ -243,7 +243,7 @@ tail -f PobimSplatting/logs/frontend.log
 
 If you encounter installation issues:
 
-1. Always check `install.log` first
+1. Always check `PobimSplatting/logs/install.log` first
 2. Verify GPU and CUDA work with `nvidia-smi`
 3. Check available disk space with `df -h`
 4. Contact development team with log files

@@ -91,8 +91,9 @@ chmod +x check-system.sh
 
 - `README.md` at the repo root is the project overview and first-stop entrypoint.
 - `docs/DOCS_INDEX.md` is the canonical documentation hub for ongoing navigation.
-- `install.log` and `.env.local` intentionally remain at the repo root for now because `install.sh` writes and reads them directly.
-- Launcher runtime artifacts now belong under `PobimSplatting/logs/` and `PobimSplatting/runtime/`.
+- Installer logs now belong under `PobimSplatting/logs/install.log`.
+- The root `.env.local` intentionally remains at the repo root for now because `install.sh` writes and reads it directly.
+- Launcher runtime artifacts belong under `PobimSplatting/logs/` and `PobimSplatting/runtime/`.
 
 ---
 
@@ -177,10 +178,13 @@ POBIMOpenSplat/
 │   └── INSTALLATION_TH.md ............. คู่มือติดตั้ง
 │
 ├── 🔧 Generated Files (after installation)
-│   ├── install.log .................... Installation log
 │   └── .env.local ..................... Environment config
 │
 ├── 🏗️ Build Outputs
+│
+├── 🧾 Installer / Runtime Logs
+│   └── PobimSplatting/logs/install.log  Installation log
+│
 │   ├── build/opensplat ................ OpenSplat binary
 │   ├── colmap-build/colmap ............ COLMAP binary
 │   └── libtorch-cuda126/ .............. PyTorch library
@@ -230,7 +234,7 @@ POBIMOpenSplat/
 ### Q: ถ้าติดตั้งล้มเหลวทำยังไง?
 
 **A:**
-1. ดู `install.log` ก่อนเสมอ
+1. ดู `PobimSplatting/logs/install.log` ก่อนเสมอ
 2. รัน `./check-system.sh` ใหม่
 3. แก้ไขปัญหาที่พบ
 4. รัน `./install.sh` ใหม่ (มันจะ skip ส่วนที่ติดตั้งแล้ว)
@@ -274,7 +278,7 @@ cd PobimSplatting
 
 1. **ตรวจสอบ logs**
    ```bash
-cat install.log                           # Installation
+   cat PobimSplatting/logs/install.log       # Installation
 tail -f PobimSplatting/logs/backend.log   # Backend
 tail -f PobimSplatting/logs/frontend.log  # Frontend
    ```
@@ -290,7 +294,7 @@ tail -f PobimSplatting/logs/frontend.log  # Frontend
 
 4. **ติดต่อทีมพัฒนา**
    - GitHub Issues
-   - แนบ `install.log`
+   - แนบ `PobimSplatting/logs/install.log`
    - ระบุ OS, GPU, CUDA version
 
 ---
@@ -302,7 +306,7 @@ tail -f PobimSplatting/logs/frontend.log  # Frontend
 | **One-Command Install** | `./install.sh` ติดตั้งทุกอย่าง |
 | **Smart CUDA Detection** | เลือก LibTorch ให้อัตโนมัติ |
 | **System Validation** | ตรวจสอบก่อนติดตั้ง |
-| **Comprehensive Logging** | Debug ง่ายด้วย install.log |
+| **Comprehensive Logging** | Debug ง่ายด้วย `PobimSplatting/logs/install.log` |
 | **Quick Start** | `./quick-start.sh` ใช้งานได้ทันที |
 | **Multi-Language Docs** | ภาษาไทย + อังกฤษ |
 | **Interactive Prompts** | User-friendly installation |

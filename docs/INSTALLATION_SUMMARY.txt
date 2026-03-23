@@ -141,7 +141,7 @@ $ ./install.sh
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 หากพบปัญหา:
-1. ตรวจสอบ install.log
+1. ตรวจสอบ PobimSplatting/logs/install.log
 2. รัน ./test-cuda-check.sh
 3. อ่าน docs/CUDA_AUTO_INSTALL.md
 4. เปิด Issue บน GitHub

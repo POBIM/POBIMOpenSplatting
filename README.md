@@ -52,7 +52,7 @@ Then access the web interface at:
 
 📚 **Documentation Hub**: Start from [docs/DOCS_INDEX.md](docs/DOCS_INDEX.md) for the canonical docs map and navigation
 
-> Note: `install.log` and `.env.local` intentionally remain at the repository root for now because `install.sh` reads/writes them directly. They are treated as installer artifacts, not general project source files.
+> Note: `install.sh` now writes the installer log to `PobimSplatting/logs/install.log`. The root `.env.local` still remains at the repository root for now as an installer-owned artifact.
 
 ---
 

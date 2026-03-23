@@ -152,7 +152,7 @@
 │  Phase 9: Final Configuration                                           │
 │  ┌───────────────────────────────────────────────────────────────────┐  │
 │  │ Create .env.local with configuration                               │  │
-│  │ Save installation log → install.log                                │  │
+│  │ Save installation log → PobimSplatting/logs/install.log            │  │
 │  │ Display summary and access URLs                                    │  │
 │  └───────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -254,10 +254,7 @@ POBIMOpenSplat/
 ├── install.sh ..................... Main installation script
 ├── quick-start.sh ................. Quick start (auto-generated)
 ├── check-system.sh ................ System checker
-├── install.log .................... Installation log
 ├── .env.local ..................... Environment config
-│
-│   (installer-owned root artifacts kept in place intentionally)
 │
 ├── build/
 │   └── opensplat .................. ✓ Main binary
@@ -272,6 +269,7 @@ POBIMOpenSplat/
 │
 ├── PobimSplatting/
 │   ├── start.sh ................... Server manager
+│   ├── logs/install.log ........... Installation log
 │   │
 │   ├── logs/
 │   │   ├── backend.log ............ Runtime log
@@ -330,7 +328,7 @@ POBIMOpenSplat/
 │  Troubleshooting                                                        │
 ├─────────────────────────────────────────────────────────────────────────┤
 │  ./check-system.sh          # Re-check system                          │
-│  tail -f install.log        # View installation log                    │
+│  tail -f PobimSplatting/logs/install.log  # View installation log      │
 │  cd PobimSplatting          #                                           │
 │  ./start.sh                 # Interactive menu                          │
 │    → 5) View logs           # Check runtime logs                       │
@@ -345,7 +343,7 @@ POBIMOpenSplat/
 ✓ One-Command Installation      → ./install.sh
 ✓ Smart CUDA Detection          → Auto-selects correct LibTorch
 ✓ Comprehensive Error Checking  → Validates at each step
-✓ Detailed Logging              → Full install.log for debugging
+✓ Detailed Logging              → Full PobimSplatting/logs/install.log for debugging
 ✓ Interactive Prompts           → User-friendly installation
 ✓ Quick Start Script            → ./quick-start.sh for future use
 ✓ System Validation             → check-system.sh before install

@@ -11,6 +11,7 @@ glomap-build/
 .idea/
 .vscode/
 .claude/
+.cache/
 node_modules.root-owned
 
 # Python

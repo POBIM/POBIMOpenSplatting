@@ -54,9 +54,13 @@ Then access the web interface at:
 
 > Note: `install.sh` now writes the installer log to `PobimSplatting/logs/install.log`. The root `.env.local` still remains at the repository root for now as an installer-owned artifact.
 
+> Layout note: the local C++ engine layout now uses `apps/` for entrypoints, `src/` for engine implementation, and `include/opensplat/` for public/internal engine headers, while `rasterizer/` remains in place and the built binaries still land in `build/`.
+
 ---
 
 ### Original OpenSplat (Command Line)
+
+> Note: the build instructions in this section describe the original upstream OpenSplat CLI flow. This POBIM fork keeps the same binary outputs, but the local source layout now uses `apps/`, `src/`, and `include/opensplat/`.
 
 If you're on Windows, you can [buy](http://sites.fastspring.com/masseranolabs/product/opensplatforwindows) the pre-built program. This saves you time and helps support the project ❤️. Then jump directly to the [run](#run) section. As an alternative, check the [build](#build) section below.
 

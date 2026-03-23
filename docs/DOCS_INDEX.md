@@ -159,6 +159,8 @@ cd PobimSplatting && ./start.sh
 
 ## 📊 File Structure Overview
 
+> Layout note: this local fork now keeps OpenSplat C++ entrypoints in `apps/`, engine implementation in `src/`, and engine headers in `include/opensplat/`. `rasterizer/` remains at the repo root, and binaries still build into `build/`.
+
 ```
 POBIMOpenSplat/
 │
@@ -181,13 +183,18 @@ POBIMOpenSplat/
 │   └── .env.local ..................... Environment config
 │
 ├── 🏗️ Build Outputs
-│
-├── 🧾 Installer / Runtime Logs
-│   └── PobimSplatting/logs/install.log  Installation log
-│
 │   ├── build/opensplat ................ OpenSplat binary
 │   ├── colmap-build/colmap ............ COLMAP binary
 │   └── libtorch-cuda126/ .............. PyTorch library
+│
+├── 🧠 Native C++ Engine
+│   ├── apps/ ......................... CLI entrypoints (`opensplat`, `simple_trainer`, optional visualizer)
+│   ├── src/ .......................... Engine implementation files
+│   ├── include/opensplat/ ............ Engine headers
+│   └── rasterizer/ ................... GPU/CPU backend sources kept in place
+│
+├── 🧾 Installer / Runtime Logs
+│   └── PobimSplatting/logs/install.log  Installation log
 │
 └── 🌐 Web Platform
     └── PobimSplatting/

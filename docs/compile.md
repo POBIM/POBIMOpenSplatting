@@ -2,6 +2,8 @@
 
 ## คู่มือการ Compile OpenSplat บน Ubuntu (WSL2)
 
+> Legacy note: this guide was written for the older flat source layout. The current local fork now keeps C++ entrypoints in `apps/`, implementation in `src/`, and headers in `include/opensplat/`, while the binary outputs still land in `build/`.
+
 ### ปัญหาที่พบและวิธีแก้ไข
 
 การ compile OpenSplat บน Ubuntu อาจพบปัญหา linking error กับ OpenCV เนื่องจาก C++ ABI incompatibility ระหว่าง libtorch และ OpenCV

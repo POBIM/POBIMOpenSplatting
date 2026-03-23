@@ -247,15 +247,41 @@ endif()
 add_library(gsplat_cpu rasterizer/gsplat-cpu/gsplat_cpu.cpp)
 target_include_directories(gsplat_cpu PRIVATE ${TORCH_INCLUDE_DIRS})
 
-set(OPENSPLAT_SRC_FILES opensplat.cpp point_io.cpp nerfstudio.cpp model.cpp
-kdtree_tensor.cpp spherical_harmonics.cpp cv_utils.cpp utils.cpp project_gaussians.cpp
-rasterize_gaussians.cpp ssim.cpp optim_scheduler.cpp colmap.cpp opensfm.cpp openmvg.cpp input_data.cpp
-tensor_math.cpp)
+set(OPENSPLAT_INCLUDE_DIRS
+    ${PROJECT_SOURCE_DIR}/include/opensplat
+    ${PROJECT_SOURCE_DIR}/rasterizer
+    ${GPU_INCLUDE_DIRS}
+    /usr/include/opencv4
+)
+
+set(OPENSPLAT_ENGINE_SRC_FILES
+    src/point_io.cpp
+    src/nerfstudio.cpp
+    src/model.cpp
+    src/kdtree_tensor.cpp
+    src/spherical_harmonics.cpp
+    src/cv_utils.cpp
+    src/utils.cpp
+    src/project_gaussians.cpp
+    src/rasterize_gaussians.cpp
+    src/ssim.cpp
+    src/optim_scheduler.cpp
+    src/colmap.cpp
+    src/opensfm.cpp
+    src/openmvg.cpp
+    src/input_data.cpp
+    src/tensor_math.cpp
+)
+
+set(OPENSPLAT_SRC_FILES
+    apps/opensplat.cpp
+    ${OPENSPLAT_ENGINE_SRC_FILES}
+)
 
 if (OPENSPLAT_BUILD_VISUALIZER)
     if (Pangolin_FOUND)
         message(STATUS "Found Pangolin. Building visualizer (beta)")
-        list(APPEND OPENSPLAT_SRC_FILES visualizer.cpp)
+        list(APPEND OPENSPLAT_SRC_FILES apps/visualizer.cpp)
         add_definitions(-DUSE_VISUALIZATION)
     else()
         message(FATAL "Pangolin not found. Cannot build visualizer (beta)")
@@ -267,9 +293,7 @@ add_executable(opensplat ${OPENSPLAT_SRC_FILES})
 install(TARGETS opensplat DESTINATION bin)
 set_property(TARGET opensplat PROPERTY CXX_STANDARD 17)
 target_include_directories(opensplat PRIVATE
-    ${PROJECT_SOURCE_DIR}/rasterizer
-    ${GPU_INCLUDE_DIRS}
-    /usr/include/opencv4
+    ${OPENSPLAT_INCLUDE_DIRS}
 )
 target_link_libraries(opensplat PUBLIC ${STDPPFS_LIBRARY} ${GPU_LIBRARIES} ${GSPLAT_LIBS})
 # Link libraries in correct order - Torch first, then OpenCV from pkg-config
@@ -296,12 +320,15 @@ elseif(GPU_RUNTIME STREQUAL "MPS")
 endif()
 
 if(OPENSPLAT_BUILD_SIMPLE_TRAINER)
-    add_executable(simple_trainer simple_trainer.cpp project_gaussians.cpp rasterize_gaussians.cpp cv_utils.cpp)
+    add_executable(simple_trainer
+        apps/simple_trainer.cpp
+        src/project_gaussians.cpp
+        src/rasterize_gaussians.cpp
+        src/cv_utils.cpp
+    )
     install(TARGETS simple_trainer DESTINATION bin)
     target_include_directories(simple_trainer PRIVATE
-        ${PROJECT_SOURCE_DIR}/rasterizer
-        ${GPU_INCLUDE_DIRS}
-        /usr/include/opencv4
+        ${OPENSPLAT_INCLUDE_DIRS}
     )
     target_link_libraries(simple_trainer PUBLIC ${GPU_LIBRARIES} ${GSPLAT_LIBS} ${TORCH_LIBRARIES})
     target_link_directories(simple_trainer PUBLIC ${OpenCV_LIBRARY_DIRS})

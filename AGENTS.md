@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-The C++ gaussian splatting engine lives at the repo root (`model.cpp`, `rasterize_gaussians.cpp`, `rasterizer/`) with build outputs in `build/` and vendored COLMAP under `colmap-build/`. Media inputs and generated splats stay under `datasets/`, `frames/`, `uploads/`, and `results/`. The orchestration stacks are `PobimSplats/` (Flask backend plus Tailwind viewer assets) and `PobimSplatting/` (Next.js frontend in `Frontend/`, Flask API in `Backend/`). Treat `uploads/` and `results/` as ephemeral; keep third-party binaries out of git.
+The C++ gaussian splatting engine now uses `apps/` for entrypoints, `src/` for implementation, and `include/opensplat/` for headers, while `rasterizer/` stays at the repo root. Build outputs remain in `build/` and vendored COLMAP stays under `colmap-build/`. Media inputs and generated splats stay under `datasets/`, `frames/`, `uploads/`, and `results/`. The orchestration stacks are `PobimSplats/` (Flask backend plus Tailwind viewer assets) and `PobimSplatting/` (Next.js frontend in `Frontend/`, Flask API in `Backend/`). Treat `uploads/` and `results/` as ephemeral; keep third-party binaries out of git.
 
 ## Build, Test, and Development Commands
 Build the native engine via:

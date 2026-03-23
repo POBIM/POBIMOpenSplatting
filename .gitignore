@@ -13,15 +13,6 @@ glomap-build/
 .claude/
 node_modules.root-owned
 
-# Web Frontend - User Data
-web-frontend/uploads/*/
-web-frontend/results/*/
-web-frontend/projects_db.json
-
-# Keep directory structure but ignore contents
-!web-frontend/uploads/.gitkeep
-!web-frontend/results/.gitkeep
-
 # Python
 __pycache__/
 *.pyc
@@ -85,12 +76,6 @@ uploads/
 results/
 
 # Results and output files
-PobimSplats/results/
-!PobimSplats/results/.gitkeep
-PobimSplats/uploads/
-!PobimSplats/uploads/.gitkeep
-PobimSplats/projects_db.json
-
 PobimSplatting/Backend/results/
 !PobimSplatting/Backend/results/.gitkeep
 PobimSplatting/Backend/uploads/
@@ -102,6 +87,9 @@ PobimSplatting/Backend/test_exports/
 .env
 .env.local
 PobimSplatting/Backend/.env
+
+# Root installer artifacts (kept at repo root by design for now)
+install.log
 
 # Node.js
 node_modules/

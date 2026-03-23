@@ -1,5 +1,7 @@
 # 📚 POBIMOpenSplat - Complete Installation System Documentation
 
+> This file is the canonical documentation hub for the reorganized repository. Use it to navigate installation, operations, troubleshooting, and supporting guides.
+
 ## 🎯 Overview
 
 ระบบติดตั้งอัตโนมัติแบบครบวงจรสำหรับ POBIMOpenSplat - 3D Gaussian Splatting Platform พร้อม Web Interface
@@ -75,6 +77,13 @@ chmod +x check-system.sh
 |----------|-------------|
 | [**README.md**](../README.md) | Project overview และ original OpenSplat documentation |
 | [**AGENTS.md**](../AGENTS.md) | Repository guidelines และ development practices |
+
+### 5️⃣ **Repository Layout Policy**
+
+- `README.md` at the repo root is the project overview and first-stop entrypoint.
+- `docs/DOCS_INDEX.md` is the canonical documentation hub for ongoing navigation.
+- `install.log` and `.env.local` intentionally remain at the repo root for now because `install.sh` writes and reads them directly.
+- Launcher runtime artifacts now belong under `PobimSplatting/logs/` and `PobimSplatting/runtime/`.
 
 ---
 

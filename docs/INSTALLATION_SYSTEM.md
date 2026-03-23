@@ -158,6 +158,8 @@ chmod +x check-system.sh
 - แสดง summary
 - เสนอให้เริ่ม server ทันที
 
+> Policy note: `install.log` and `.env.local` currently stay at the repository root by design because the installer owns them directly.
+
 ---
 
 ## 🎯 Features

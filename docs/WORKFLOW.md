@@ -255,6 +255,8 @@ POBIMOpenSplat/
 ├── install.log .................... Installation log
 ├── .env.local ..................... Environment config
 │
+│   (installer-owned root artifacts kept in place intentionally)
+│
 ├── build/
 │   └── opensplat .................. ✓ Main binary
 │

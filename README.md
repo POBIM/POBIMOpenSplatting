@@ -50,6 +50,10 @@ Then access the web interface at:
 
 📋 **Quick Reference**: See [QUICK_REFERENCE.md](docs/QUICK_REFERENCE.md)
 
+📚 **Documentation Hub**: Start from [docs/DOCS_INDEX.md](docs/DOCS_INDEX.md) for the canonical docs map and navigation
+
+> Note: `install.log` and `.env.local` intentionally remain at the repository root for now because `install.sh` reads/writes them directly. They are treated as installer artifacts, not general project source files.
+
 ---
 
 ### Original OpenSplat (Command Line)

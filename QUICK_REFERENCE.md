@@ -209,7 +209,7 @@ sudo fuser -k 3000/tcp
 sudo fuser -k 5000/tcp
 
 # Force restart
-pkill -f "npm run dev"
+pkill -f "next start"
 pkill -f "python app.py"
 ./quick-start.sh
 ```

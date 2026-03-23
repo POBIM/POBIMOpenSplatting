@@ -73,8 +73,8 @@ chmod +x check-system.sh
 
 | Document | Description |
 |----------|-------------|
-| [**README.md**](README.md) | Project overview และ original OpenSplat documentation |
-| [**AGENTS.md**](AGENTS.md) | Repository guidelines และ development practices |
+| [**README.md**](../README.md) | Project overview และ original OpenSplat documentation |
+| [**AGENTS.md**](../AGENTS.md) | Repository guidelines และ development practices |
 
 ---
 
@@ -117,8 +117,8 @@ cd PobimSplatting && ./start.sh
 4. Bookmark [QUICK_REFERENCE.md](QUICK_REFERENCE.md) ไว้ใช้งาน
 
 #### 💻 **Developer** (พัฒนาโปรเจค)
-1. อ่าน [README.md](README.md) - เข้าใจโปรเจค
-2. อ่าน [AGENTS.md](AGENTS.md) - เข้าใจ structure และ guidelines
+1. อ่าน [README.md](../README.md) - เข้าใจโปรเจค
+2. อ่าน [AGENTS.md](../AGENTS.md) - เข้าใจ structure และ guidelines
 3. อ่าน [INSTALLATION_SYSTEM.md](INSTALLATION_SYSTEM.md) - เข้าใจ installation architecture
 4. ดู [WORKFLOW.md](WORKFLOW.md) - เข้าใจ process flow
 5. รัน `./install.sh`

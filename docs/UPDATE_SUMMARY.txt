@@ -125,9 +125,9 @@ $ ./test-cuda-check.sh
 │ อ่านเอกสารโดยละเอียด                                               │
 └─────────────────────────────────────────────────────────────────────┘
 
-$ cat CUDA_AUTO_INSTALL.md      # คู่มือ CUDA installation
-$ cat PYTHON_AUTO_INSTALL.md    # คู่มือ Python installation
-$ cat INSTALLATION_SUMMARY.txt  # สรุปการติดตั้งแบบเก่า
+$ cat docs/CUDA_AUTO_INSTALL.md      # คู่มือ CUDA installation
+$ cat docs/PYTHON_AUTO_INSTALL.md    # คู่มือ Python installation
+$ cat docs/INSTALLATION_SUMMARY.txt  # สรุปการติดตั้งแบบเก่า
 
 ═══════════════════════════════════════════════════════════════════════
   📊 ตัวอย่างการใช้งาน
@@ -353,8 +353,8 @@ $ docker system prune -a  # ถ้าใช้ Docker
    $ ./test-cuda-check.sh
 
 3. อ่านเอกสาร
-   $ cat CUDA_AUTO_INSTALL.md
-   $ cat PYTHON_AUTO_INSTALL.md
+   $ cat docs/CUDA_AUTO_INSTALL.md
+   $ cat docs/PYTHON_AUTO_INSTALL.md
 
 4. ตรวจสอบ GitHub Issues
    https://github.com/your-repo/issues

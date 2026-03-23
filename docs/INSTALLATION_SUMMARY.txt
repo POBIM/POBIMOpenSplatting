@@ -39,7 +39,7 @@ Step 11: แสดงสรุปการติดตั้ง
    ./test-cuda-check.sh
 
 3. อ่านเอกสารเพิ่มเติม:
-   cat CUDA_AUTO_INSTALL.md
+   cat docs/CUDA_AUTO_INSTALL.md
 
 📦 สิ่งที่จะถูกติดตั้ง (ถ้าเลือก CUDA):
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -143,11 +143,10 @@ $ ./install.sh
 หากพบปัญหา:
 1. ตรวจสอบ install.log
 2. รัน ./test-cuda-check.sh
-3. อ่าน CUDA_AUTO_INSTALL.md
+3. อ่าน docs/CUDA_AUTO_INSTALL.md
 4. เปิด Issue บน GitHub
 
 🎉 ขอให้ใช้งานสนุก!
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ระบบ POBIMOpenSplatting ตอนนี้ติดตั้งง่ายขึ้นและพร้อมใช้งานมากขึ้น!
-

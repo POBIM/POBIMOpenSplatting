@@ -15,10 +15,12 @@ FRONTEND_DIR="$PROJECT_ROOT/Frontend"
 BACKEND_DIR="$PROJECT_ROOT/Backend"
 OPENSPLAT_BINARY="$REPO_ROOT/build/opensplat"
 COLMAP_BINARY="$REPO_ROOT/colmap-build/colmap"
+LOGS_DIR="$PROJECT_ROOT/logs"
+RUNTIME_DIR="$PROJECT_ROOT/runtime"
 
 # PID tracking
-FRONTEND_PID_FILE="$PROJECT_ROOT/frontend.pid"
-BACKEND_PID_FILE="$PROJECT_ROOT/backend.pid"
+FRONTEND_PID_FILE="$RUNTIME_DIR/frontend.pid"
+BACKEND_PID_FILE="$RUNTIME_DIR/backend.pid"
 
 # Privilege escalation cache
 SUDO_PASSWORD=""
@@ -108,6 +110,10 @@ clear_sudo_credentials() {
     fi
     SUDO_PASSWORD=""
     SUDO_AUTHENTICATED=false
+}
+
+ensure_runtime_layout() {
+    mkdir -p "$LOGS_DIR" "$RUNTIME_DIR"
 }
 
 select_python_cmd() {
@@ -383,6 +389,7 @@ check_system_status() {
 # Function to start backend
 start_backend() {
     echo -e "${BLUE}Starting Backend Server...${NC}"
+    ensure_runtime_layout
 
     local python_cmd
     if ! python_cmd=$(select_python_cmd); then
@@ -408,9 +415,9 @@ start_backend() {
     kill_port 5000
 
     if [ "${FLASK_ENV:-development}" = "production" ]; then
-        gunicorn --config gunicorn.conf.py "PobimSplatting.Backend.app:app" > backend.log 2>&1 &
+        gunicorn --config gunicorn.conf.py "PobimSplatting.Backend.app:app" > "$LOGS_DIR/backend.log" 2>&1 &
     else
-        python app.py > backend.log 2>&1 &
+        python app.py > "$LOGS_DIR/backend.log" 2>&1 &
     fi
     BACKEND_PID=$!
     echo "$BACKEND_PID" > "$BACKEND_PID_FILE"
@@ -431,6 +438,7 @@ start_backend() {
 # Function to start frontend
 start_frontend() {
     echo -e "${BLUE}Starting Frontend Server...${NC}"
+    ensure_runtime_layout
 
     stop_frontend_process true
     cd "$FRONTEND_DIR"
@@ -452,7 +460,7 @@ start_frontend() {
     # Kill existing process on port 3000
     kill_port 3000
 
-    npm run start > frontend.log 2>&1 &
+    npm run start > "$LOGS_DIR/frontend.log" 2>&1 &
     FRONTEND_PID=$!
     echo "$FRONTEND_PID" > "$FRONTEND_PID_FILE"
     echo -e "${GREEN}✓ Frontend started (PID: $FRONTEND_PID)${NC}"
@@ -477,15 +485,15 @@ stop_servers() {
 show_logs() {
     echo -e "${BLUE}=== Logs ===${NC}"
     echo -e "${YELLOW}Frontend logs (last 20 lines):${NC}"
-    if [ -f "$FRONTEND_DIR/frontend.log" ]; then
-        tail -n 20 "$FRONTEND_DIR/frontend.log"
+    if [ -f "$LOGS_DIR/frontend.log" ]; then
+        tail -n 20 "$LOGS_DIR/frontend.log"
     else
         echo "No frontend logs found"
     fi
     echo ""
     echo -e "${YELLOW}Backend logs (last 20 lines):${NC}"
-    if [ -f "$BACKEND_DIR/backend.log" ]; then
-        tail -n 20 "$BACKEND_DIR/backend.log"
+    if [ -f "$LOGS_DIR/backend.log" ]; then
+        tail -n 20 "$LOGS_DIR/backend.log"
     else
         echo "No backend logs found"
     fi

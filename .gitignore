@@ -112,8 +112,12 @@ quick-start.sh
 
 # PID files
 *.pid
-PobimSplatting/backend.pid
-PobimSplatting/frontend.pid
+
+# PobimSplatting runtime artifacts
+PobimSplatting/logs/*
+!PobimSplatting/logs/.gitkeep
+PobimSplatting/runtime/*
+!PobimSplatting/runtime/.gitkeep
 
 # COLMAP/GLOMAP source (cloned repos - optional)
 # colmap/

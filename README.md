@@ -204,6 +204,8 @@ docker build \
   --build-arg CMAKE_BUILD_TYPE=Release .
 ```
 
+If your toolchain supports newer NVIDIA architectures such as Blackwell, you can append them explicitly (for example `120`). The default CMake configuration only adds newer architectures when the installed `nvcc` reports support for them.
+
 ### ROCm via HIP
 
 Navigate to the root directory of OpenSplat repo that has Dockerfile and run the following command to build the Docker image:
@@ -262,6 +264,12 @@ There's several parameters you can tune. To view the full list:
 
 ```bash
 ./opensplat --help
+```
+
+If OpenSplat was built with `OPENSPLAT_BUILD_VISUALIZER=ON`, the Pangolin window now stays disabled unless you opt in with:
+
+```bash
+./opensplat /path/to/banana --has-visualization
 ```
 
 ### Google Colab

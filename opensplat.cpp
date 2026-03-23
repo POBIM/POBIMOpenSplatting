@@ -26,6 +26,7 @@ int main(int argc, char *argv[]){
         ("val-render", "Path of the directory where to render validation images", cxxopts::value<std::string>()->default_value(""))
         ("keep-crs", "Retain the project input's coordinate reference system")
         ("cpu", "Force CPU execution")
+        ("has-visualization", "Enable the Pangolin visualizer when visualization support is built")
         
         ("n,num-iters", "Number of iterations to run", cxxopts::value<int>()->default_value("30000"))
         ("d,downscale-factor", "Scale input images by this factor.", cxxopts::value<float>()->default_value("1"))
@@ -82,6 +83,7 @@ int main(int argc, char *argv[]){
     const std::string valRender = result["val-render"].as<std::string>();
     if (!valRender.empty() && !fs::exists(valRender)) fs::create_directories(valRender);
     const bool keepCrs = result.count("keep-crs") > 0;
+    const bool hasVisualization = result.count("has-visualization") > 0;
     const float downScaleFactor = (std::max)(result["downscale-factor"].as<float>(), 1.0f);
     const int numIters = result["num-iters"].as<int>();
     const int numDownscales = result["num-downscales"].as<int>();
@@ -126,7 +128,9 @@ int main(int argc, char *argv[]){
 
 #ifdef USE_VISUALIZATION
     Visualizer visualizer;
-    visualizer.Initialize(numIters);
+    if (hasVisualization) {
+        visualizer.Initialize(numIters);
+    }
 #endif
 
     try{
@@ -269,12 +273,14 @@ int main(int argc, char *argv[]){
             }
 
 #ifdef USE_VISUALIZATION
-            visualizer.SetInitialGaussianNum(inputData.points.xyz.size(0));
-            visualizer.SetLoss(step, mainLoss.item<float>());
-            visualizer.SetGaussians(model.means, model.scales, model.featuresDc,
-                                    model.opacities);
-            visualizer.SetImage(rgb, gt);
-            visualizer.Draw();
+            if (hasVisualization) {
+                visualizer.SetInitialGaussianNum(inputData.points.xyz.size(0));
+                visualizer.SetLoss(step, mainLoss.item<float>());
+                visualizer.SetGaussians(model.means, model.scales, model.featuresDc,
+                                        model.opacities);
+                visualizer.SetImage(rgb, gt);
+                visualizer.Draw();
+            }
 #endif
         }
 

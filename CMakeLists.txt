@@ -88,6 +88,14 @@ if(GPU_RUNTIME STREQUAL "CUDA")
         if(NOT OPENSPLAT_MAX_CUDA_COMPATIBILITY)
             if(NOT CMAKE_CUDA_ARCHITECTURES)
                 SET(CMAKE_CUDA_ARCHITECTURES 70;75;80)
+                execute_process(
+                    COMMAND "${CUDAToolkit_NVCC_EXECUTABLE}" --list-gpu-arch
+                    OUTPUT_VARIABLE SUPPORTED_GPU_ARCHS
+                    ERROR_QUIET
+                )
+                if(SUPPORTED_GPU_ARCHS MATCHES "compute_120")
+                    list(APPEND CMAKE_CUDA_ARCHITECTURES 120)
+                endif()
             endif()
         else()
             # Build for maximum compatibility

@@ -34,7 +34,7 @@
 ถ้าต้องการอัปเกรดอย่างง่ายดาย ใช้ scripts ที่เตรียมไว้:
 
 ```bash
-cd /home/pobimgroup/POBIMOpenSplat
+cd /home/pobimgroup/A/POBIMOpenSplatting
 
 # 1. ติดตั้ง CUDA 12.6 (ใช้เวลา 5-10 นาที)
 ./setup-cuda126.sh

@@ -1,24 +1,87 @@
-# Repository Guidelines
+# PROJECT KNOWLEDGE BASE
 
-## Project Structure & Module Organization
-The C++ gaussian splatting engine now uses `apps/` for entrypoints, `src/` for implementation, and `include/opensplat/` for headers, while `rasterizer/` stays at the repo root. Build outputs remain in `build/` and vendored COLMAP stays under `colmap-build/`. Media inputs and generated splats stay under `datasets/`, `frames/`, `uploads/`, and `results/`. The orchestration stacks are `PobimSplats/` (Flask backend plus Tailwind viewer assets) and `PobimSplatting/` (Next.js frontend in `Frontend/`, Flask API in `Backend/`). Treat `uploads/` and `results/` as ephemeral; keep third-party binaries out of git.
+**Generated:** 2026-03-24T01:59:30Z
+**Commit:** e2c95c8
+**Branch:** main
 
-## Build, Test, and Development Commands
-Build the native engine via:
-```bash
-mkdir -p build && cd build
-cmake -DCMAKE_PREFIX_PATH=/path/to/libtorch .. && make -j$(nproc)
+## OVERVIEW
+Monorepo for a local OpenSplat fork plus a web platform. Core stacks: C++/CMake native engine, Flask backend, Next.js 16 frontend, plus bundled `fastmap`, `hloc`, and vendored `colmap` code.
+
+## STRUCTURE
+```text
+./
+├── apps/                 # native CLI entrypoints
+├── src/                  # native engine implementation
+├── include/opensplat/    # native engine headers
+├── rasterizer/           # GPU/CPU backend sources kept in place
+├── PobimSplatting/       # web platform wrapper
+│   ├── Backend/          # Flask API + pipeline orchestration
+│   └── Frontend/         # Next.js app router UI
+├── scripts/              # operational helpers; call these directly
+├── docs/                 # canonical operator/install docs
+├── colmap/               # vendored upstream source tree
+├── hloc/                 # bundled localization toolbox
+└── fastmap/              # bundled SfM package with optional CUDA extension
 ```
-Add `-DGPU_RUNTIME=HIP` or `-DGPU_RUNTIME=MPS` for AMD or Apple targets. The primary tested runtime is Ubuntu + NVIDIA CUDA, while ROCm/HIP flows are maintained through the `Dockerfile.rocm*` images and Apple Silicon uses manual MPS builds from the root `README.md`. For PobimSplatting, use Python 3.10-3.12 with 3.12 preferred, run `npm run dev` inside `PobimSplatting/Frontend`, and run `source venv/bin/activate && python app.py` inside `PobimSplatting/Backend`. Validate GPU integration through `./simple_gpu_test.sh` or `python test_gpu_colmap.py`.
 
-## Coding Style & Naming Conventions
-C++ sources use 4-space indentation, braces on the same line, camelCase functions, and PascalCase types; keep constants in ALL_CAPS and prefer `torch::` utilities over raw CUDA calls. Python services follow snake_case functions with module-level ALL_CAPS configuration, while React/Next components stay PascalCase with kebab-case filenames and Tailwind utilities rather than bespoke CSS. Apply `clang-format` or `black` only if you introduce tooling hooks—otherwise mirror the surrounding style.
+## WHERE TO LOOK
+| Task | Location | Notes |
+|------|----------|-------|
+| Native engine build/layout | `CMakeLists.txt`, `apps/`, `src/`, `include/opensplat/` | `build/opensplat` output stays stable even if sources move |
+| Web launch/orchestration | `install.sh`, `quick-start.sh`, `start.sh`, `PobimSplatting/start.sh` | root scripts are user-facing entrypoints |
+| Backend runtime/config | `PobimSplatting/Backend/` | has child AGENTS.md |
+| Frontend UI/client flow | `PobimSplatting/Frontend/` | has child AGENTS.md |
+| Operator docs | `docs/DOCS_INDEX.md` | canonical docs hub |
+| GPU/COLMAP helpers | `scripts/` | root wrappers were intentionally removed |
 
-## Testing Guidelines
-Run `pytest PobimSplats/test_websocket.py` for WebSocket regressions and `python test_gpu_colmap.py` whenever COLMAP paths or GPU detection change. After native edits rebuild with `cmake --build .` (add `-DOPENSPLAT_BUILD_SIMPLE_TRAINER=ON` if training code is touched). Capture manual reproduction steps and sample output paths in PR notes, especially for GPU-only fixes.
+## CODE MAP
+| Symbol / Root | Type | Location | Role |
+|---------------|------|----------|------|
+| `opensplat` | executable | `apps/opensplat.cpp` | native CLI entrypoint |
+| `simple_trainer` | executable | `apps/simple_trainer.cpp` | native smoke/demo trainer |
+| `Model` | C++ struct | `include/opensplat/model.hpp` + `src/model.cpp` | training/render core |
+| `app` | Flask app | `PobimSplatting/Backend/app.py` | backend composition root |
+| `runner.py` | pipeline module | `PobimSplatting/Backend/pipeline/runner.py` | bridges backend to native/CLI tools |
+| `api.ts` | TS client | `PobimSplatting/Frontend/src/lib/api.ts` | shared REST client |
+| `websocket.ts` | TS client | `PobimSplatting/Frontend/src/lib/websocket.ts` | shared realtime client |
 
-## Commit & Pull Request Guidelines
-Use conventional commits (`feat: …`, `fix: …`, `docs: …`) mirroring existing history. Keep commits focused and include configuration or documentation updates alongside code. PRs should explain motivation, list local testing across CPU/GPU, call out new environment variables, and attach screenshots or sample splat paths in `results/` for UI changes.
+## CONVENTIONS
+- Native engine uses local fork layout: `apps/` + `src/` + `include/opensplat/`, while `rasterizer/` remains top-level.
+- Treat `build/`, `colmap-build/`, `PobimSplatting/logs/`, `PobimSplatting/runtime/`, `uploads/`, `results/`, and similar runtime/generated areas as artifacts, not source.
+- Call helper scripts through `./scripts/...`; only `install.sh`, `quick-start.sh`, `start.sh`, and `check-system.sh` should remain as root shell entrypoints.
+- Python support is 3.10–3.12, with 3.12 preferred.
+- Frontend production-style flow is `npm run build` then `npm run start`; hot reload is `npm run dev` only for local dev.
 
-## Security & Configuration Tips
-Store secrets in `.env` files (`PobimSplats/.env`, `PobimSplatting/Backend/.env`) and never commit credentials, database files, or large artifacts. Reuse `secure_filename` and the existing validation helpers for uploads. Gate new hardware-specific paths or binaries behind configuration toggles so shared CI environments can remain CPU-only.
+## ANTI-PATTERNS (THIS PROJECT)
+- Never commit credentials, `.env` secrets, database files, or large/generated artifacts.
+- Do not scatter runtime files outside their documented paths (`PobimSplatting/logs/`, `PobimSplatting/runtime/`, backend uploads/results folders).
+- Do not reintroduce root-level wrapper scripts for helpers already living in `scripts/`.
+- Do not assume vendored trees (`colmap/`, `hloc/third_party/`, libtorch headers) follow local project conventions.
+
+## UNIQUE STYLES
+- C++: 4-space indentation, same-line braces, camelCase functions, PascalCase types, ALL_CAPS constants.
+- Python: snake_case functions, module-level ALL_CAPS config, practical script-heavy backend tests.
+- React/Next: PascalCase components, kebab-case filenames where established, Tailwind over bespoke CSS.
+- Prefer matching surrounding style over introducing formatter churn unless adding tooling hooks.
+
+## COMMANDS
+```bash
+# native engine
+mkdir -p build && cd build
+cmake -DCMAKE_PREFIX_PATH=/path/to/libtorch ..
+cmake --build .
+
+# launcher / platform
+./install.sh
+./quick-start.sh
+./start.sh status
+
+# focused helpers
+./scripts/simple_gpu_test.sh
+python test_gpu_colmap.py
+```
+
+## NOTES
+- Child AGENTS exist only for `PobimSplatting/Backend` and `PobimSplatting/Frontend`; keep native engine guidance here unless ownership splits further.
+- `fastmap/` and `hloc/` are bundled toolboxes with their own upstream-style docs; mention them when relevant, but do not overfit root rules onto vendored/third-party subtrees.
+- `docs/compile.md` and `docs/web-frontend-setup.md` are legacy-reference docs; prefer `README.md` and `docs/DOCS_INDEX.md`.

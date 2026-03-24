@@ -37,10 +37,10 @@
 cd /home/pobimgroup/A/POBIMOpenSplatting
 
 # 1. ติดตั้ง CUDA 12.6 (ใช้เวลา 5-10 นาที)
-./setup-cuda126.sh
+./scripts/setup-cuda126.sh
 
 # 2. Compile OpenSplat (ใช้เวลา 3-5 นาที)
-./compile-opensplat-cuda126.sh
+./scripts/compile-opensplat-cuda126.sh
 
 # 3. ทดสอบ
 ./build/opensplat /path/to/your/dataset -n 100 -o test.ply

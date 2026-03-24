@@ -36,7 +36,7 @@ Step 11: แสดงสรุปการติดตั้ง
    ./install.sh
 
 2. ทดสอบว่า CUDA ติดตั้งสำเร็จ:
-   ./test-cuda-check.sh
+   ./scripts/test-cuda-check.sh
 
 3. อ่านเอกสารเพิ่มเติม:
    cat docs/CUDA_AUTO_INSTALL.md
@@ -142,7 +142,7 @@ $ ./install.sh
 
 หากพบปัญหา:
 1. ตรวจสอบ PobimSplatting/logs/install.log
-2. รัน ./test-cuda-check.sh
+2. รัน ./scripts/test-cuda-check.sh
 3. อ่าน docs/CUDA_AUTO_INSTALL.md
 4. เปิด Issue บน GitHub
 

@@ -13,7 +13,7 @@ echo ""
 # Check if CUDA 12.6 is installed
 if [ ! -d "/usr/local/cuda-12.6" ]; then
     echo "Error: CUDA 12.6 not found!"
-    echo "Please run ./setup-cuda126.sh first"
+    echo "Please run ./scripts/setup-cuda126.sh first"
     exit 1
 fi
 

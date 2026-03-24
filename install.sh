@@ -1594,7 +1594,7 @@ print_summary() {
     echo -e "    ${GREEN}cd PobimSplatting && ./start.sh start${NC}"
     echo ""
     echo -e "  ${BOLD}To rebuild COLMAP with CUDA:${NC}"
-    echo -e "    ${GREEN}./rebuild-colmap-with-cuda.sh${NC}"
+    echo -e "    ${GREEN}./scripts/rebuild-colmap-with-cuda.sh${NC}"
     echo ""
     echo -e "${CYAN}Access Points:${NC}"
     echo "  • Frontend: ${BOLD}http://localhost:${FRONTEND_PORT}${NC}"

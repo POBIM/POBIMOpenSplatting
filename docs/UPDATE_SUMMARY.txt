@@ -112,7 +112,7 @@ $ ./install.sh
 │ ทดสอบการติดตั้ง CUDA                                               │
 └─────────────────────────────────────────────────────────────────────┘
 
-$ ./test-cuda-check.sh
+$ ./scripts/test-cuda-check.sh
 
 ตรวจสอบ:
 ✓ NVIDIA Driver
@@ -350,7 +350,7 @@ $ docker system prune -a  # ถ้าใช้ Docker
    $ tail -100 PobimSplatting/logs/install.log
 
 2. รัน test script
-   $ ./test-cuda-check.sh
+$ ./scripts/test-cuda-check.sh
 
 3. อ่านเอกสาร
    $ cat docs/CUDA_AUTO_INSTALL.md

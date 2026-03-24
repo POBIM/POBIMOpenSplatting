@@ -148,7 +148,7 @@ ls -la libtorch-*
 # Error: "Cannot start colmap GUI; colmap was built without GUI support"
 
 # ถ้าต้องการใช้ COLMAP GUI (สำหรับแก้ไข point cloud ด้วยมือ)
-./rebuild-colmap-with-gui.sh
+./scripts/rebuild-colmap-with-gui.sh
 
 # หรือถ้าต้องการ rebuild ตอนติดตั้งใหม่
 ./install.sh

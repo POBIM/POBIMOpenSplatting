@@ -30,7 +30,7 @@
 **แก้ไข**: Rebuild COLMAP with CUDA:
 ```bash
 cd /home/pobimgroup/POBIMOpenSplat
-./rebuild-colmap-with-cuda.sh
+./scripts/rebuild-colmap-with-cuda.sh
 ```
 
 ---

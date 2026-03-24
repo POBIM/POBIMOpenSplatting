@@ -68,7 +68,7 @@ rm -rf build colmap-build
 
 ### Rebuild COLMAP with GUI
 ```bash
-./rebuild-colmap-with-gui.sh
+./scripts/rebuild-colmap-with-gui.sh
 ```
 
 ### Reset Python Environment

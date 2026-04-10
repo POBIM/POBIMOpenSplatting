@@ -864,7 +864,7 @@ export default function ProjectDetailPage() {
                         View 3D
                       </button>
                       <button
-                        onClick={handleOpenColmapGUI}
+                        onClick={() => router.push(`/camera-poses/${projectId}`)}
                         className={`inline-flex items-center px-4 py-2 border border-gray-200 text-sm font-medium rounded-lg transition-colors ${
                           project?.config?.sfm_engine === 'fastmap' ? 'text-purple-600 hover:bg-purple-50' : 'text-blue-600 hover:bg-blue-50'
                         }`}

@@ -380,6 +380,12 @@ export const api = {
     return `${API_BASE_URL}/api/markers/single/${markerId}?${params.toString()}`;
   },
 
+  // Camera Poses
+  getCameraPoses: async (id: string) => {
+    const response = await apiClient.get(`/api/project/${id}/camera_poses`);
+    return response.data;
+  },
+
   analyzeMarkers: async (imageFile: File, dict: string = '6x6_250') => {
     const formData = new FormData();
     formData.append('image', imageFile);

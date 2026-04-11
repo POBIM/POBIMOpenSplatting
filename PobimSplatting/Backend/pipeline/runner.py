@@ -6,11 +6,12 @@ import logging
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from ..core import config as app_config
 from ..core import projects as project_store
@@ -20,11 +21,14 @@ from ..core.projects import (
     emit_stage_progress,
     save_projects_db,
     update_stage_detail,
+    update_reconstruction_framework,
     update_state,
 )
 from ..utils.video_processor import VideoProcessor
 
 logger = logging.getLogger(__name__)
+
+COLMAP_PAIR_ID_FACTOR = 2147483647
 
 video_processor = VideoProcessor()
 
@@ -73,6 +77,793 @@ def check_hloc_available():
         return False
 
 HLOC_AVAILABLE = check_hloc_available()
+
+
+def normalize_matcher_type(matcher_type):
+    if matcher_type is None:
+        return None
+
+    normalized = str(matcher_type).strip().lower()
+    if normalized in {"sequential", "exhaustive"}:
+        return normalized
+
+    return None
+
+
+def summarize_name_ordering(image_names=None):
+    normalized_names = [str(name).lower() for name in (image_names or [])]
+    if not normalized_names:
+        return {
+            'frame_like_images': 0,
+            'ordered_frame_ratio': 0.0,
+            'ordered_name_ratio': 0.0,
+            'dominant_pattern': None,
+        }
+
+    explicit_frame_like = 0
+    prefix_groups: Dict[str, List[int]] = {}
+
+    for name in normalized_names:
+        stem = Path(name).stem.lower()
+        if re.match(r'^(frame|img|image|photo|capture)[_-]?\d{2,}$', stem):
+            explicit_frame_like += 1
+
+        match = re.match(r'^(.*?)(\d{2,})$', stem)
+        if not match:
+            continue
+
+        prefix = re.sub(r'[_-]+$', '', match.group(1)) or 'numeric'
+        try:
+            index = int(match.group(2))
+        except ValueError:
+            continue
+        prefix_groups.setdefault(prefix, []).append(index)
+
+    dominant_pattern = None
+    ordered_name_ratio = 0.0
+    dominant_frame_like = explicit_frame_like
+
+    if prefix_groups:
+        dominant_pattern, dominant_indices = max(prefix_groups.items(), key=lambda item: len(item[1]))
+        dominant_indices = sorted(dominant_indices)
+        if len(dominant_indices) >= 2:
+            smooth_steps = sum(1 for left, right in zip(dominant_indices, dominant_indices[1:]) if 0 < (right - left) <= 3)
+            continuity_ratio = smooth_steps / max(len(dominant_indices) - 1, 1)
+        else:
+            continuity_ratio = 0.0
+
+        coverage_ratio = len(dominant_indices) / len(normalized_names)
+        ordered_name_ratio = round(coverage_ratio * continuity_ratio, 4)
+        dominant_frame_like = max(explicit_frame_like, len(dominant_indices))
+
+    explicit_frame_ratio = explicit_frame_like / len(normalized_names)
+    ordered_frame_ratio = max(explicit_frame_ratio, ordered_name_ratio)
+
+    return {
+        'frame_like_images': dominant_frame_like,
+        'ordered_frame_ratio': ordered_frame_ratio,
+        'ordered_name_ratio': ordered_name_ratio,
+        'dominant_pattern': dominant_pattern,
+    }
+
+
+def analyze_capture_pattern(paths, config=None):
+    image_names = sorted(
+        [
+            image_path.name.lower()
+            for image_path in Path(paths['images_path']).iterdir()
+            if image_path.suffix.lower() in {'.jpg', '.jpeg', '.png', '.bmp', '.tiff'}
+        ]
+    )
+    name_ordering = summarize_name_ordering(image_names)
+    frame_like_images = name_ordering['frame_like_images']
+    ordered_frame_ratio = name_ordering['ordered_frame_ratio']
+    input_type = (config or {}).get('input_type')
+    looks_like_video_input = input_type in {'video', 'mixed'} or ordered_frame_ratio >= 0.8
+
+    return {
+        'image_names': image_names,
+        'frame_like_images': frame_like_images,
+        'ordered_frame_ratio': ordered_frame_ratio,
+        'ordered_name_ratio': name_ordering['ordered_name_ratio'],
+        'dominant_pattern': name_ordering['dominant_pattern'],
+        'looks_like_video_orbit': looks_like_video_input,
+    }
+
+
+def analyze_capture_pattern_from_names(image_names=None, config=None):
+    normalized_names = [str(name).lower() for name in (image_names or [])]
+    name_ordering = summarize_name_ordering(normalized_names)
+    frame_like_images = name_ordering['frame_like_images']
+    input_type = (config or {}).get('input_type')
+
+    if normalized_names:
+        ordered_frame_ratio = name_ordering['ordered_frame_ratio']
+    elif input_type == 'video':
+        ordered_frame_ratio = 1.0
+        frame_like_images = int((config or {}).get('estimated_num_images') or 0)
+    elif input_type == 'mixed':
+        ordered_frame_ratio = 0.5
+    else:
+        ordered_frame_ratio = 0.0
+
+    looks_like_video_input = input_type in {'video', 'mixed'} or ordered_frame_ratio >= 0.8
+
+    return {
+        'image_names': normalized_names,
+        'frame_like_images': frame_like_images,
+        'ordered_frame_ratio': ordered_frame_ratio,
+        'ordered_name_ratio': name_ordering['ordered_name_ratio'] if normalized_names else 0.0,
+        'dominant_pattern': name_ordering['dominant_pattern'] if normalized_names else None,
+        'looks_like_video_orbit': looks_like_video_input,
+    }
+
+
+def should_use_orbit_safe_mode(paths, config, num_images):
+    orbit_safe_policy = build_orbit_safe_policy(paths, config, num_images)
+    if not orbit_safe_policy:
+        return False, None
+
+    return True, orbit_safe_policy['reason']
+
+
+def get_orbit_safe_profile_settings(profile_name, num_images):
+    if profile_name == 'bridge-recovery':
+        overlap = '40' if num_images <= 80 else ('44' if num_images <= 150 else '52')
+        return {
+            'matcher_params': {
+                'SequentialMatching.overlap': overlap,
+                'SequentialMatching.quadratic_overlap': '1',
+                'SequentialMatching.loop_detection': '0',
+            },
+            'mapper_params': {
+                'Mapper.structure_less_registration_fallback': '0',
+                'Mapper.abs_pose_max_error': '13',
+                'Mapper.abs_pose_min_num_inliers': '16',
+                'Mapper.abs_pose_min_inlier_ratio': '0.10',
+                'Mapper.max_reg_trials': '10',
+            },
+            'min_num_matches_cap': 10,
+            'init_num_trials_floor': 225,
+        }
+
+    if profile_name == 'bridge-balanced':
+        overlap = '32' if num_images <= 80 else ('36' if num_images <= 150 else '44')
+        return {
+            'matcher_params': {
+                'SequentialMatching.overlap': overlap,
+                'SequentialMatching.quadratic_overlap': '1',
+                'SequentialMatching.loop_detection': '0',
+            },
+            'mapper_params': {
+                'Mapper.structure_less_registration_fallback': '0',
+                'Mapper.abs_pose_max_error': '12',
+                'Mapper.abs_pose_min_num_inliers': '18',
+                'Mapper.abs_pose_min_inlier_ratio': '0.12',
+                'Mapper.max_reg_trials': '8',
+            },
+            'min_num_matches_cap': 12,
+            'init_num_trials_floor': 200,
+        }
+
+    overlap = '28' if num_images <= 80 else ('32' if num_images <= 150 else '40')
+    return {
+        'matcher_params': {
+            'SequentialMatching.overlap': overlap,
+            'SequentialMatching.quadratic_overlap': '1',
+            'SequentialMatching.loop_detection': '0',
+        },
+        'mapper_params': {
+            'Mapper.structure_less_registration_fallback': '0',
+            'Mapper.abs_pose_max_error': '11',
+            'Mapper.abs_pose_min_num_inliers': '22',
+            'Mapper.abs_pose_min_inlier_ratio': '0.16',
+            'Mapper.max_reg_trials': '6',
+        },
+        'min_num_matches_cap': 14,
+        'init_num_trials_floor': 180,
+    }
+
+
+def make_orbit_safe_policy(profile_name, num_images, bridge_risk_score, capture_pattern, reason):
+    settings = get_orbit_safe_profile_settings(profile_name, num_images)
+    return {
+        'profile_name': profile_name,
+        'reason': reason,
+        'bridge_risk_score': bridge_risk_score,
+        'matcher_params': settings['matcher_params'],
+        'mapper_params': settings['mapper_params'],
+        'min_num_matches_cap': settings['min_num_matches_cap'],
+        'init_num_trials_floor': settings['init_num_trials_floor'],
+        'capture_pattern': capture_pattern,
+    }
+
+
+def percentile(values, ratio):
+    if not values:
+        return 0.0
+
+    ordered = sorted(values)
+    index = max(0, min(len(ordered) - 1, int(round((len(ordered) - 1) * ratio))))
+    return float(ordered[index])
+
+
+def sync_reconstruction_framework(project_id, config, colmap_cfg, *, phase, extra=None):
+    if not project_id:
+        return
+
+    framework_state = {
+        'phase': phase,
+        'sfm_engine': config.get('sfm_engine', 'glomap'),
+        'feature_method': config.get('feature_method', 'sift'),
+        'matcher_type': colmap_cfg.get('matcher_type'),
+        'orbit_safe_mode': colmap_cfg.get('orbit_safe_mode', False),
+        'orbit_safe_profile': colmap_cfg.get('orbit_safe_profile'),
+        'bridge_risk_score': colmap_cfg.get('bridge_risk_score'),
+        'pair_geometry_stats': colmap_cfg.get('pair_geometry_stats'),
+        'matcher_params': dict(colmap_cfg.get('matcher_params', {})),
+        'mapper_params': dict(colmap_cfg.get('mapper_params', {})),
+        'capture_pattern': colmap_cfg.get('capture_pattern'),
+    }
+
+    if extra:
+        framework_state.update(extra)
+
+    update_reconstruction_framework(project_id, framework_state)
+
+
+def build_orbit_safe_policy(paths, config, num_images):
+    capture_pattern = analyze_capture_pattern(paths, config)
+    return build_orbit_safe_policy_from_capture(capture_pattern, config, num_images)
+
+
+def build_orbit_safe_policy_from_capture(capture_pattern, config, num_images):
+    looks_like_video_orbit = capture_pattern['looks_like_video_orbit']
+    if not looks_like_video_orbit:
+        return None
+
+    if num_images < 24 or num_images > 250:
+        return None
+
+    if config.get('fast_sfm', False):
+        return None
+
+    target_fps = config.get('target_fps')
+    try:
+        target_fps = float(target_fps) if target_fps is not None else None
+    except (TypeError, ValueError):
+        target_fps = None
+
+    bridge_risk_score = 0
+    if num_images <= 120:
+        bridge_risk_score += 2
+    elif num_images <= 180:
+        bridge_risk_score += 1
+
+    if capture_pattern['ordered_frame_ratio'] >= 0.95:
+        bridge_risk_score += 1
+
+    if config.get('input_type') == 'video':
+        bridge_risk_score += 1
+
+    if target_fps is not None and target_fps <= 1.0:
+        bridge_risk_score += 1
+
+    if bridge_risk_score >= 4:
+        profile_name = 'bridge-recovery'
+    elif bridge_risk_score >= 2:
+        profile_name = 'bridge-balanced'
+    else:
+        profile_name = 'local-conservative'
+
+    reason = (
+        'Ordered video/orbit frames benefit from local temporal matching and adaptive bridge-aware '
+        f'pose registration ({profile_name}, risk={bridge_risk_score})'
+    )
+
+    return make_orbit_safe_policy(profile_name, num_images, bridge_risk_score, capture_pattern, reason)
+
+
+def estimate_preview_image_count(config, media_summary):
+    input_type = media_summary.get('input_type') or config.get('input_type') or 'images'
+    image_count = int(media_summary.get('image_count') or 0)
+    video_count = int(media_summary.get('video_count') or 0)
+
+    if input_type == 'images':
+        return max(image_count, 0)
+
+    extraction_mode = str(config.get('extraction_mode', 'fps')).lower()
+    if extraction_mode == 'frames':
+        per_video = max(24, int(config.get('max_frames') or 100))
+    else:
+        try:
+            target_fps = float(config.get('target_fps') or 2.0)
+        except (TypeError, ValueError):
+            target_fps = 2.0
+        per_video = max(24, min(240, int(round(target_fps * 60))))
+
+    if input_type == 'video':
+        return per_video * max(video_count, 1)
+
+    return image_count + (per_video * max(video_count, 1))
+
+
+def build_upload_policy_preview(config, media_summary):
+    preview_config = dict(config or {})
+    preview_config['input_type'] = media_summary.get('input_type') or preview_config.get('input_type') or 'images'
+    estimated_num_images = estimate_preview_image_count(preview_config, media_summary)
+    preview_config['estimated_num_images'] = estimated_num_images
+
+    image_names = media_summary.get('image_names') or []
+    capture_pattern = analyze_capture_pattern_from_names(image_names, preview_config)
+    orbit_safe_policy = build_orbit_safe_policy_from_capture(capture_pattern, preview_config, estimated_num_images)
+    orbit_safe_mode = orbit_safe_policy is not None
+
+    colmap_cfg = get_colmap_config(
+        max(estimated_num_images, 1),
+        quality_mode=preview_config.get('quality_mode', 'balanced'),
+        custom_params=preview_config if preview_config.get('quality_mode') == 'custom' else preview_config,
+        preferred_matcher_type=normalize_matcher_type(preview_config.get('matcher_type')),
+        orbit_safe_mode=orbit_safe_mode,
+        orbit_safe_policy=orbit_safe_policy,
+    )
+
+    input_profile = preview_config['input_type']
+    if input_profile not in {'video', 'mixed', 'images'}:
+        input_profile = 'unknown'
+
+    tone_key = 'unknown'
+    if input_profile == 'video':
+        tone_key = 'video'
+    elif input_profile == 'mixed':
+        tone_key = 'mixed'
+    elif input_profile == 'images':
+        tone_key = 'images'
+
+    signals: List[Dict[str, Any]] = []
+
+    def add_signal(key: str, label: str, delta: int, detail: str) -> None:
+        signals.append({'key': key, 'label': label, 'delta': delta, 'detail': detail})
+
+    score = 88 if input_profile == 'video' else 76 if input_profile == 'images' else 68 if input_profile == 'mixed' else 42
+    add_signal('input-profile', 'Input profile', 0, f'Detected input profile: {input_profile}')
+
+    explicit_matcher = normalize_matcher_type(preview_config.get('matcher_type'))
+    if explicit_matcher:
+        score -= 18
+        add_signal('matcher-override', 'Matcher override', -18, f'Explicit matcher override: {explicit_matcher}')
+    else:
+        add_signal('matcher-auto', 'Matcher auto', 6, 'Auto matcher allows backend policy selection')
+        score += 6
+
+    feature_method = str(preview_config.get('feature_method', 'sift'))
+    if input_profile in {'images', 'mixed'} and feature_method in {'aliked', 'superpoint'}:
+        score += 5
+        add_signal('neural-features', 'Neural features', 5, f'{feature_method} can improve photo-heavy coverage and speed')
+    elif input_profile == 'video' and feature_method == 'sift':
+        score += 2
+        add_signal('sift-video', 'SIFT compatibility', 2, 'SIFT remains a stable baseline for video input')
+
+    sfm_engine = str(preview_config.get('sfm_engine', 'glomap'))
+    if input_profile == 'images' and sfm_engine == 'fastmap':
+        score -= 20
+        add_signal('fastmap-images', 'Engine mismatch', -20, 'FastMap is less reliable on unordered photo collections')
+    elif input_profile == 'mixed' and sfm_engine == 'fastmap':
+        score -= 14
+        add_signal('fastmap-mixed', 'Engine mismatch', -14, 'Mixed inputs can be brittle with FastMap')
+
+    extraction_mode = str(preview_config.get('extraction_mode', 'fps')).lower()
+    if input_profile in {'video', 'mixed'} and extraction_mode == 'fps':
+        try:
+            target_fps = float(preview_config.get('target_fps') or 2.0)
+        except (TypeError, ValueError):
+            target_fps = 2.0
+        if target_fps >= 10:
+            score -= 8
+            add_signal('dense-fps', 'Dense sampling', -8, f'{target_fps} fps may add many near-duplicate frames')
+        elif 2 <= target_fps <= 5:
+            score += 4
+            add_signal('balanced-fps', 'Balanced sampling', 4, f'{target_fps} fps is a good temporal density for preview policy')
+        elif 0 < target_fps < 1:
+            score -= 6
+            add_signal('sparse-fps', 'Sparse sampling', -6, f'{target_fps} fps may weaken bridge geometry across the orbit')
+    elif input_profile in {'video', 'mixed'} and extraction_mode == 'frames':
+        max_frames = int(preview_config.get('max_frames') or 100)
+        if max_frames >= 400:
+            score -= 7
+            add_signal('dense-frames', 'Dense frame count', -7, f'{max_frames} frames can create redundancy and heavier matching load')
+        elif 100 <= max_frames <= 250:
+            score += 3
+            add_signal('balanced-frames', 'Balanced frame count', 3, f'{max_frames} frames is a reasonable preview density')
+        elif max_frames < 80:
+            score -= 5
+            add_signal('limited-frames', 'Limited frame count', -5, f'{max_frames} frames may be too sparse for stable bridge recovery')
+
+    if input_profile in {'video', 'mixed'} and preview_config.get('use_separate_training_images'):
+        score += 2
+        add_signal('training-images', 'Training image split', 2, 'Separate high-resolution training images can help final training quality')
+
+    score = max(18, min(96, score))
+    if score >= 80:
+        confidence = {
+            'label': 'High',
+            'tone': 'border-emerald-200 bg-emerald-100 text-emerald-900',
+            'meterClass': 'bg-emerald-500',
+            'score': score,
+            'signals': signals,
+        }
+    elif score >= 60:
+        confidence = {
+            'label': 'Medium',
+            'tone': 'border-amber-200 bg-amber-100 text-amber-900',
+            'meterClass': 'bg-amber-500',
+            'score': score,
+            'signals': signals,
+        }
+    else:
+        confidence = {
+            'label': 'Cautious',
+            'tone': 'border-rose-200 bg-rose-100 text-rose-900',
+            'meterClass': 'bg-rose-500',
+            'score': score,
+            'signals': signals,
+        }
+
+    preview_rules: List[Dict[str, str]] = []
+
+    def add_rule(level: str, text: str) -> None:
+        preview_rules.append({'level': level, 'text': text})
+
+    if explicit_matcher:
+        add_rule('warning', f'Matcher override is active. The backend will respect {explicit_matcher} instead of choosing automatically.')
+    else:
+        add_rule('info', 'Matcher is on Auto, so the backend can still adapt from capture ordering and pair geometry.')
+
+    if input_profile == 'images' and sfm_engine == 'fastmap':
+        add_rule('warning', 'FastMap with an image-only set is a riskier combination. GLOMAP or COLMAP is usually safer for unordered photo collections.')
+    if input_profile == 'mixed' and sfm_engine == 'fastmap':
+        add_rule('warning', 'FastMap on mixed media can be brittle when some inputs behave like unordered photos.')
+    if input_profile == 'video' and explicit_matcher == 'exhaustive':
+        add_rule('warning', 'Exhaustive matching on video/orbit input may reduce the benefit of orbit-safe sequential policy.')
+    if input_profile == 'images' and explicit_matcher == 'sequential':
+        add_rule('warning', 'Sequential override assumes the filenames or capture order are meaningful. Use Auto or Exhaustive for unordered photos.')
+    if input_profile in {'video', 'mixed'} and extraction_mode == 'fps':
+        try:
+            target_fps = float(preview_config.get('target_fps') or 2.0)
+        except (TypeError, ValueError):
+            target_fps = 2.0
+        if target_fps >= 10:
+            add_rule('warning', f'Target FPS is set to {target_fps}. Very dense sampling can add near-duplicate frames and reduce policy confidence.')
+        elif 0 < target_fps < 1:
+            add_rule('warning', f'Target FPS is {target_fps}. Sparse sampling may weaken bridge geometry across the orbit.')
+    if input_profile in {'video', 'mixed'} and extraction_mode == 'frames':
+        max_frames = int(preview_config.get('max_frames') or 100)
+        if max_frames >= 400:
+            add_rule('warning', f'Maximum frames is {max_frames}. This is dense enough to create redundancy and heavier matching load.')
+        elif max_frames < 80:
+            add_rule('warning', f'Maximum frames is only {max_frames}. Sparse frame coverage may make loop closure and bridge recovery harder.')
+    if input_profile in {'images', 'mixed'} and feature_method in {'aliked', 'superpoint'}:
+        add_rule('info', f'{feature_method} + LightGlue should help high-resolution photo coverage and usually raises preview confidence for photo-heavy inputs.')
+    if input_profile == 'video' and feature_method != 'sift':
+        add_rule('info', f'{feature_method} is enabled. Neural features can speed up matching, but ordered video policy still matters more than descriptor choice.')
+    if input_profile in {'video', 'mixed'} and preview_config.get('use_separate_training_images'):
+        add_rule('info', 'Separate high-resolution training images are enabled. This improves training quality but does not change the sparse policy directly.')
+    if input_profile == 'video' and sfm_engine == 'colmap':
+        add_rule('info', 'COLMAP is a conservative choice for video input and aligns well with stricter orbit-safe incremental reconstruction.')
+
+    if input_profile == 'video':
+        expected_policy = {
+            'title': 'Orbit-Safe Video Policy',
+            'tone': 'border-emerald-200 bg-emerald-50 text-emerald-900',
+            'badgeTone': 'border-emerald-200 bg-emerald-100 text-emerald-900',
+            'profileBadge': 'video orbit',
+            'matcherBadge': colmap_cfg.get('matcher_type'),
+            'engineBadge': 'glomap + safe fallback' if sfm_engine == 'glomap' else f'{sfm_engine} preferred',
+            'summary': 'Ordered frames usually start with sequential matching, then the backend can tighten sparse reconstruction and bridge weak transitions with geometry-aware rules.',
+            'toneKey': tone_key,
+        }
+    elif input_profile == 'mixed':
+        expected_policy = {
+            'title': 'Mixed Capture Policy',
+            'tone': 'border-amber-200 bg-amber-50 text-amber-900',
+            'badgeTone': 'border-amber-200 bg-amber-100 text-amber-900',
+            'profileBadge': 'mixed input',
+            'matcherBadge': colmap_cfg.get('matcher_type'),
+            'engineBadge': f'{sfm_engine} preferred',
+            'summary': 'Mixed uploads are treated cautiously. The backend inspects whether the set behaves more like ordered frames or unordered photos before locking the matcher and mapper policy.',
+            'toneKey': tone_key,
+        }
+    elif input_profile == 'images':
+        expected_policy = {
+            'title': 'Photo Set Policy',
+            'tone': 'border-sky-200 bg-sky-50 text-sky-900',
+            'badgeTone': 'border-sky-200 bg-sky-100 text-sky-900',
+            'profileBadge': 'image collection',
+            'matcherBadge': colmap_cfg.get('matcher_type'),
+            'engineBadge': f'{sfm_engine} preferred',
+            'summary': 'For image collections, the backend usually prefers exhaustive matching on smaller unordered sets and sequential only when filenames or capture order look strongly ordered.',
+            'toneKey': tone_key,
+        }
+    else:
+        expected_policy = {
+            'title': 'Waiting For Media Signal',
+            'tone': 'border-gray-200 bg-gray-50 text-gray-800',
+            'badgeTone': 'border-gray-200 bg-white text-gray-700',
+            'profileBadge': 'no files yet',
+            'matcherBadge': colmap_cfg.get('matcher_type'),
+            'engineBadge': f'{sfm_engine} preferred',
+            'summary': 'Select files first, then this panel will estimate which reconstruction policy the backend is most likely to apply.',
+            'toneKey': tone_key,
+        }
+
+    return {
+        'heuristic_source': 'backend',
+        'input_profile': input_profile,
+        'estimated_num_images': estimated_num_images,
+        'capture_pattern': capture_pattern,
+        'expected_policy': expected_policy,
+        'confidence': confidence,
+        'preview_rules': preview_rules,
+        'resolved_matcher_type': colmap_cfg.get('matcher_type'),
+        'orbit_safe_mode': orbit_safe_mode,
+        'orbit_safe_profile': colmap_cfg.get('orbit_safe_profile'),
+        'bridge_risk_score': colmap_cfg.get('bridge_risk_score'),
+    }
+
+
+def analyze_pair_geometry_stats(database_path, bridge_window=6):
+    if not Path(database_path).exists():
+        return None
+
+    with sqlite3.connect(str(database_path)) as conn:
+        image_rows = conn.execute('SELECT image_id, name FROM images ORDER BY image_id').fetchall()
+        pair_rows = conn.execute('SELECT pair_id, rows, config FROM two_view_geometries').fetchall()
+
+    if len(image_rows) < 2:
+        return None
+
+    local_pairs = {}
+    adjacent_inliers = []
+
+    for pair_id, rows, config in pair_rows:
+        image_id1 = int(pair_id // COLMAP_PAIR_ID_FACTOR)
+        image_id2 = int(pair_id % COLMAP_PAIR_ID_FACTOR)
+        gap = image_id2 - image_id1
+        if gap < 1 or gap > bridge_window:
+            continue
+
+        inliers = int(rows or 0) if int(config or 0) > 0 else 0
+        local_pairs[(image_id1, image_id2)] = inliers
+        if gap == 1 and inliers > 0:
+            adjacent_inliers.append(inliers)
+
+    image_ids = [row[0] for row in image_rows]
+    bridge_strengths = []
+    weak_boundary_count = 0
+    zero_boundary_count = 0
+
+    for index in range(len(image_ids) - 1):
+        left_ids = image_ids[max(0, index - 2):index + 1]
+        right_ids = image_ids[index + 1:min(len(image_ids), index + 1 + bridge_window)]
+        bridge_strength = 0
+        for left_id in left_ids:
+            for right_id in right_ids:
+                bridge_strength = max(bridge_strength, local_pairs.get((left_id, right_id), 0))
+        bridge_strengths.append(bridge_strength)
+        if bridge_strength == 0:
+            zero_boundary_count += 1
+        if bridge_strength < 20:
+            weak_boundary_count += 1
+
+    weak_boundary_ratio = weak_boundary_count / max(len(bridge_strengths), 1)
+    zero_boundary_ratio = zero_boundary_count / max(len(bridge_strengths), 1)
+
+    return {
+        'image_count': len(image_rows),
+        'adjacent_median': round(percentile(adjacent_inliers, 0.5), 3),
+        'adjacent_p10': round(percentile(adjacent_inliers, 0.1), 3),
+        'bridge_median': round(percentile(bridge_strengths, 0.5), 3),
+        'bridge_p10': round(percentile(bridge_strengths, 0.1), 3),
+        'bridge_min': round(min(bridge_strengths), 3) if bridge_strengths else 0.0,
+        'weak_boundary_count': weak_boundary_count,
+        'weak_boundary_ratio': round(weak_boundary_ratio, 4),
+        'zero_boundary_count': zero_boundary_count,
+        'zero_boundary_ratio': round(zero_boundary_ratio, 4),
+    }
+
+
+def refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id=None):
+    if not colmap_cfg.get('orbit_safe_mode'):
+        return colmap_cfg
+
+    geometry_stats = analyze_pair_geometry_stats(paths['database_path'])
+    if not geometry_stats:
+        return colmap_cfg
+
+    profile_rank = {
+        'local-conservative': 0,
+        'bridge-balanced': 1,
+        'bridge-recovery': 2,
+    }
+    current_profile = colmap_cfg.get('orbit_safe_profile') or 'bridge-balanced'
+    suggested_profile = current_profile
+
+    if (
+        geometry_stats['bridge_min'] < 18
+        or geometry_stats['bridge_p10'] < 22
+        or geometry_stats['weak_boundary_ratio'] >= 0.08
+        or geometry_stats['zero_boundary_count'] > 0
+    ):
+        suggested_profile = 'bridge-recovery'
+    elif (
+        geometry_stats['bridge_p10'] < 30
+        or geometry_stats['weak_boundary_ratio'] >= 0.03
+        or geometry_stats['adjacent_p10'] < 25
+    ):
+        suggested_profile = 'bridge-balanced'
+    elif geometry_stats['bridge_p10'] >= 55 and geometry_stats['weak_boundary_count'] == 0:
+        suggested_profile = 'local-conservative'
+
+    if profile_rank[suggested_profile] < profile_rank[current_profile]:
+        suggested_profile = current_profile
+
+    refined_policy = make_orbit_safe_policy(
+        suggested_profile,
+        geometry_stats['image_count'],
+        colmap_cfg.get('bridge_risk_score', 0),
+        colmap_cfg.get('capture_pattern') or {},
+        (
+            'Pair-geometry refinement after feature matching '
+            f'({suggested_profile}, bridge_p10={geometry_stats["bridge_p10"]}, '
+            f'weak_ratio={geometry_stats["weak_boundary_ratio"]})'
+        ),
+    )
+
+    colmap_cfg['pair_geometry_stats'] = geometry_stats
+    colmap_cfg['orbit_safe_profile'] = refined_policy['profile_name']
+    colmap_cfg['mapper_params'] = refined_policy['mapper_params']
+    colmap_cfg['min_num_matches'] = min(colmap_cfg['min_num_matches'], refined_policy['min_num_matches_cap'])
+    colmap_cfg['init_num_trials'] = max(colmap_cfg['init_num_trials'], refined_policy['init_num_trials_floor'])
+
+    if project_id:
+        append_log_line(
+            project_id,
+            '🧠 Pair geometry stats: '
+            f'bridge_p10={geometry_stats["bridge_p10"]}, '
+            f'bridge_min={geometry_stats["bridge_min"]}, '
+            f'weak_boundaries={geometry_stats["weak_boundary_count"]}/{geometry_stats["image_count"] - 1}'
+        )
+        append_log_line(
+            project_id,
+            '🧠 Pair-geometry refinement selected orbit-safe profile: '
+            f'{refined_policy["profile_name"]} | '
+            f'min_inliers={refined_policy["mapper_params"]["Mapper.abs_pose_min_num_inliers"]} | '
+            f'min_ratio={refined_policy["mapper_params"]["Mapper.abs_pose_min_inlier_ratio"]} | '
+            f'max_reg_trials={refined_policy["mapper_params"]["Mapper.max_reg_trials"]}'
+        )
+
+    return colmap_cfg
+
+
+def get_sequential_matcher_params(num_images, quality_mode, orbit_safe_mode=False, orbit_safe_policy=None):
+    if orbit_safe_policy:
+        return dict(orbit_safe_policy['matcher_params'])
+
+    if orbit_safe_mode:
+        return {
+            'SequentialMatching.overlap': '36',
+            'SequentialMatching.quadratic_overlap': '1',
+            'SequentialMatching.loop_detection': '0',
+        }
+
+    if num_images <= 150:
+        overlap = (
+            "35"
+            if quality_mode == "ultra_professional"
+            else (
+                "30"
+                if quality_mode == "professional"
+                else ("25" if quality_mode in ["high", "ultra"] else "20")
+            )
+        )
+        quadratic_overlap = "1"
+    elif num_images <= 400:
+        overlap = (
+            "30"
+            if quality_mode == "ultra_professional"
+            else (
+                "25"
+                if quality_mode == "professional"
+                else ("18" if quality_mode in ["high", "ultra"] else "12")
+            )
+        )
+        quadratic_overlap = "1"
+    elif num_images <= 1000:
+        overlap = (
+            "25"
+            if quality_mode == "ultra_professional"
+            else (
+                "20"
+                if quality_mode == "professional"
+                else ("15" if quality_mode in ["high", "ultra"] else "12")
+            )
+        )
+        quadratic_overlap = "1"
+    else:
+        overlap = (
+            "18"
+            if quality_mode == "ultra_professional"
+            else (
+                "12"
+                if quality_mode == "professional"
+                else ("8" if quality_mode in ["high", "ultra"] else "5")
+            )
+        )
+        quadratic_overlap = "0"
+
+    matcher_params = {
+        "SequentialMatching.overlap": overlap,
+        "SequentialMatching.quadratic_overlap": quadratic_overlap,
+    }
+
+    if quadratic_overlap == "1":
+        matcher_params["SequentialMatching.loop_detection"] = "1"
+
+    return matcher_params
+
+
+def generate_hloc_pairs(pairs_path, image_list, matcher_type, matcher_params):
+    matcher_type = normalize_matcher_type(matcher_type) or "exhaustive"
+
+    if matcher_type == "exhaustive":
+        from hloc import pairs_from_exhaustive
+
+        pairs_from_exhaustive.main(pairs_path, image_list=image_list)
+        return len(image_list) * (len(image_list) - 1) // 2
+
+    overlap = max(1, int(matcher_params.get("SequentialMatching.overlap", "10")))
+    quadratic_overlap = matcher_params.get("SequentialMatching.quadratic_overlap", "0") == "1"
+    pair_set = set()
+
+    for index, image_name in enumerate(image_list):
+        upper_bound = min(len(image_list), index + overlap + 1)
+        for next_index in range(index + 1, upper_bound):
+            pair_set.add((image_name, image_list[next_index]))
+
+        if quadratic_overlap:
+            step = 2
+            while index + step < len(image_list):
+                pair_set.add((image_name, image_list[index + step]))
+                step *= 2
+
+    ordered_pairs = sorted(pair_set)
+    with open(pairs_path, "w") as pair_file:
+        pair_file.write("\n".join(f"{first} {second}" for first, second in ordered_pairs))
+
+    return len(ordered_pairs)
+
+
+def should_prefer_incremental_sfm(config, paths, num_images):
+    if config.get('sfm_engine', 'glomap') != 'glomap':
+        return False, None
+
+    if config.get('fast_sfm', False):
+        return False, None
+
+    matcher_type = normalize_matcher_type(config.get('matcher_type'))
+    capture_pattern = analyze_capture_pattern(paths, config)
+    looks_like_video_orbit = capture_pattern['looks_like_video_orbit']
+
+    if config.get('quality_mode') == 'robust':
+        return True, 'Robust mode prefers incremental COLMAP SfM for better outlier resistance'
+
+    if matcher_type == 'exhaustive' and num_images <= 250:
+        return True, 'Exhaustive matching on small/medium datasets is usually more stable with incremental COLMAP SfM'
+
+    if looks_like_video_orbit and num_images <= 250:
+        return True, 'Ordered video/orbit frames are reconstructed more robustly with incremental COLMAP SfM'
+
+    return False, None
 
 def run_processing_pipeline_from_stage(project_id, paths, config, video_files, image_files, from_stage='ingest'):
     """Run the processing pipeline from a specific stage."""
@@ -511,7 +1302,7 @@ def select_best_sparse_model(sparse_path, project_id=None):
     return best_model
 
 
-def get_colmap_config(num_images, project_id=None, quality_mode='balanced', custom_params=None):
+def get_colmap_config(num_images, project_id=None, quality_mode='balanced', custom_params=None, preferred_matcher_type=None, orbit_safe_mode=False, orbit_safe_policy=None):
     """Configure COLMAP parameters based on image count and quality requirements"""
 
     if project_id:
@@ -576,6 +1367,9 @@ def get_colmap_config(num_images, project_id=None, quality_mode='balanced', cust
             append_log_line(project_id, f"⚠️ Reducing max_num_matches from {max_num_matches} to 45960 to prevent GPU memory overflow")
         max_num_matches = 45960  # Safe limit for high-feature images
 
+    explicit_matcher_type = normalize_matcher_type(preferred_matcher_type)
+    orbit_safe_forced_matcher = False
+
     # Matching strategy based on dataset size and quality requirements
     if quality_mode == 'robust':
         # Robust mode: Always use exhaustive for difficult datasets
@@ -596,41 +1390,53 @@ def get_colmap_config(num_images, project_id=None, quality_mode='balanced', cust
     elif num_images <= 150:
         # Medium-small: Sequential with enhanced overlap for better coverage
         matcher_type = 'sequential'
-        overlap = '35' if quality_mode == 'ultra_professional' else ('30' if quality_mode == 'professional' else ('25' if quality_mode in ['high', 'ultra'] else '20'))
-        quadratic = '1'  # Always enable quadratic overlap
-        matcher_params = {
-            'SequentialMatching.overlap': overlap,
-            'SequentialMatching.quadratic_overlap': quadratic,
-            'SequentialMatching.loop_detection': '1'  # Enable loop detection
-        }
+        matcher_params = get_sequential_matcher_params(num_images, quality_mode)
     elif num_images <= 400:
         # Medium-large: Enhanced sequential for better quality
         matcher_type = 'sequential'  # Changed from spatial for better GPU utilization
-        overlap = '30' if quality_mode == 'ultra_professional' else ('25' if quality_mode == 'professional' else ('18' if quality_mode in ['high', 'ultra'] else '12'))
-        quadratic = '1'  # Always enable quadratic overlap
-        matcher_params = {
-            'SequentialMatching.overlap': overlap,
-            'SequentialMatching.quadratic_overlap': quadratic,
-            'SequentialMatching.loop_detection': '1'
-        }
+        matcher_params = get_sequential_matcher_params(num_images, quality_mode)
     elif num_images <= 1000:
         # Large: Quality-aware sequential with improved coverage
         matcher_type = 'sequential'
-        overlap = '25' if quality_mode == 'ultra_professional' else ('20' if quality_mode == 'professional' else ('15' if quality_mode in ['high', 'ultra'] else '12'))
-        quadratic = '1'  # Always enable quadratic overlap
-        matcher_params = {
-            'SequentialMatching.overlap': overlap,
-            'SequentialMatching.quadratic_overlap': quadratic,
-            'SequentialMatching.loop_detection': '1'  # Enable loop detection
-        }
+        matcher_params = get_sequential_matcher_params(num_images, quality_mode)
     else:
         # Very large: Optimized sequential
         matcher_type = 'sequential'
-        overlap = '18' if quality_mode == 'ultra_professional' else ('12' if quality_mode == 'professional' else ('8' if quality_mode in ['high', 'ultra'] else '5'))
-        matcher_params = {
-            'SequentialMatching.overlap': overlap,
-            'SequentialMatching.quadratic_overlap': '0'
-        }
+        matcher_params = get_sequential_matcher_params(num_images, quality_mode)
+
+    if orbit_safe_mode:
+        if explicit_matcher_type == 'exhaustive':
+            orbit_safe_forced_matcher = True
+        matcher_type = 'sequential'
+        matcher_params = get_sequential_matcher_params(
+            num_images,
+            quality_mode,
+            orbit_safe_mode=True,
+            orbit_safe_policy=orbit_safe_policy,
+        )
+        if project_id:
+            if orbit_safe_forced_matcher:
+                append_log_line(project_id, "🛡️ Orbit-safe mode overriding exhaustive matcher with local sequential matching to preserve temporal continuity")
+            else:
+                append_log_line(project_id, "🛡️ Orbit-safe mode enabled: using local sequential matching without loop-closure fallback")
+            if orbit_safe_policy:
+                append_log_line(
+                    project_id,
+                    "🛡️ Orbit-safe profile: "
+                    f"{orbit_safe_policy['profile_name']} | overlap={matcher_params['SequentialMatching.overlap']} "
+                    f"| min_inliers={orbit_safe_policy['mapper_params']['Mapper.abs_pose_min_num_inliers']} "
+                    f"| min_ratio={orbit_safe_policy['mapper_params']['Mapper.abs_pose_min_inlier_ratio']}"
+                )
+    elif explicit_matcher_type:
+        matcher_type = explicit_matcher_type
+        if matcher_type == 'exhaustive':
+            matcher_params = {}
+            max_num_matches = min(max_num_matches, 45960)
+        else:
+            matcher_params = get_sequential_matcher_params(num_images, quality_mode)
+
+        if project_id:
+            append_log_line(project_id, f"🔧 Using user-selected matcher override: {matcher_type}")
 
     # Quality-aware reconstruction settings - NEW: Balanced = High quality baseline
     quality_mapper_scales = {
@@ -685,6 +1491,19 @@ def get_colmap_config(num_images, project_id=None, quality_mode='balanced', cust
     min_model_size = base_min_model_size
     max_num_models = int(base_max_models * mapper_scale['models'])
     init_num_trials = int(base_init_trials * mapper_scale['trials'])
+
+    mapper_params = {}
+
+    if orbit_safe_mode:
+        min_num_matches = min(min_num_matches, (orbit_safe_policy or {}).get('min_num_matches_cap', 12))
+        init_num_trials = max(init_num_trials, (orbit_safe_policy or {}).get('init_num_trials_floor', 200))
+        mapper_params.update((orbit_safe_policy or {}).get('mapper_params', {
+            'Mapper.structure_less_registration_fallback': '0',
+            'Mapper.abs_pose_max_error': '12',
+            'Mapper.abs_pose_min_num_inliers': '18',
+            'Mapper.abs_pose_min_inlier_ratio': '0.12',
+            'Mapper.max_reg_trials': '8',
+        }))
 
     # Override with custom mapper parameters if provided
     if custom_params and quality_mode == 'custom':
@@ -770,10 +1589,15 @@ def get_colmap_config(num_images, project_id=None, quality_mode='balanced', cust
         'max_num_models': max_num_models,
         'init_num_trials': init_num_trials,
         'max_extra_param': max_extra_param,
+        'mapper_params': mapper_params,
 
         # Quality metadata
         'quality_mode': quality_mode,
-        'total_expected_matches': int(num_images * float(matcher_params.get('SequentialMatching.overlap', '10')) if matcher_type == 'sequential' else num_images * (num_images - 1) / 2)
+        'total_expected_matches': int(num_images * float(matcher_params.get('SequentialMatching.overlap', '10')) if matcher_type == 'sequential' else num_images * (num_images - 1) / 2),
+        'orbit_safe_mode': orbit_safe_mode,
+        'orbit_safe_profile': orbit_safe_policy['profile_name'] if orbit_safe_policy else None,
+        'bridge_risk_score': orbit_safe_policy['bridge_risk_score'] if orbit_safe_policy else None,
+        'capture_pattern': orbit_safe_policy['capture_pattern'] if orbit_safe_policy else None,
     }
 
     return config
@@ -932,14 +1756,23 @@ def get_colmap_config_for_pipeline(paths, config, project_id=None):
     
     # Filter out None values to keep only explicitly set parameters
     custom_params = {k: v for k, v in custom_params.items() if v is not None}
+    orbit_safe_policy = build_orbit_safe_policy(paths, config, num_images)
+    orbit_safe_mode = orbit_safe_policy is not None
+    orbit_safe_reason = orbit_safe_policy['reason'] if orbit_safe_policy else None
+    if project_id and orbit_safe_mode:
+        append_log_line(project_id, f"🛡️ Orbit-safe reconstruction policy enabled: {orbit_safe_reason}")
     
     # Pass custom_params only if there are any non-None values
     colmap_config = get_colmap_config(
         num_images, 
         project_id, 
         quality_mode, 
-        custom_params if custom_params else None
+        custom_params if custom_params else None,
+        normalize_matcher_type(config.get('matcher_type')),
+        orbit_safe_mode,
+        orbit_safe_policy,
     )
+    sync_reconstruction_framework(project_id, config, colmap_config, phase='config_ready')
     colmap_exe = get_colmap_executable()
     
     # Check if COLMAP has CUDA support
@@ -1057,7 +1890,7 @@ def run_hloc_feature_matching_stage(project_id, paths, config, hloc_data=None):
     
     try:
         from pathlib import Path
-        from hloc import match_features, pairs_from_exhaustive
+        from hloc import match_features
         from hloc.utils.io import list_h5_names
         import pycolmap
         import torch
@@ -1080,22 +1913,30 @@ def run_hloc_feature_matching_stage(project_id, paths, config, hloc_data=None):
         if not features_path.exists():
             raise FileNotFoundError(f"Features file not found: {features_path}")
         
-        # Generate image pairs (exhaustive for small datasets, sequential for large)
+        # Generate image pairs using the resolved matcher strategy.
         pairs_path = output_path / 'pairs.txt'
         
         # Get list of images
-        image_list = [f.name for f in images_path.iterdir() 
-                     if f.suffix.lower() in {'.jpg', '.jpeg', '.png', '.bmp', '.tiff'}]
+        image_list = sorted(
+            [
+                f.name
+                for f in images_path.iterdir()
+                if f.suffix.lower() in {'.jpg', '.jpeg', '.png', '.bmp', '.tiff'}
+            ]
+        )
         
         append_log_line(project_id, f"📊 Found {len(image_list)} images to match")
-        
-        # Calculate total pairs
-        total_pairs = len(image_list) * (len(image_list) - 1) // 2
-        append_log_line(project_id, f"🔗 Total pairs to match: {total_pairs}")
+        append_log_line(project_id, f"🔗 Using {colmap_cfg['matcher_type']} matcher for neural pair generation")
         
         # Generate pairs file
         append_log_line(project_id, "📝 Generating image pairs...")
-        pairs_from_exhaustive.main(pairs_path, image_list=image_list)
+        total_pairs = generate_hloc_pairs(
+            pairs_path,
+            image_list,
+            colmap_cfg['matcher_type'],
+            colmap_cfg['matcher_params'],
+        )
+        append_log_line(project_id, f"🔗 Total pairs to match: {total_pairs}")
         
         feature_method = config.get('feature_method', 'aliked')
         
@@ -1142,6 +1983,9 @@ def run_hloc_feature_matching_stage(project_id, paths, config, hloc_data=None):
         # Import matches into database  
         import_matches(images_path, database_path, pairs_path, matches_path)
         append_log_line(project_id, "✅ Matches imported to database")
+
+        colmap_cfg = refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id)
+        sync_reconstruction_framework(project_id, config, colmap_cfg, phase='matching_complete')
         
         update_state(project_id, 'feature_matching', status='completed', progress=100)
         update_stage_detail(project_id, 'feature_matching', 
@@ -1362,6 +2206,8 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None):
     update_state(project_id, 'feature_matching', status='completed', progress=100)
     current = matching_progress['current'] or matching_progress['total']
     total_pairs = matching_progress['total'] or matching_progress['current']
+    colmap_cfg = refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id)
+    sync_reconstruction_framework(project_id, config, colmap_cfg, phase='matching_complete')
     if total_pairs:
         update_stage_detail(project_id, 'feature_matching', text=f'Matching pairs: {min(current, total_pairs)}/{total_pairs}', subtext='Feature matching complete')
     else:
@@ -1376,11 +2222,22 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
     num_images, colmap_cfg, colmap_exe, has_cuda = get_colmap_config_for_pipeline(paths, config, project_id)
     if colmap_config:
         colmap_cfg = colmap_config
+    colmap_cfg = refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id)
+    sync_reconstruction_framework(project_id, config, colmap_cfg, phase='sparse_reconstruction')
     
     sfm_engine = config.get('sfm_engine', 'glomap')
     use_glomap = sfm_engine == 'glomap' and GLOMAP_PATH is not None
     use_fastmap = sfm_engine == 'fastmap' and FASTMAP_PATH is not None
     fastmap_temp_dir = None  # Will be set if using FastMap
+
+    prefer_incremental_sfm, incremental_reason = should_prefer_incremental_sfm(
+        config,
+        paths,
+        num_images,
+    )
+    if use_glomap and prefer_incremental_sfm:
+        use_glomap = False
+        append_log_line(project_id, f"🔁 Falling back from GLOMAP to COLMAP incremental SfM: {incremental_reason}")
     
     update_state(project_id, 'sparse_reconstruction', status='running')
     update_stage_detail(project_id, 'sparse_reconstruction', text=f'Initializing...', subtext=f'{num_images} images')
@@ -1464,6 +2321,9 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
             '--Mapper.max_extra_param', str(colmap_cfg['max_extra_param']),
             '--Mapper.num_threads', str(os.cpu_count() or 8)
         ]
+
+        for param, value in colmap_cfg.get('mapper_params', {}).items():
+            cmd.extend([f'--{param}', str(value)])
         
         if has_cuda:
             cmd.extend([
@@ -1839,7 +2699,21 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
                 'init_num_trials': config.get('init_num_trials')
             }
 
-        colmap_config = get_colmap_config(num_images, project_id, quality_mode, custom_params)
+        orbit_safe_policy = build_orbit_safe_policy(paths, config, num_images)
+        orbit_safe_mode = orbit_safe_policy is not None
+        orbit_safe_reason = orbit_safe_policy['reason'] if orbit_safe_policy else None
+        if project_id and orbit_safe_mode:
+            append_log_line(project_id, f"🛡️ Orbit-safe reconstruction policy enabled: {orbit_safe_reason}")
+
+        colmap_config = get_colmap_config(
+            num_images,
+            project_id,
+            quality_mode,
+            custom_params,
+            normalize_matcher_type(config.get('matcher_type')),
+            orbit_safe_mode,
+            orbit_safe_policy,
+        )
 
         # Define COLMAP stage order for from_stage logic
         colmap_stages = ['feature_extraction', 'feature_matching', 'sparse_reconstruction', 'model_conversion']

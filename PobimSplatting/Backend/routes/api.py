@@ -32,6 +32,7 @@ from ..core.projects import (
     update_state,
 )
 from ..pipeline.runner import (
+    build_upload_policy_preview,
     finalize_project,
     get_colmap_executable,
     run_processing_pipeline,
@@ -411,6 +412,119 @@ def health_check():
     )
 
 
+@api_bp.route("/upload/policy_preview", methods=["POST"])
+def upload_policy_preview():
+    payload = request.get_json(silent=True) or {}
+
+    files = payload.get("files") or []
+    file_names = [str(file.get("name") or "") for file in files if file.get("name")]
+    image_names = [
+        name for name in file_names if get_file_type(name) == "image"
+    ]
+    video_count = sum(1 for name in file_names if get_file_type(name) == "video")
+    image_count = len(image_names)
+
+    input_type = payload.get("input_type")
+    if input_type not in {"images", "video", "mixed"}:
+        if video_count and image_count:
+            input_type = "mixed"
+        elif video_count:
+            input_type = "video"
+        elif image_count:
+            input_type = "images"
+        else:
+            input_type = "unknown"
+
+    def parse_int(value, default):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    def parse_float(value, default):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def parse_bool(value, default=False):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() == "true"
+        if value is None:
+            return default
+        return bool(value)
+
+    config = {
+        "camera_model": payload.get("camera_model", "SIMPLE_RADIAL"),
+        "matcher_type": payload.get("matcher_type"),
+        "quality_mode": payload.get("quality_mode", "balanced"),
+        "sfm_engine": payload.get("sfm_engine", "glomap"),
+        "fast_sfm": parse_bool(payload.get("fast_sfm"), False),
+        "feature_method": payload.get("feature_method", "sift"),
+        "extraction_mode": payload.get("extraction_mode", "frames"),
+        "max_frames": parse_int(payload.get("max_frames"), 100),
+        "target_fps": parse_float(payload.get("target_fps"), 1.0),
+        "quality": parse_int(payload.get("quality"), 100),
+        "preview_count": parse_int(payload.get("preview_count"), 10),
+        "use_gpu_extraction": parse_bool(payload.get("use_gpu_extraction"), True),
+        "colmap_resolution": payload.get("colmap_resolution", "2K"),
+        "training_resolution": payload.get("training_resolution", "4K"),
+        "use_separate_training_images": parse_bool(payload.get("use_separate_training_images"), False),
+        "crop_size": parse_int(payload.get("crop_size"), 0),
+        "mixed_precision": parse_bool(payload.get("mixed_precision"), False),
+        "input_type": input_type,
+    }
+
+    for key in (
+        "iterations",
+        "max_num_features",
+        "max_num_matches",
+        "sequential_overlap",
+        "min_num_matches",
+        "max_num_models",
+        "init_num_trials",
+    ):
+        if payload.get(key) is not None:
+            config[key] = parse_int(payload.get(key), 0)
+
+    for key in (
+        "densify_grad_threshold",
+        "refine_every",
+        "warmup_length",
+        "ssim_weight",
+        "learning_rate",
+        "position_lr_init",
+        "position_lr_final",
+        "feature_lr",
+        "opacity_lr",
+        "scaling_lr",
+        "rotation_lr",
+        "percent_dense",
+        "peak_threshold",
+        "edge_threshold",
+        "max_num_orientations",
+    ):
+        if payload.get(key) is not None:
+            try:
+                config[key] = float(payload.get(key))
+            except (TypeError, ValueError):
+                pass
+
+    preview = build_upload_policy_preview(
+        config,
+        {
+            "input_type": input_type,
+            "file_names": file_names,
+            "image_names": image_names,
+            "image_count": image_count,
+            "video_count": video_count,
+        },
+    )
+    return jsonify(preview)
+
+
 @api_bp.route("/upload", methods=["POST"])
 def upload_files():
     """Handle file upload (images and/or videos)."""
@@ -468,9 +582,13 @@ def upload_files():
     # Get processing configuration
     quality_mode = request.form.get("quality_mode", "balanced")
 
+    matcher_type = request.form.get("matcher_type") or None
+    if matcher_type and matcher_type.strip().lower() == "auto":
+        matcher_type = None
+
     config = {
         "camera_model": request.form.get("camera_model", "SIMPLE_RADIAL"),
-        "matcher_type": request.form.get("matcher_type", "sequential"),
+        "matcher_type": matcher_type,
         "quality_mode": quality_mode,
         "sfm_engine": request.form.get("sfm_engine", "glomap"),
         "fast_sfm": request.form.get("fast_sfm", "false").lower() == "true",
@@ -1116,7 +1234,7 @@ def retry_project(project_id):
                     )
 
             # Update COLMAP Feature Matching parameters if provided
-            for param_key in ["max_num_matches", "sequential_overlap"]:
+            for param_key in ["matcher_type", "max_num_matches", "sequential_overlap"]:
                 if param_key in new_params and new_params[param_key] is not None:
                     config[param_key] = new_params[param_key]
                     append_log_line(

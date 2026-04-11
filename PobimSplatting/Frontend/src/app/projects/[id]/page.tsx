@@ -116,6 +116,13 @@ const formatLogTail = (logTail: any[] = []) =>
     return time ? `[${time}] ${message}` : message;
   });
 
+const formatPercent = (value?: number | null) => {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return '--';
+  }
+  return `${Math.round(value * 100)}%`;
+};
+
 export default function ProjectDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -170,6 +177,7 @@ export default function ProjectDetailPage() {
   const [showDownloadModal, setShowDownloadModal] = useState(false);
   const [plyFiles, setPlyFiles] = useState<PlyFile[]>([]);
   const [loadingPlyFiles, setLoadingPlyFiles] = useState(false);
+  const framework = project?.reconstruction_framework;
 
   // Auto-expand the running stage
   useEffect(() => {
@@ -908,6 +916,70 @@ export default function ProjectDetailPage() {
             </div>
 
             <div className="p-6 space-y-8">
+              {framework && (
+                <div className="border border-gray-200 rounded-2xl p-6 bg-gray-50/70">
+                  <div className="flex items-start justify-between gap-4 mb-5">
+                    <div>
+                      <h3 className="text-sm font-medium text-black">Reconstruction Framework</h3>
+                      <p className="text-sm text-gray-500 mt-1">
+                        Dynamic policy state from the backend heuristic engine and pair-geometry refinement.
+                      </p>
+                    </div>
+                    {framework.orbit_safe_profile && (
+                      <span className="inline-flex items-center rounded-full border border-gray-300 px-3 py-1 text-xs font-medium text-black bg-white">
+                        {framework.orbit_safe_profile}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-5">
+                    <div className="rounded-xl border border-gray-200 bg-white p-4">
+                      <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Pipeline</p>
+                      <p className="text-sm font-medium text-black">{framework.sfm_engine || project?.config?.sfm_engine || '--'} / {framework.feature_method || project?.config?.feature_method || '--'}</p>
+                      <p className="text-xs text-gray-500 mt-1">Phase: {framework.phase || '--'}</p>
+                    </div>
+                    <div className="rounded-xl border border-gray-200 bg-white p-4">
+                      <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Matching Policy</p>
+                      <p className="text-sm font-medium text-black">{framework.matcher_type || '--'}</p>
+                      <p className="text-xs text-gray-500 mt-1">
+                        overlap {framework.matcher_params?.['SequentialMatching.overlap'] || '--'}
+                        {' · '}
+                        quadratic {framework.matcher_params?.['SequentialMatching.quadratic_overlap'] || '--'}
+                      </p>
+                    </div>
+                    <div className="rounded-xl border border-gray-200 bg-white p-4">
+                      <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Bridge Risk</p>
+                      <p className="text-sm font-medium text-black">{framework.bridge_risk_score ?? '--'}</p>
+                      <p className="text-xs text-gray-500 mt-1">
+                        orbit-safe {framework.orbit_safe_mode ? 'enabled' : 'disabled'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="rounded-xl border border-gray-200 bg-white p-4">
+                      <p className="text-xs uppercase tracking-wide text-gray-500 mb-3">Mapper Thresholds</p>
+                      <div className="space-y-2 text-sm text-gray-700">
+                        <div className="flex items-center justify-between"><span>Abs pose max error</span><span className="font-medium text-black">{framework.mapper_params?.['Mapper.abs_pose_max_error'] || '--'}</span></div>
+                        <div className="flex items-center justify-between"><span>Min inliers</span><span className="font-medium text-black">{framework.mapper_params?.['Mapper.abs_pose_min_num_inliers'] || '--'}</span></div>
+                        <div className="flex items-center justify-between"><span>Min inlier ratio</span><span className="font-medium text-black">{framework.mapper_params?.['Mapper.abs_pose_min_inlier_ratio'] || '--'}</span></div>
+                        <div className="flex items-center justify-between"><span>Max registration trials</span><span className="font-medium text-black">{framework.mapper_params?.['Mapper.max_reg_trials'] || '--'}</span></div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-gray-200 bg-white p-4">
+                      <p className="text-xs uppercase tracking-wide text-gray-500 mb-3">Pair Geometry</p>
+                      <div className="space-y-2 text-sm text-gray-700">
+                        <div className="flex items-center justify-between"><span>Bridge p10</span><span className="font-medium text-black">{framework.pair_geometry_stats?.bridge_p10 ?? '--'}</span></div>
+                        <div className="flex items-center justify-between"><span>Bridge min</span><span className="font-medium text-black">{framework.pair_geometry_stats?.bridge_min ?? '--'}</span></div>
+                        <div className="flex items-center justify-between"><span>Weak boundaries</span><span className="font-medium text-black">{framework.pair_geometry_stats?.weak_boundary_count ?? '--'}</span></div>
+                        <div className="flex items-center justify-between"><span>Weak ratio</span><span className="font-medium text-black">{formatPercent(framework.pair_geometry_stats?.weak_boundary_ratio)}</span></div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Horizontal Stage Timeline */}
               <div>
                 <h3 className="text-sm font-medium text-black mb-6">Processing Pipeline</h3>

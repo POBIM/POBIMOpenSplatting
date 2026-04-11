@@ -48,6 +48,36 @@ export interface Project {
     feature_method?: 'sift' | 'aliked' | 'superpoint';
     [key: string]: any;
   };
+  reconstruction_framework?: ReconstructionFramework;
+}
+
+export interface ReconstructionFramework {
+  phase?: string;
+  sfm_engine?: 'glomap' | 'colmap' | 'fastmap' | string;
+  feature_method?: 'sift' | 'aliked' | 'superpoint' | string;
+  matcher_type?: string;
+  orbit_safe_mode?: boolean;
+  orbit_safe_profile?: string | null;
+  bridge_risk_score?: number | null;
+  matcher_params?: Record<string, string>;
+  mapper_params?: Record<string, string>;
+  capture_pattern?: {
+    ordered_frame_ratio?: number;
+    frame_like_images?: number;
+    looks_like_video_orbit?: boolean;
+  };
+  pair_geometry_stats?: {
+    image_count?: number;
+    adjacent_median?: number;
+    adjacent_p10?: number;
+    bridge_median?: number;
+    bridge_p10?: number;
+    bridge_min?: number;
+    weak_boundary_count?: number;
+    weak_boundary_ratio?: number;
+    zero_boundary_count?: number;
+    zero_boundary_ratio?: number;
+  };
 }
 
 export interface ProcessingStatus {
@@ -59,6 +89,7 @@ export interface ProcessingStatus {
   error?: string;
   ply_file?: string;
   frame_previews?: string[];
+  reconstruction_framework?: ReconstructionFramework;
 }
 
 export interface PlyFile {
@@ -85,13 +116,58 @@ export interface UploadConfig {
   quality_mode?: string;
   iterations?: number;
   camera_model?: string;
-  matcher_type?: string;
+  matcher_type?: 'auto' | 'sequential' | 'exhaustive' | string;
   extraction_mode?: string;
   max_frames?: number;
   target_fps?: number;
   quality?: number;
   preview_count?: number;
   custom_params?: any;
+}
+
+export interface UploadPolicyPreviewSignal {
+  key: string;
+  label: string;
+  delta: number;
+  detail: string;
+}
+
+export interface UploadPolicyPreviewRule {
+  level: 'info' | 'warning' | string;
+  text: string;
+}
+
+export interface UploadPolicyPreview {
+  heuristic_source: 'backend' | string;
+  input_profile: 'images' | 'video' | 'mixed' | 'unknown' | string;
+  estimated_num_images: number;
+  capture_pattern?: {
+    ordered_frame_ratio?: number;
+    frame_like_images?: number;
+    looks_like_video_orbit?: boolean;
+  };
+  expected_policy: {
+    title: string;
+    tone: string;
+    badgeTone: string;
+    profileBadge: string;
+    matcherBadge: string;
+    engineBadge: string;
+    summary: string;
+    toneKey: 'images' | 'video' | 'mixed' | 'unknown' | string;
+  };
+  confidence: {
+    label: 'High' | 'Medium' | 'Cautious' | string;
+    tone: string;
+    meterClass: string;
+    score: number;
+    signals: UploadPolicyPreviewSignal[];
+  };
+  preview_rules: UploadPolicyPreviewRule[];
+  resolved_matcher_type?: string;
+  orbit_safe_mode?: boolean;
+  orbit_safe_profile?: string | null;
+  bridge_risk_score?: number | null;
 }
 
 // API helper functions
@@ -149,6 +225,21 @@ export const api = {
     return `${API_BASE_URL}/api/download/${id}`;
   },
 
+  previewUploadPolicy: async (files: File[], config: any): Promise<UploadPolicyPreview> => {
+    const response = await apiClient.post('/api/upload/policy_preview', {
+      files: files.map((file) => ({ name: file.name, type: file.type, size: file.size })),
+      input_type: files.some((file) => file.type.startsWith('video/'))
+        ? files.some((file) => file.type.startsWith('image/'))
+          ? 'mixed'
+          : 'video'
+        : files.some((file) => file.type.startsWith('image/'))
+          ? 'images'
+          : 'unknown',
+      ...config,
+    });
+    return response.data;
+  },
+
   // Upload
   upload: async (files: File[], config: any, onProgress?: (loaded: number, total: number) => void) => {
     const formData = new FormData();
@@ -163,7 +254,9 @@ export const api = {
     if (config.project_description) formData.append('project_description', config.project_description);
     if (config.quality_mode) formData.append('quality_mode', config.quality_mode);
     if (config.camera_model) formData.append('camera_model', config.camera_model);
-    if (config.matcher_type) formData.append('matcher_type', config.matcher_type);
+    if (config.matcher_type && config.matcher_type !== 'auto') {
+      formData.append('matcher_type', config.matcher_type);
+    }
     if (config.sfm_engine) formData.append('sfm_engine', config.sfm_engine);
     if (config.fast_sfm !== undefined) formData.append('fast_sfm', config.fast_sfm.toString());
     if (config.feature_method) formData.append('feature_method', config.feature_method);

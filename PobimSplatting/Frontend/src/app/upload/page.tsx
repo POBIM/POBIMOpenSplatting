@@ -1,10 +1,12 @@
 'use client';
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { Upload, FileVideo, Image, CheckCircle, AlertCircle, Settings, Clock, Info, Zap, Sliders, Wrench } from 'lucide-react';
 import { Accordion } from '@/components/ui';
-import { api } from '@/lib/api';
+import { api, UploadPolicyPreview } from '@/lib/api';
 import { useRouter } from 'next/navigation';
+
+type MatcherMode = 'auto' | 'sequential' | 'exhaustive';
 
 export default function UploadPage() {
   const router = useRouter();
@@ -16,11 +18,13 @@ export default function UploadPage() {
   const [uploadSpeed, setUploadSpeed] = useState(0);
   const [uploadStartTime, setUploadStartTime] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [policyPreview, setPolicyPreview] = useState<UploadPolicyPreview | null>(null);
+  const [policyPreviewLoading, setPolicyPreviewLoading] = useState(false);
   const [config, setConfig] = useState({
     project_name: '',
     quality_mode: 'high',
     camera_model: 'SIMPLE_RADIAL',
-    matcher_type: 'sequential',
+    matcher_type: 'auto' as MatcherMode,
     extraction_mode: 'fps',
     max_frames: 100,
     target_fps: 2.0,
@@ -140,6 +144,7 @@ export default function UploadPage() {
       // Add custom parameters to config if custom mode is selected
       const uploadConfig = {
         ...config,
+        matcher_type: config.matcher_type === 'auto' ? undefined : config.matcher_type,
         ...(config.quality_mode === 'custom' && {
           // OpenSplat Training
           iterations: customParams.iterations,
@@ -225,6 +230,345 @@ export default function UploadPage() {
   const hasVideo = files.some(file => file.type.startsWith('video/'));
   const hasImages = files.some(file => file.type.startsWith('image/'));
   const totalSize = files.reduce((sum, file) => sum + file.size, 0);
+  const inputProfile = hasVideo && hasImages ? 'mixed' : hasVideo ? 'video' : hasImages ? 'images' : 'unknown';
+  const matcherRecommendation = hasVideo
+    ? 'Auto is recommended for video and orbit captures. The backend can switch into orbit-safe sequential matching and refine sparse reconstruction from pair geometry.'
+    : hasImages && !hasVideo
+      ? 'Auto is recommended for most photo sets. The backend can choose exhaustive for smaller unordered image collections and sequential when the input looks ordered.'
+      : 'Auto lets the backend pick a matcher after inspecting the uploaded media.';
+  const engineRecommendation = hasVideo
+    ? 'For ordered video/orbit captures, the backend may tighten reconstruction policy or fall back to incremental behavior even if GLOMAP is selected here.'
+    : 'Engine selection here is a preferred starting point. The backend framework can still apply safer reconstruction policy when the capture looks risky.';
+  const policyLegend = [
+    {
+      key: 'video',
+      label: 'Video / orbit',
+      detail: 'Emerald policy for ordered frames and orbit-safe behavior.',
+      dotClass: 'bg-emerald-500',
+      toneClass: 'border-emerald-200 bg-emerald-50 text-emerald-900',
+      icon: FileVideo,
+    },
+    {
+      key: 'mixed',
+      label: 'Mixed capture',
+      detail: 'Amber policy for cautious inspection before lock-in.',
+      dotClass: 'bg-amber-500',
+      toneClass: 'border-amber-200 bg-amber-50 text-amber-900',
+      icon: Upload,
+    },
+    {
+      key: 'images',
+      label: 'Image set',
+      detail: 'Sky policy for photo collections and unordered coverage.',
+      dotClass: 'bg-sky-500',
+      toneClass: 'border-sky-200 bg-sky-50 text-sky-900',
+      icon: Image,
+    },
+  ] as const;
+  const expectedPolicy = (() => {
+    if (inputProfile === 'video') {
+      return {
+        title: 'Orbit-Safe Video Policy',
+        tone: 'border-emerald-200 bg-emerald-50 text-emerald-900',
+        badgeTone: 'border-emerald-200 bg-emerald-100 text-emerald-900',
+        profileBadge: 'video orbit',
+        matcherBadge: config.matcher_type === 'auto' ? 'auto -> sequential' : config.matcher_type,
+        engineBadge: config.sfm_engine === 'glomap' ? 'glomap + safe fallback' : `${config.sfm_engine} preferred`,
+        summary: 'Ordered frames usually start with sequential matching, then the backend can tighten sparse reconstruction and bridge weak transitions with geometry-aware rules.',
+        icon: FileVideo,
+      };
+    }
+
+    if (inputProfile === 'mixed') {
+      return {
+        title: 'Mixed Capture Policy',
+        tone: 'border-amber-200 bg-amber-50 text-amber-900',
+        badgeTone: 'border-amber-200 bg-amber-100 text-amber-900',
+        profileBadge: 'mixed input',
+        matcherBadge: config.matcher_type === 'auto' ? 'auto -> inspect ordering' : config.matcher_type,
+        engineBadge: `${config.sfm_engine} preferred`,
+        summary: 'Mixed uploads are treated cautiously. The backend inspects whether the set behaves more like ordered frames or unordered photos before locking the matcher and mapper policy.',
+        icon: Upload,
+      };
+    }
+
+    if (inputProfile === 'images') {
+      return {
+        title: 'Photo Set Policy',
+        tone: 'border-sky-200 bg-sky-50 text-sky-900',
+        badgeTone: 'border-sky-200 bg-sky-100 text-sky-900',
+        profileBadge: 'image collection',
+        matcherBadge: config.matcher_type === 'auto' ? 'auto -> exhaustive or sequential' : config.matcher_type,
+        engineBadge: `${config.sfm_engine} preferred`,
+        summary: 'For image collections, the backend usually prefers exhaustive matching on smaller unordered sets and sequential only when filenames or capture order look strongly ordered.',
+        icon: Image,
+      };
+    }
+
+    return {
+      title: 'Waiting For Media Signal',
+      tone: 'border-gray-200 bg-gray-50 text-gray-800',
+      badgeTone: 'border-gray-200 bg-white text-gray-700',
+      profileBadge: 'no files yet',
+      matcherBadge: config.matcher_type === 'auto' ? 'auto' : config.matcher_type,
+      engineBadge: `${config.sfm_engine} preferred`,
+      summary: 'Select files first, then this panel will estimate which reconstruction policy the backend is most likely to apply.',
+      icon: Info,
+    };
+  })();
+  const confidenceAssessment = (() => {
+    let score = inputProfile === 'video' ? 88 : inputProfile === 'images' ? 76 : inputProfile === 'mixed' ? 68 : 42;
+    const reasons: string[] = [];
+
+    if (config.matcher_type !== 'auto') {
+      score -= 18;
+      reasons.push(`matcher override: ${config.matcher_type}`);
+    } else {
+      reasons.push('matcher auto enabled');
+    }
+
+    if (inputProfile === 'images' && config.sfm_engine === 'fastmap') {
+      score -= 20;
+      reasons.push('fastmap on image-only set');
+    }
+
+    if (inputProfile === 'mixed' && config.sfm_engine === 'fastmap') {
+      score -= 14;
+      reasons.push('fastmap on mixed input');
+    }
+
+    if (inputProfile === 'video' && config.matcher_type === 'exhaustive') {
+      score -= 16;
+      reasons.push('exhaustive override on video');
+    }
+
+    if (inputProfile === 'images' && config.matcher_type === 'sequential') {
+      score -= 14;
+      reasons.push('sequential override on photos');
+    }
+
+    if (hasVideo && config.extraction_mode === 'fps') {
+      if (config.target_fps >= 10) {
+        score -= 8;
+        reasons.push(`dense sampling at ${config.target_fps} fps`);
+      } else if (config.target_fps >= 2 && config.target_fps <= 5) {
+        score += 4;
+        reasons.push(`balanced sampling at ${config.target_fps} fps`);
+      } else if (config.target_fps < 1) {
+        score -= 6;
+        reasons.push(`sparse sampling at ${config.target_fps} fps`);
+      }
+    }
+
+    if (hasVideo && config.extraction_mode === 'frames') {
+      if (config.max_frames >= 400) {
+        score -= 7;
+        reasons.push(`high frame count: ${config.max_frames}`);
+      } else if (config.max_frames >= 100 && config.max_frames <= 250) {
+        score += 3;
+        reasons.push(`balanced frame count: ${config.max_frames}`);
+      } else if (config.max_frames < 80) {
+        score -= 5;
+        reasons.push(`limited frame count: ${config.max_frames}`);
+      }
+    }
+
+    if ((inputProfile === 'images' || inputProfile === 'mixed') && config.feature_method !== 'sift') {
+      score += 5;
+      reasons.push(`neural features: ${config.feature_method}`);
+    }
+
+    if (inputProfile === 'video' && config.feature_method === 'sift') {
+      score += 2;
+      reasons.push('classic sift compatibility for video');
+    }
+
+    if (hasVideo && config.use_separate_training_images) {
+      score += 2;
+      reasons.push('separate training images enabled');
+    }
+
+    score = Math.max(18, Math.min(96, score));
+
+    if (score >= 80) {
+      return {
+        label: 'High',
+        tone: 'border-emerald-200 bg-emerald-100 text-emerald-900',
+        meterClass: 'bg-emerald-500',
+        score,
+        reasons,
+      };
+    }
+
+    if (score >= 60) {
+      return {
+        label: 'Medium',
+        tone: 'border-amber-200 bg-amber-100 text-amber-900',
+        meterClass: 'bg-amber-500',
+        score,
+        reasons,
+      };
+    }
+
+    return {
+      label: 'Cautious',
+      tone: 'border-rose-200 bg-rose-100 text-rose-900',
+      meterClass: 'bg-rose-500',
+      score,
+      reasons,
+    };
+  })();
+  const previewRules = (() => {
+    const rules: Array<{ level: 'info' | 'warning'; text: string }> = [];
+
+    if (config.matcher_type !== 'auto') {
+      rules.push({
+        level: 'warning',
+        text: `Matcher override is active. The backend will respect ${config.matcher_type} instead of choosing automatically.`,
+      });
+    } else {
+      rules.push({
+        level: 'info',
+        text: 'Matcher is on Auto, so the backend can still adapt from capture ordering and pair geometry.',
+      });
+    }
+
+    if (inputProfile === 'images' && config.sfm_engine === 'fastmap') {
+      rules.push({
+        level: 'warning',
+        text: 'FastMap with an image-only set is a riskier combination. GLOMAP or COLMAP is usually safer for unordered photo collections.',
+      });
+    }
+
+    if (inputProfile === 'video' && config.matcher_type === 'exhaustive') {
+      rules.push({
+        level: 'warning',
+        text: 'Exhaustive matching on video/orbit input may reduce the benefit of orbit-safe sequential policy.',
+      });
+    }
+
+    if (inputProfile === 'images' && config.matcher_type === 'sequential') {
+      rules.push({
+        level: 'warning',
+        text: 'Sequential override assumes the filenames or capture order are meaningful. Use Auto or Exhaustive for unordered photos.',
+      });
+    }
+
+    if (inputProfile === 'mixed' && config.sfm_engine === 'fastmap') {
+      rules.push({
+        level: 'warning',
+        text: 'FastMap on mixed media can be brittle when some inputs behave like unordered photos.',
+      });
+    }
+
+    if (inputProfile === 'video' && config.sfm_engine === 'colmap') {
+      rules.push({
+        level: 'info',
+        text: 'COLMAP is a conservative choice for video input and aligns well with stricter orbit-safe incremental reconstruction.',
+      });
+    }
+
+    if (hasVideo && config.extraction_mode === 'fps' && config.target_fps >= 10) {
+      rules.push({
+        level: 'warning',
+        text: `Target FPS is set to ${config.target_fps}. Very dense sampling can add near-duplicate frames and reduce policy confidence.`,
+      });
+    }
+
+    if (hasVideo && config.extraction_mode === 'fps' && config.target_fps > 0 && config.target_fps < 1) {
+      rules.push({
+        level: 'warning',
+        text: `Target FPS is ${config.target_fps}. Sparse sampling may weaken bridge geometry across the orbit.`,
+      });
+    }
+
+    if (hasVideo && config.extraction_mode === 'frames' && config.max_frames >= 400) {
+      rules.push({
+        level: 'warning',
+        text: `Maximum frames is ${config.max_frames}. This is dense enough to create redundancy and heavier matching load.`,
+      });
+    }
+
+    if (hasVideo && config.extraction_mode === 'frames' && config.max_frames < 80) {
+      rules.push({
+        level: 'warning',
+        text: `Maximum frames is only ${config.max_frames}. Sparse frame coverage may make loop closure and bridge recovery harder.`,
+      });
+    }
+
+    if ((inputProfile === 'images' || inputProfile === 'mixed') && config.feature_method !== 'sift') {
+      rules.push({
+        level: 'info',
+        text: `${config.feature_method} + LightGlue should help high-resolution photo coverage and usually raises preview confidence for photo-heavy inputs.`,
+      });
+    }
+
+    if (inputProfile === 'video' && config.feature_method !== 'sift') {
+      rules.push({
+        level: 'info',
+        text: `${config.feature_method} is enabled. Neural features can speed up matching, but ordered video policy still matters more than raw descriptor choice.`,
+      });
+    }
+
+    if (hasVideo && config.use_separate_training_images) {
+      rules.push({
+        level: 'info',
+        text: 'Separate high-resolution training images are enabled. This improves training quality but does not change the sparse policy directly.',
+      });
+    }
+
+    return rules;
+  })();
+  const resolvedInputProfile = policyPreview?.input_profile ?? inputProfile;
+  const resolvedExpectedPolicy = policyPreview?.expected_policy ?? expectedPolicy;
+  const resolvedConfidence = policyPreview?.confidence ?? confidenceAssessment;
+  const resolvedPreviewRules = policyPreview?.preview_rules ?? previewRules;
+  const resolvedConfidenceSignals = policyPreview?.confidence?.signals
+    ?? confidenceAssessment.reasons.map((reason, index) => ({
+      key: `fallback-${index}`,
+      label: reason,
+      delta: 0,
+      detail: reason,
+    }));
+  const resolvedEstimatedNumImages = policyPreview?.estimated_num_images;
+  const policyToneKey = policyPreview?.expected_policy?.toneKey ?? resolvedInputProfile;
+  const PolicyIcon = policyToneKey === 'video'
+    ? FileVideo
+    : policyToneKey === 'mixed'
+      ? Upload
+      : policyToneKey === 'images'
+        ? Image
+        : Info;
+
+  useEffect(() => {
+    let cancelled = false;
+    const timeoutId = window.setTimeout(async () => {
+      try {
+        setPolicyPreviewLoading(true);
+        const preview = await api.previewUploadPolicy(files, {
+          ...config,
+          matcher_type: config.matcher_type === 'auto' ? undefined : config.matcher_type,
+        });
+        if (!cancelled) {
+          setPolicyPreview(preview);
+        }
+      } catch (previewError) {
+        if (!cancelled) {
+          setPolicyPreview(null);
+          console.error('Failed to load backend upload policy preview:', previewError);
+        }
+      } finally {
+        if (!cancelled) {
+          setPolicyPreviewLoading(false);
+        }
+      }
+    }, 220);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [files, config]);
 
   const getQualityInfo = (mode: string) => {
     const info = {
@@ -346,6 +690,132 @@ export default function UploadPage() {
                 </div>
               </div>
 
+              <div className={`rounded-2xl border p-5 ${resolvedExpectedPolicy.tone}`}>
+                <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] opacity-70">Expected Policy</p>
+                    <div className="mt-1 flex items-center gap-3">
+                      <div className={`flex h-10 w-10 items-center justify-center rounded-2xl border ${resolvedExpectedPolicy.badgeTone}`}>
+                        <PolicyIcon className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <h3 className="text-lg font-semibold">{resolvedExpectedPolicy.title}</h3>
+                        <p className="text-xs opacity-70">
+                          {policyPreviewLoading ? 'Refreshing backend heuristic...' : 'Resolved from backend preview heuristic'}
+                        </p>
+                      </div>
+                    </div>
+                    <p className="mt-2 text-sm opacity-90">{resolvedExpectedPolicy.summary}</p>
+                  </div>
+                  <div className="flex flex-wrap gap-2 text-xs font-medium">
+                    <span className={`rounded-full border px-3 py-1 ${resolvedExpectedPolicy.badgeTone}`}>{resolvedExpectedPolicy.profileBadge}</span>
+                    <span className="rounded-full border border-current/15 bg-white/70 px-3 py-1">matcher: {resolvedExpectedPolicy.matcherBadge}</span>
+                    <span className="rounded-full border border-current/15 bg-white/70 px-3 py-1">engine: {resolvedExpectedPolicy.engineBadge}</span>
+                    {resolvedEstimatedNumImages ? (
+                      <span className="rounded-full border border-current/15 bg-white/70 px-3 py-1">est. frames/images: {resolvedEstimatedNumImages}</span>
+                    ) : null}
+                  </div>
+                </div>
+                {policyPreviewLoading && (
+                  <div className="mt-4 space-y-3 rounded-xl border border-white/60 bg-white/40 p-4 animate-pulse">
+                    <div className="h-2 w-32 rounded bg-white/80" />
+                    <div className="h-3 w-full rounded bg-white/70" />
+                    <div className="h-3 w-4/5 rounded bg-white/60" />
+                  </div>
+                )}
+                <div className="mt-4 rounded-xl border border-black/5 bg-white/70 p-4 text-gray-900">
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500">Preview Confidence</p>
+                      <div className="mt-1 flex items-center gap-3">
+                        <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${resolvedConfidence.tone}`}>{resolvedConfidence.label}</span>
+                        <span className="text-sm text-gray-600">score {resolvedConfidence.score}/100</span>
+                      </div>
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      Signals: {resolvedConfidenceSignals.slice(0, 3).map((signal) => signal.label).join(' • ')}
+                    </div>
+                  </div>
+                  <div className="mt-3 h-2.5 overflow-hidden rounded-full bg-gray-200">
+                    <div
+                      className={`h-full rounded-full transition-all duration-300 ${resolvedConfidence.meterClass}`}
+                      style={{ width: `${resolvedConfidence.score}%` }}
+                    />
+                  </div>
+                  {policyPreviewLoading && (
+                    <div className="mt-3 grid gap-2 md:grid-cols-3 animate-pulse">
+                      <div className="h-8 rounded-full bg-gray-200/80" />
+                      <div className="h-8 rounded-full bg-gray-200/70" />
+                      <div className="h-8 rounded-full bg-gray-200/60" />
+                    </div>
+                  )}
+                  <div className="mt-3 flex flex-wrap gap-2 text-xs text-gray-600">
+                    {resolvedConfidenceSignals.map((signal) => (
+                      <span
+                        key={signal.key}
+                        className={`rounded-full border px-3 py-1 ${signal.delta >= 0 ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-900'}`}
+                        title={`${signal.label}: ${signal.detail} (${signal.delta >= 0 ? '+' : ''}${signal.delta})`}
+                      >
+                        {signal.label} {signal.delta >= 0 ? `+${signal.delta}` : signal.delta}
+                      </span>
+                    ))}
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2 text-xs text-gray-600">
+                    <span className="rounded-full border border-gray-200 bg-white px-3 py-1">feature: {config.feature_method}</span>
+                    {hasVideo && config.extraction_mode === 'fps' && (
+                      <span className="rounded-full border border-gray-200 bg-white px-3 py-1">target fps: {config.target_fps}</span>
+                    )}
+                    {hasVideo && config.extraction_mode === 'frames' && (
+                      <span className="rounded-full border border-gray-200 bg-white px-3 py-1">max frames: {config.max_frames}</span>
+                    )}
+                    {hasVideo && (
+                      <span className="rounded-full border border-gray-200 bg-white px-3 py-1">
+                        hi-res training: {config.use_separate_training_images ? 'enabled' : 'off'}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div className="mt-4 grid gap-2 md:grid-cols-3">
+                  {policyLegend.map((entry) => {
+                    const LegendIcon = entry.icon;
+                    const isActive = entry.key === resolvedInputProfile;
+
+                    return (
+                      <div
+                        key={entry.key}
+                        className={`rounded-xl border px-3 py-3 ${isActive ? entry.toneClass : 'border-gray-200 bg-white text-gray-600'}`}
+                      >
+                        <div className="flex items-center gap-2 text-sm font-medium">
+                          <span className={`h-2.5 w-2.5 rounded-full ${entry.dotClass}`} />
+                          <LegendIcon className="h-4 w-4" />
+                          <span>{entry.label}</span>
+                        </div>
+                        <p className="mt-1 text-xs opacity-80">{entry.detail}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="mt-4 space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] opacity-70">Live Rule Preview</p>
+                  {resolvedPreviewRules.map((rule, index) => (
+                    <div
+                      key={`${rule.level}-${index}`}
+                      className={`flex items-start gap-2 rounded-xl border px-3 py-2 text-sm ${
+                        rule.level === 'warning'
+                          ? 'border-amber-200 bg-amber-50 text-amber-900'
+                          : 'border-slate-200 bg-white/80 text-slate-700'
+                      }`}
+                    >
+                      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                      <span>{rule.text}</span>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-4 text-xs opacity-75">
+                  This is a pre-upload recommendation only. After matching, the backend can still refine the policy again from pair geometry.
+                </p>
+              </div>
+
               {/* Advanced Options Accordion */}
               <Accordion 
                 title="Advanced Options" 
@@ -451,6 +921,12 @@ export default function UploadPage() {
                         </p>
                       </div>
                     )}
+
+                    <div className="mt-3 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3">
+                      <p className="text-sm text-emerald-900">
+                        <strong>Dynamic reconstruction framework:</strong> {engineRecommendation}
+                      </p>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -660,12 +1136,14 @@ export default function UploadPage() {
                       <label className="block text-sm font-medium text-gray-700 mb-2">Feature Matching</label>
                       <select
                         value={config.matcher_type}
-                        onChange={(e) => setConfig({ ...config, matcher_type: e.target.value })}
+                        onChange={(e) => setConfig({ ...config, matcher_type: e.target.value as MatcherMode })}
                         className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       >
-                        <option value="sequential">Sequential (Fast, good for sequences)</option>
-                        <option value="exhaustive">Exhaustive (Slower, better coverage)</option>
+                        <option value="auto">Auto (Recommended, backend decides)</option>
+                        <option value="sequential">Sequential (Override for sequences)</option>
+                        <option value="exhaustive">Exhaustive (Override for broader coverage)</option>
                       </select>
+                      <p className="mt-2 text-xs text-gray-500">{matcherRecommendation}</p>
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">Camera Model</label>
@@ -1138,8 +1616,10 @@ export default function UploadPage() {
                 <ul className="text-sm text-gray-600 space-y-1">
                   <li>• Minimum 10 images/frames required for 3D reconstruction</li>
                   <li>• Videos will be automatically converted to frames</li>
+                  <li>• Feature matching defaults to Auto and uses the backend reconstruction framework for orbit/video safety</li>
                   <li>• Higher quality = longer processing time (30s-30m)</li>
                   <li>• Best results with good lighting and multiple angles</li>
+                  <li>• Current input profile: {inputProfile}</li>
                   <li>• Estimated time: {getQualityInfo(config.quality_mode).time} for {config.quality_mode} quality</li>
                 </ul>
               </div>

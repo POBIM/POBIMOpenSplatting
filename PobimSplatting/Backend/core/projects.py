@@ -130,6 +130,19 @@ def update_stage_detail(
             detail["subtext"] = subtext
 
 
+def update_reconstruction_framework(project_id: str, updates: Dict[str, Any]) -> None:
+    """Merge structured reconstruction-framework diagnostics into project state."""
+    with status_lock:
+        project = processing_status.get(project_id)
+        if not project:
+            return
+
+        framework = project.setdefault("reconstruction_framework", {})
+        framework.update(updates)
+        touch_project_updated(project_id)
+        save_projects_db()
+
+
 def update_state(
     project_id: str,
     key: str,
@@ -211,6 +224,7 @@ def initialize_project_entry(
         "log_tail": [],
         "input_type": input_type,
         "stage_details": {},
+        "reconstruction_framework": {},
     }
 
 

@@ -214,17 +214,17 @@ def get_orbit_safe_profile_settings(profile_name, num_images):
             'matcher_params': {
                 'SequentialMatching.overlap': overlap,
                 'SequentialMatching.quadratic_overlap': '1',
-                'SequentialMatching.loop_detection': '0',
+                'SequentialMatching.loop_detection': '1',
             },
             'mapper_params': {
-                'Mapper.structure_less_registration_fallback': '0',
-                'Mapper.abs_pose_max_error': '13',
-                'Mapper.abs_pose_min_num_inliers': '16',
-                'Mapper.abs_pose_min_inlier_ratio': '0.10',
-                'Mapper.max_reg_trials': '10',
+                'Mapper.structure_less_registration_fallback': '1',
+                'Mapper.abs_pose_max_error': '14',
+                'Mapper.abs_pose_min_num_inliers': '12',
+                'Mapper.abs_pose_min_inlier_ratio': '0.08',
+                'Mapper.max_reg_trials': '16',
             },
-            'min_num_matches_cap': 10,
-            'init_num_trials_floor': 225,
+            'min_num_matches_cap': 8,
+            'init_num_trials_floor': 300,
         }
 
     if profile_name == 'bridge-balanced':
@@ -233,17 +233,17 @@ def get_orbit_safe_profile_settings(profile_name, num_images):
             'matcher_params': {
                 'SequentialMatching.overlap': overlap,
                 'SequentialMatching.quadratic_overlap': '1',
-                'SequentialMatching.loop_detection': '0',
+                'SequentialMatching.loop_detection': '1',
             },
             'mapper_params': {
-                'Mapper.structure_less_registration_fallback': '0',
-                'Mapper.abs_pose_max_error': '12',
-                'Mapper.abs_pose_min_num_inliers': '18',
-                'Mapper.abs_pose_min_inlier_ratio': '0.12',
-                'Mapper.max_reg_trials': '8',
+                'Mapper.structure_less_registration_fallback': '1',
+                'Mapper.abs_pose_max_error': '13',
+                'Mapper.abs_pose_min_num_inliers': '14',
+                'Mapper.abs_pose_min_inlier_ratio': '0.10',
+                'Mapper.max_reg_trials': '12',
             },
-            'min_num_matches_cap': 12,
-            'init_num_trials_floor': 200,
+            'min_num_matches_cap': 10,
+            'init_num_trials_floor': 260,
         }
 
     overlap = '28' if num_images <= 80 else ('32' if num_images <= 150 else '40')
@@ -1130,7 +1130,7 @@ def select_best_sparse_model(sparse_path, project_id=None):
     """
     Analyze all sparse reconstruction models and select the best one.
     Returns the path to the best model based on number of registered images.
-    Also deletes all inferior models to keep only the best one.
+    Preserves alternate models so split reconstructions remain inspectable.
     """
     if not sparse_path.exists():
         return None
@@ -1277,8 +1277,9 @@ def select_best_sparse_model(sparse_path, project_id=None):
             if project_id:
                 append_log_line(project_id, f"⚠️ Failed to rename best model: {e}")
 
-        # Step 3: Delete all other temporary models
-        append_log_line(project_id, "📦 Step 3: Removing inferior models...")
+        # Step 3: Preserve all other temporary models under alternate names.
+        append_log_line(project_id, "📦 Step 3: Preserving alternate sparse models...")
+        alt_index = 1
         for temp_name, mapping in temp_mappings.items():
             if not mapping['is_best']:
                 temp_path = mapping['path']
@@ -1287,17 +1288,23 @@ def select_best_sparse_model(sparse_path, project_id=None):
 
                 if temp_path.exists():
                     try:
-                        shutil.rmtree(temp_path)
+                        alt_path = temp_path.parent / f'alt_{alt_index}'
+                        while alt_path.exists():
+                            alt_index += 1
+                            alt_path = temp_path.parent / f'alt_{alt_index}'
+                        shutil.move(str(temp_path), str(alt_path))
                         append_log_line(
                             project_id,
-                            f"🗑️ Removed inferior model: {original_name} (cameras={model_info['num_cameras']}, registered={model_info['registered_images']})"
+                            f"📦 Preserved alternate model: {original_name} → {alt_path.name} "
+                            f"(cameras={model_info['num_cameras']}, registered={model_info['registered_images']})"
                         )
+                        alt_index += 1
                     except Exception as e:
-                        logger.warning(f"Failed to delete {temp_name}: {e}")
+                        logger.warning(f"Failed to preserve {temp_name}: {e}")
                         if project_id:
-                            append_log_line(project_id, f"⚠️ Failed to delete {temp_name}: {e}")
+                            append_log_line(project_id, f"⚠️ Failed to preserve {temp_name}: {e}")
 
-        append_log_line(project_id, "✅ Model organization completed - only best model (0/) remains")
+        append_log_line(project_id, "✅ Model organization completed - best model is 0/ and alternate models were preserved")
 
     return best_model
 
@@ -1418,7 +1425,11 @@ def get_colmap_config(num_images, project_id=None, quality_mode='balanced', cust
             if orbit_safe_forced_matcher:
                 append_log_line(project_id, "🛡️ Orbit-safe mode overriding exhaustive matcher with local sequential matching to preserve temporal continuity")
             else:
-                append_log_line(project_id, "🛡️ Orbit-safe mode enabled: using local sequential matching without loop-closure fallback")
+                loop_detection_enabled = matcher_params.get('SequentialMatching.loop_detection') == '1'
+                if loop_detection_enabled:
+                    append_log_line(project_id, "🛡️ Orbit-safe mode enabled: using local sequential matching with bridge-recovery loop closure")
+                else:
+                    append_log_line(project_id, "🛡️ Orbit-safe mode enabled: using local sequential matching without loop-closure fallback")
             if orbit_safe_policy:
                 append_log_line(
                     project_id,
@@ -2113,13 +2124,18 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None):
     num_images, colmap_cfg, colmap_exe, has_cuda = get_colmap_config_for_pipeline(paths, config, project_id)
     if colmap_config:
         colmap_cfg = colmap_config
+
+    loop_detection_enabled = colmap_cfg['matcher_params'].get('SequentialMatching.loop_detection') == '1'
+    use_gpu_matching = has_cuda and not loop_detection_enabled
     
     update_state(project_id, 'feature_matching', status='running')
     update_stage_detail(project_id, 'feature_matching', text='Matching pairs: 0/0', subtext=None)
     append_log_line(project_id, "🔄 Running COLMAP Feature Matching...")
     
-    if has_cuda:
+    if use_gpu_matching:
         append_log_line(project_id, "🚀 Using GPU-accelerated COLMAP for feature matching")
+    elif has_cuda and loop_detection_enabled:
+        append_log_line(project_id, "🧠 Loop-closure matching enabled; using CPU matcher for compatibility with this COLMAP/CUDA build")
     else:
         append_log_line(project_id, "⚠️ COLMAP CUDA support not detected; falling back to CPU mode for matching")
     
@@ -2134,7 +2150,7 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None):
         colmap_exe, matcher_cmd,
         '--database_path', str(paths['database_path']),
         '--FeatureMatching.max_num_matches', str(colmap_cfg['max_num_matches']),
-        '--FeatureMatching.use_gpu', '1' if has_cuda else '0'
+        '--FeatureMatching.use_gpu', '1' if use_gpu_matching else '0'
     ]
     
     for param, value in colmap_cfg['matcher_params'].items():
@@ -2144,8 +2160,13 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None):
         if any(keyword in line.lower() for keyword in ['matching', 'match', 'pair', 'block']):
             append_log_line(project_id, f"[DEBUG] Feature matching: {line.strip()}")
         
-        if 'not enough gpu memory' in line.lower() or 'failed to create feature matcher' in line.lower():
-            append_log_line(project_id, f"⚠️ GPU Memory Error detected: {line.strip()}")
+        if (
+            'not enough gpu memory' in line.lower()
+            or 'failed to create feature matcher' in line.lower()
+            or 'cuda error' in line.lower()
+            or 'cuda driver version is insufficient' in line.lower()
+        ):
+            append_log_line(project_id, f"⚠️ GPU feature matching issue detected: {line.strip()}")
             return
         
         patterns = [
@@ -2183,9 +2204,14 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None):
     try:
         run_command_with_logs(project_id, cmd, line_handler=matching_line_handler)
     except subprocess.CalledProcessError as e:
-        if has_cuda and ('not enough gpu memory' in str(e).lower() or 
-                       'failed to create feature matcher' in str(e).lower()):
-            append_log_line(project_id, "⚠️ GPU feature matching failed due to memory constraints")
+        error_text = str(e).lower()
+        if use_gpu_matching and (
+            'not enough gpu memory' in error_text
+            or 'failed to create feature matcher' in error_text
+            or 'cuda error' in error_text
+            or 'cuda driver version is insufficient' in error_text
+        ):
+            append_log_line(project_id, "⚠️ GPU feature matching failed; retrying on CPU")
             append_log_line(project_id, f"🔄 Retrying with CPU-based matching (reduced max_matches={colmap_cfg['max_num_matches'] // 2})...")
             
             cmd_cpu = [

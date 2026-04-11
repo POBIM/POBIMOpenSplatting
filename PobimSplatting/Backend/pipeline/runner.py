@@ -200,7 +200,7 @@ def analyze_capture_pattern_from_names(image_names=None, config=None):
 
 
 def should_use_orbit_safe_mode(paths, config, num_images):
-    orbit_safe_policy = build_orbit_safe_policy(paths, config, num_images)
+    orbit_safe_policy = resolve_orbit_safe_policy(paths, config, num_images)
     if not orbit_safe_policy:
         return False, None
 
@@ -315,6 +315,14 @@ def sync_reconstruction_framework(project_id, config, colmap_cfg, *, phase, extr
 def build_orbit_safe_policy(paths, config, num_images):
     capture_pattern = analyze_capture_pattern(paths, config)
     return build_orbit_safe_policy_from_capture(capture_pattern, config, num_images)
+
+
+def resolve_orbit_safe_policy(paths, config, num_images):
+    orbit_safe_policy = build_orbit_safe_policy(paths, config, num_images)
+    if not orbit_safe_policy:
+        return None
+
+    return orbit_safe_policy
 
 
 def build_orbit_safe_policy_from_capture(capture_pattern, config, num_images):
@@ -638,7 +646,9 @@ def analyze_pair_geometry_stats(database_path, bridge_window=6):
             adjacent_inliers.append(inliers)
 
     image_ids = [row[0] for row in image_rows]
+    image_names = {image_id: name for image_id, name in image_rows}
     bridge_strengths = []
+    weak_boundaries = []
     weak_boundary_count = 0
     zero_boundary_count = 0
 
@@ -646,17 +656,36 @@ def analyze_pair_geometry_stats(database_path, bridge_window=6):
         left_ids = image_ids[max(0, index - 2):index + 1]
         right_ids = image_ids[index + 1:min(len(image_ids), index + 1 + bridge_window)]
         bridge_strength = 0
+        best_bridge_pair = None
         for left_id in left_ids:
             for right_id in right_ids:
-                bridge_strength = max(bridge_strength, local_pairs.get((left_id, right_id), 0))
+                pair_inliers = local_pairs.get((left_id, right_id), 0)
+                if pair_inliers > bridge_strength:
+                    bridge_strength = pair_inliers
+                    best_bridge_pair = (left_id, right_id)
         bridge_strengths.append(bridge_strength)
+        adjacent_pair_inliers = local_pairs.get((image_ids[index], image_ids[index + 1]), 0)
         if bridge_strength == 0:
             zero_boundary_count += 1
         if bridge_strength < 20:
             weak_boundary_count += 1
+            weak_boundaries.append(
+                {
+                    'boundary_index': index,
+                    'left_image_id': image_ids[index],
+                    'left_image_name': image_names.get(image_ids[index]),
+                    'right_image_id': image_ids[index + 1],
+                    'right_image_name': image_names.get(image_ids[index + 1]),
+                    'adjacent_inliers': adjacent_pair_inliers,
+                    'bridge_strength': bridge_strength,
+                    'best_bridge_pair': best_bridge_pair,
+                }
+            )
 
     weak_boundary_ratio = weak_boundary_count / max(len(bridge_strengths), 1)
     zero_boundary_ratio = zero_boundary_count / max(len(bridge_strengths), 1)
+    weak_boundaries.sort(key=lambda item: (item['bridge_strength'], item['adjacent_inliers'], item['boundary_index']))
+    weak_boundaries = weak_boundaries[:8]
 
     return {
         'image_count': len(image_rows),
@@ -669,6 +698,7 @@ def analyze_pair_geometry_stats(database_path, bridge_window=6):
         'weak_boundary_ratio': round(weak_boundary_ratio, 4),
         'zero_boundary_count': zero_boundary_count,
         'zero_boundary_ratio': round(zero_boundary_ratio, 4),
+        'weak_boundaries': weak_boundaries,
     }
 
 
@@ -721,9 +751,58 @@ def refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id=None):
 
     colmap_cfg['pair_geometry_stats'] = geometry_stats
     colmap_cfg['orbit_safe_profile'] = refined_policy['profile_name']
-    colmap_cfg['mapper_params'] = refined_policy['mapper_params']
+    colmap_cfg['matcher_params'] = dict(refined_policy['matcher_params'])
+    colmap_cfg['mapper_params'] = dict(refined_policy['mapper_params'])
     colmap_cfg['min_num_matches'] = min(colmap_cfg['min_num_matches'], refined_policy['min_num_matches_cap'])
     colmap_cfg['init_num_trials'] = max(colmap_cfg['init_num_trials'], refined_policy['init_num_trials_floor'])
+
+    weak_boundary_count = geometry_stats.get('weak_boundary_count', 0)
+    weak_boundary_ratio = float(geometry_stats.get('weak_boundary_ratio') or 0.0)
+    bridge_p10 = float(geometry_stats.get('bridge_p10') or 0.0)
+    bridge_min = float(geometry_stats.get('bridge_min') or 0.0)
+    zero_boundary_count = int(geometry_stats.get('zero_boundary_count') or 0)
+
+    overlap_value = int(colmap_cfg['matcher_params'].get('SequentialMatching.overlap', '20'))
+    if weak_boundary_count > 0:
+        overlap_boost = 0
+        if zero_boundary_count > 0 or bridge_min < 12:
+            overlap_boost += 10
+        elif bridge_p10 < 22:
+            overlap_boost += 6
+        elif weak_boundary_ratio >= 0.03:
+            overlap_boost += 4
+
+        overlap_cap = 72 if geometry_stats['image_count'] <= 180 else 60
+        if overlap_boost > 0:
+            overlap_value = min(overlap_cap, overlap_value + overlap_boost)
+            colmap_cfg['matcher_params']['SequentialMatching.overlap'] = str(overlap_value)
+
+        if weak_boundary_ratio >= 0.03 or zero_boundary_count > 0:
+            colmap_cfg['matcher_params']['SequentialMatching.quadratic_overlap'] = '1'
+            colmap_cfg['matcher_params']['SequentialMatching.loop_detection'] = '1'
+
+        if weak_boundary_ratio >= 0.06 or zero_boundary_count > 0:
+            colmap_cfg['mapper_params']['Mapper.structure_less_registration_fallback'] = '1'
+            colmap_cfg['mapper_params']['Mapper.abs_pose_min_num_inliers'] = str(
+                min(
+                    int(colmap_cfg['mapper_params'].get('Mapper.abs_pose_min_num_inliers', '18')),
+                    10,
+                )
+            )
+            colmap_cfg['mapper_params']['Mapper.abs_pose_min_inlier_ratio'] = str(
+                min(
+                    float(colmap_cfg['mapper_params'].get('Mapper.abs_pose_min_inlier_ratio', '0.12')),
+                    0.07,
+                )
+            )
+            colmap_cfg['mapper_params']['Mapper.max_reg_trials'] = str(
+                max(
+                    int(colmap_cfg['mapper_params'].get('Mapper.max_reg_trials', '8')),
+                    18,
+                )
+            )
+            colmap_cfg['min_num_matches'] = min(colmap_cfg['min_num_matches'], 8)
+            colmap_cfg['init_num_trials'] = max(colmap_cfg['init_num_trials'], 320)
 
     if project_id:
         append_log_line(
@@ -737,10 +816,23 @@ def refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id=None):
             project_id,
             '🧠 Pair-geometry refinement selected orbit-safe profile: '
             f'{refined_policy["profile_name"]} | '
-            f'min_inliers={refined_policy["mapper_params"]["Mapper.abs_pose_min_num_inliers"]} | '
-            f'min_ratio={refined_policy["mapper_params"]["Mapper.abs_pose_min_inlier_ratio"]} | '
-            f'max_reg_trials={refined_policy["mapper_params"]["Mapper.max_reg_trials"]}'
+            f'overlap={colmap_cfg["matcher_params"]["SequentialMatching.overlap"]} | '
+            f'min_inliers={colmap_cfg["mapper_params"]["Mapper.abs_pose_min_num_inliers"]} | '
+            f'min_ratio={colmap_cfg["mapper_params"]["Mapper.abs_pose_min_inlier_ratio"]} | '
+            f'max_reg_trials={colmap_cfg["mapper_params"]["Mapper.max_reg_trials"]}'
         )
+        weak_boundaries = geometry_stats.get('weak_boundaries') or []
+        if weak_boundaries:
+            boundary_preview = ", ".join(
+                f"{item['left_image_name']}→{item['right_image_name']} "
+                f"(adj={item['adjacent_inliers']}, bridge={item['bridge_strength']})"
+                for item in weak_boundaries[:4]
+            )
+            append_log_line(project_id, f"🧠 Weak frame boundaries: {boundary_preview}")
+            append_log_line(
+                project_id,
+                "🧠 Bridge-aware tuning applied before sparse reconstruction to preserve borderline frames",
+            )
 
     return colmap_cfg
 
@@ -1135,100 +1227,13 @@ def select_best_sparse_model(sparse_path, project_id=None):
     if not sparse_path.exists():
         return None
 
-    colmap_exe = get_colmap_executable()
     best_model = None
     best_score = (-1, -1, -1, -1)
-    all_models = []  # Store all models with their scores for later cleanup
-
-    # Analyze each sparse model directory
-    for item in sparse_path.iterdir():
-        if not item.is_dir():
-            continue
-
-        # Check if this is a valid COLMAP model (has cameras.bin or cameras.txt)
-        cameras_bin = item / 'cameras.bin'
-        cameras_txt = item / 'cameras.txt'
-        images_bin = item / 'images.bin'
-        images_txt = item / 'images.txt'
-
-        if not (cameras_bin.exists() or cameras_txt.exists()):
-            continue
-
-        try:
-            # Use colmap model_analyzer to get statistics
-            result = subprocess.run(
-                [colmap_exe, 'model_analyzer', '--path', str(item)],
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
-
-            combined_output = ''
-            if result.stdout:
-                combined_output += result.stdout
-            if result.stderr:
-                combined_output += result.stderr
-
-            if result.returncode != 0:
-                if project_id:
-                    append_log_line(
-                        project_id,
-                        f"⚠️ Failed to analyze model {item.name}: return code {result.returncode}"
-                    )
-                    if combined_output:
-                        append_log_line(project_id, f"[DEBUG] model_analyzer output: {combined_output.strip()[:500]}")
-                continue
-
-            # Parse output for COLMAP model stats
-            num_cameras = 0
-            num_images = 0
-            registered_images = 0
-            num_points = 0
-
-            for line in combined_output.splitlines():
-                match_cameras = re.search(r'Cameras:\s*(\d+)', line)
-                if match_cameras:
-                    num_cameras = int(match_cameras.group(1))
-                    continue
-
-                match_images = re.search(r'Images:\s*(\d+)', line)
-                if match_images:
-                    num_images = int(match_images.group(1))
-                    continue
-
-                match_images = re.search(r'Registered images:\s*(\d+)', line)
-                if match_images:
-                    registered_images = int(match_images.group(1))
-                    continue
-
-                match_points = re.search(r'Points:\s*(\d+)', line)
-                if match_points:
-                    num_points = int(match_points.group(1))
-
-            # Score prioritizes highest camera count, then registered images, then points
-            score = (num_cameras, registered_images, num_points, num_images)
-
-            if project_id:
-                append_log_line(
-                    project_id,
-                    f"📊 Model {item.name}: cameras={num_cameras}, registered={registered_images}, images={num_images}, points={num_points}"
-                )
-
-            # Store model info for later cleanup
-            all_models.append({
-                'path': item,
-                'score': score,
-                'num_cameras': num_cameras,
-                'registered_images': registered_images
-            })
-
-            if score > best_score:
-                best_score = score
-                best_model = item
-
-        except Exception as e:
-            logger.warning(f"Failed to analyze model {item}: {e}")
-            continue
+    all_models = analyze_sparse_models(sparse_path, project_id, log_each=True)
+    for model_info in all_models:
+        if model_info['score'] > best_score:
+            best_score = model_info['score']
+            best_model = model_info['path']
 
     if best_model and project_id:
         append_log_line(project_id, f"✅ Selected best reconstruction: {best_model.name}")
@@ -1307,6 +1312,155 @@ def select_best_sparse_model(sparse_path, project_id=None):
         append_log_line(project_id, "✅ Model organization completed - best model is 0/ and alternate models were preserved")
 
     return best_model
+
+
+def analyze_sparse_models(sparse_path, project_id=None, *, log_each=False):
+    if not Path(sparse_path).exists():
+        return []
+
+    colmap_exe = get_colmap_executable()
+    all_models = []
+
+    for item in Path(sparse_path).iterdir():
+        if not item.is_dir():
+            continue
+
+        cameras_bin = item / 'cameras.bin'
+        cameras_txt = item / 'cameras.txt'
+        if not (cameras_bin.exists() or cameras_txt.exists()):
+            continue
+
+        try:
+            result = subprocess.run(
+                [colmap_exe, 'model_analyzer', '--path', str(item)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except Exception as exc:
+            logger.warning("Failed to analyze model %s: %s", item, exc)
+            continue
+
+        combined_output = ''
+        if result.stdout:
+            combined_output += result.stdout
+        if result.stderr:
+            combined_output += result.stderr
+
+        if result.returncode != 0:
+            if project_id:
+                append_log_line(
+                    project_id,
+                    f"⚠️ Failed to analyze model {item.name}: return code {result.returncode}",
+                )
+            continue
+
+        stats = {
+            'path': item,
+            'name': item.name,
+            'num_cameras': 0,
+            'num_images': 0,
+            'registered_images': 0,
+            'num_points': 0,
+        }
+
+        for line in combined_output.splitlines():
+            match_cameras = re.search(r'Cameras:\s*(\d+)', line)
+            if match_cameras:
+                stats['num_cameras'] = int(match_cameras.group(1))
+                continue
+
+            match_images = re.search(r'Images:\s*(\d+)', line)
+            if match_images:
+                stats['num_images'] = int(match_images.group(1))
+                continue
+
+            match_registered = re.search(r'Registered images:\s*(\d+)', line)
+            if match_registered:
+                stats['registered_images'] = int(match_registered.group(1))
+                continue
+
+            match_points = re.search(r'Points:\s*(\d+)', line)
+            if match_points:
+                stats['num_points'] = int(match_points.group(1))
+
+        stats['score'] = (
+            stats['num_cameras'],
+            stats['registered_images'],
+            stats['num_points'],
+            stats['num_images'],
+        )
+        all_models.append(stats)
+
+        if project_id and log_each:
+            append_log_line(
+                project_id,
+                f"📊 Model {item.name}: cameras={stats['num_cameras']}, "
+                f"registered={stats['registered_images']}, images={stats['num_images']}, points={stats['num_points']}",
+            )
+
+    all_models.sort(key=lambda item: item['score'], reverse=True)
+    return all_models
+
+
+def summarize_sparse_model_coverage(num_images, sparse_models):
+    if not sparse_models:
+        return None
+
+    best_model = sparse_models[0]
+    best_registered = int(best_model.get('registered_images') or 0)
+    registered_ratio = best_registered / max(num_images, 1)
+    alternate_models = sparse_models[1:]
+    alternate_registered = max((int(item.get('registered_images') or 0) for item in alternate_models), default=0)
+
+    return {
+        'best_registered': best_registered,
+        'registered_ratio': round(registered_ratio, 4),
+        'model_count': len(sparse_models),
+        'alternate_registered': alternate_registered,
+        'has_multiple_models': len(sparse_models) > 1,
+    }
+
+
+def report_sparse_model_coverage(project_id, paths, config, colmap_cfg, num_images):
+    sparse_models = analyze_sparse_models(paths['sparse_path'], project_id, log_each=True)
+    sparse_summary = summarize_sparse_model_coverage(num_images, sparse_models)
+    if not sparse_summary:
+        return
+
+    sync_reconstruction_framework(
+        project_id,
+        config,
+        colmap_cfg,
+        phase='sparse_evaluated',
+        extra={
+            'sparse_model_summary': sparse_summary,
+            'sparse_models': [
+                {
+                    'name': item['name'],
+                    'registered_images': item['registered_images'],
+                    'num_images': item['num_images'],
+                    'num_points': item['num_points'],
+                }
+                for item in sparse_models
+            ],
+        },
+    )
+
+    if sparse_summary['model_count'] == 1:
+        append_log_line(
+            project_id,
+            "✅ Sparse reconstruction unified into a single model: "
+            f"{sparse_summary['best_registered']}/{num_images} images registered",
+        )
+        return
+
+    append_log_line(
+        project_id,
+        "ℹ️ Sparse reconstruction produced multiple models before organization: "
+        f"{sparse_summary['model_count']} models, best={sparse_summary['best_registered']}/{num_images}, "
+        f"next_best={sparse_summary['alternate_registered']}",
+    )
 
 
 def get_colmap_config(num_images, project_id=None, quality_mode='balanced', custom_params=None, preferred_matcher_type=None, orbit_safe_mode=False, orbit_safe_policy=None):
@@ -2666,6 +2820,7 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
     engine_name = "FastMap" if use_fastmap else ("GLOMAP" if use_glomap else "COLMAP")
     update_stage_detail(project_id, 'sparse_reconstruction', text=f'Images registered: {min(registered, num_images)}/{num_images}', subtext=f'{engine_name} reconstruction complete')
     append_log_line(project_id, f"✅ Sparse Reconstruction completed using {engine_name}")
+    report_sparse_model_coverage(project_id, paths, config, colmap_cfg, num_images)
     
     return colmap_cfg
 
@@ -2725,7 +2880,7 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
                 'init_num_trials': config.get('init_num_trials')
             }
 
-        orbit_safe_policy = build_orbit_safe_policy(paths, config, num_images)
+        orbit_safe_policy = resolve_orbit_safe_policy(paths, config, num_images)
         orbit_safe_mode = orbit_safe_policy is not None
         orbit_safe_reason = orbit_safe_policy['reason'] if orbit_safe_policy else None
         if project_id and orbit_safe_mode:

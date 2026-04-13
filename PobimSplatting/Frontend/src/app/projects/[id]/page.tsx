@@ -167,9 +167,6 @@ export default function ProjectDetailPage() {
     use_separate_training_images: false,
   });
   const [expandedStage, setExpandedStage] = useState<string | null>(null);
-  const [showColmapModal, setShowColmapModal] = useState(false);
-  const [colmapCommand, setColmapCommand] = useState<string>('');
-  const [colmapWorkingDir, setColmapWorkingDir] = useState<string>('');
   const [showImagePreview, setShowImagePreview] = useState(false);
   const [previewImageIndex, setPreviewImageIndex] = useState(0);
   
@@ -569,25 +566,6 @@ export default function ProjectDetailPage() {
     }
   };
 
-  const handleOpenColmapGUI = async () => {
-    try {
-      const response = await api.openColmapGUI(projectId);
-      if (response.success && response.command) {
-        setColmapCommand(response.command);
-        setColmapWorkingDir(response.working_directory || '');
-        setShowColmapModal(true);
-      }
-    } catch (err: any) {
-      const errorMsg = err?.response?.data?.error || 'Failed to get COLMAP command';
-      alert(errorMsg);
-    }
-  };
-
-  const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    alert('คัดลอกคำสั่งแล้ว!');
-  };
-
   const handleDownloadLogs = () => {
     if (logs.length === 0) return;
     const logContent = logs.join('\n');
@@ -826,7 +804,7 @@ export default function ProjectDetailPage() {
                 )}
               </div>
 
-              {/* COLMAP Inspection Button */}
+              {/* Sparse model inspection button */}
               {(() => {
                 const sparseStage = stages.find(s => s.key === 'sparse_reconstruction');
                 const featureExtractionStage = stages.find(s => s.key === 'feature_extraction');
@@ -834,13 +812,13 @@ export default function ProjectDetailPage() {
                 return (featureExtractionStage?.status === 'completed' || sparseStage?.status === 'completed') && (
                   <div className="mt-4 pt-4 border-t border-gray-200">
                     <button
-                      onClick={handleOpenColmapGUI}
+                      onClick={() => router.push(`/camera-poses/${projectId}`)}
                       className="inline-flex items-center px-4 py-2 text-sm font-medium rounded-lg text-white bg-blue-600 hover:bg-blue-700 transition-colors"
                     >
                       <Eye className="h-4 w-4 mr-2" />
                       ตรวจสอบ Sparse Model
                     </button>
-                    <p className="text-xs text-gray-500 mt-2">เปิด COLMAP GUI เพื่อตรวจสอบผล {project?.config?.sfm_engine === 'glomap' ? 'GLOMAP' : project?.config?.sfm_engine === 'fastmap' ? 'FastMap' : 'COLMAP'} sparse reconstruction</p>
+                    <p className="text-xs text-gray-500 mt-2">เปิดหน้า Camera Poses เพื่อตรวจสอบผล {project?.config?.sfm_engine === 'glomap' ? 'GLOMAP' : project?.config?.sfm_engine === 'fastmap' ? 'FastMap' : 'COLMAP'} sparse reconstruction</p>
                   </div>
                 );
               })()}
@@ -1971,78 +1949,6 @@ export default function ProjectDetailPage() {
               <button
                 onClick={() => setShowDownloadModal(false)}
                 className="px-6 py-2 text-sm font-medium rounded-lg text-gray-700 bg-gray-100 hover:bg-gray-200 transition-colors"
-              >
-                ปิด
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* COLMAP Command Modal */}
-      {showColmapModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-3xl w-full p-6 space-y-4">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-xl font-semibold text-black">คำสั่งเปิด {project?.config?.sfm_engine === 'glomap' ? 'GLOMAP' : 'COLMAP'} GUI</h3>
-              <button
-                onClick={() => setShowColmapModal(false)}
-                className="text-gray-400 hover:text-gray-600 transition-colors"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Working Directory:
-                </label>
-                <div className="flex items-center space-x-2">
-                  <code className="flex-1 px-3 py-2 bg-gray-50 rounded-lg text-sm font-mono text-gray-800 border border-gray-200">
-                    {colmapWorkingDir}
-                  </code>
-                  <button
-                    onClick={() => copyToClipboard(colmapWorkingDir)}
-                    className="px-3 py-2 text-sm font-medium rounded-lg text-blue-600 hover:bg-blue-50 transition-colors border border-blue-200"
-                  >
-                    Copy
-                  </button>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Command:
-                </label>
-                <div className="flex items-start space-x-2">
-                  <code className="flex-1 px-3 py-2 bg-gray-50 rounded-lg text-sm font-mono text-gray-800 border border-gray-200 whitespace-pre-wrap break-all">
-                    {colmapCommand}
-                  </code>
-                  <button
-                    onClick={() => copyToClipboard(colmapCommand)}
-                    className="px-3 py-2 text-sm font-medium rounded-lg text-blue-600 hover:bg-blue-50 transition-colors border border-blue-200"
-                  >
-                    Copy
-                  </button>
-                </div>
-              </div>
-
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                <h4 className="text-sm font-semibold text-blue-900 mb-2">วิธีการใช้งาน:</h4>
-                <ol className="text-sm text-blue-800 space-y-1 list-decimal list-inside">
-                  <li>เปิด Terminal หรือ Command Prompt</li>
-                  <li>ใช้คำสั่ง <code className="bg-blue-100 px-1 rounded">cd</code> ไปยัง Working Directory ด้านบน</li>
-                  <li>วางคำสั่ง Command ด้านบนและกด Enter</li>
-                  <li>COLMAP GUI จะเปิดขึ้นมา</li>
-                </ol>
-              </div>
-            </div>
-
-            <div className="flex justify-end pt-2">
-              <button
-                onClick={() => setShowColmapModal(false)}
-                className="px-6 py-3 text-sm font-medium rounded-lg text-white bg-black hover:bg-gray-800 transition-colors"
               >
                 ปิด
               </button>

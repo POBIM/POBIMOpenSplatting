@@ -288,6 +288,58 @@ def percentile(values, ratio):
     return float(ordered[index])
 
 
+def build_orbit_safe_bridge_recovery_pass(geometry_stats, matcher_params):
+    if not geometry_stats or not matcher_params:
+        return None
+
+    try:
+        overlap_value = int(matcher_params.get('SequentialMatching.overlap', '0'))
+    except (TypeError, ValueError):
+        return None
+
+    weak_boundary_count = int(geometry_stats.get('weak_boundary_count') or 0)
+    weak_boundary_ratio = float(geometry_stats.get('weak_boundary_ratio') or 0.0)
+    zero_boundary_count = int(geometry_stats.get('zero_boundary_count') or 0)
+    bridge_p10 = float(geometry_stats.get('bridge_p10') or 0.0)
+    bridge_min = float(geometry_stats.get('bridge_min') or 0.0)
+    adjacent_p10 = float(geometry_stats.get('adjacent_p10') or 0.0)
+    image_count = int(geometry_stats.get('image_count') or 0)
+
+    overlap_boost = 0
+    reason = None
+
+    if zero_boundary_count > 0 or bridge_min < 12:
+        overlap_boost = 10
+        reason = 'zero-strength boundary detected in ordered frames'
+    elif bridge_min <= 20 or bridge_p10 < 22:
+        overlap_boost = 8
+        reason = 'bridge strength is borderline near at least one frame boundary'
+    elif weak_boundary_count > 0 or weak_boundary_ratio >= 0.015 or adjacent_p10 < 24:
+        overlap_boost = 6
+        reason = 'isolated weak frame boundary needs wider temporal recovery'
+    elif weak_boundary_ratio >= 0.03:
+        overlap_boost = 4
+        reason = 'multiple weak frame boundaries need additional overlap'
+
+    if overlap_boost <= 0:
+        return None
+
+    overlap_cap = 72 if image_count <= 180 else 60
+    refined_overlap = min(overlap_cap, overlap_value + overlap_boost)
+    refined_matcher_params = dict(matcher_params)
+    refined_matcher_params['SequentialMatching.overlap'] = str(refined_overlap)
+    refined_matcher_params['SequentialMatching.quadratic_overlap'] = '1'
+    refined_matcher_params['SequentialMatching.loop_detection'] = '1'
+
+    if refined_matcher_params == matcher_params:
+        return None
+
+    return {
+        'matcher_params': refined_matcher_params,
+        'reason': reason,
+    }
+
+
 def sync_reconstruction_framework(project_id, config, colmap_cfg, *, phase, extra=None):
     if not project_id:
         return
@@ -753,6 +805,7 @@ def refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id=None):
     colmap_cfg['orbit_safe_profile'] = refined_policy['profile_name']
     colmap_cfg['matcher_params'] = dict(refined_policy['matcher_params'])
     colmap_cfg['mapper_params'] = dict(refined_policy['mapper_params'])
+    colmap_cfg['recovery_matching_pass'] = None
     colmap_cfg['min_num_matches'] = min(colmap_cfg['min_num_matches'], refined_policy['min_num_matches_cap'])
     colmap_cfg['init_num_trials'] = max(colmap_cfg['init_num_trials'], refined_policy['init_num_trials_floor'])
 
@@ -760,6 +813,7 @@ def refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id=None):
     weak_boundary_ratio = float(geometry_stats.get('weak_boundary_ratio') or 0.0)
     bridge_p10 = float(geometry_stats.get('bridge_p10') or 0.0)
     bridge_min = float(geometry_stats.get('bridge_min') or 0.0)
+    adjacent_p10 = float(geometry_stats.get('adjacent_p10') or 0.0)
     zero_boundary_count = int(geometry_stats.get('zero_boundary_count') or 0)
 
     overlap_value = int(colmap_cfg['matcher_params'].get('SequentialMatching.overlap', '20'))
@@ -767,7 +821,11 @@ def refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id=None):
         overlap_boost = 0
         if zero_boundary_count > 0 or bridge_min < 12:
             overlap_boost += 10
+        elif bridge_min <= 20:
+            overlap_boost += 8
         elif bridge_p10 < 22:
+            overlap_boost += 6
+        elif weak_boundary_count > 0 or adjacent_p10 < 24:
             overlap_boost += 6
         elif weak_boundary_ratio >= 0.03:
             overlap_boost += 4
@@ -804,6 +862,36 @@ def refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id=None):
             colmap_cfg['min_num_matches'] = min(colmap_cfg['min_num_matches'], 8)
             colmap_cfg['init_num_trials'] = max(colmap_cfg['init_num_trials'], 320)
 
+        if bridge_min <= 20 or (weak_boundary_count > 0 and adjacent_p10 < 24):
+            colmap_cfg['mapper_params']['Mapper.structure_less_registration_fallback'] = '1'
+            colmap_cfg['mapper_params']['Mapper.abs_pose_min_num_inliers'] = str(
+                min(
+                    int(colmap_cfg['mapper_params'].get('Mapper.abs_pose_min_num_inliers', '12')),
+                    10,
+                )
+            )
+            colmap_cfg['mapper_params']['Mapper.abs_pose_min_inlier_ratio'] = str(
+                min(
+                    float(colmap_cfg['mapper_params'].get('Mapper.abs_pose_min_inlier_ratio', '0.08')),
+                    0.07,
+                )
+            )
+            colmap_cfg['mapper_params']['Mapper.max_reg_trials'] = str(
+                max(
+                    int(colmap_cfg['mapper_params'].get('Mapper.max_reg_trials', '16')),
+                    18,
+                )
+            )
+            colmap_cfg['min_num_matches'] = min(colmap_cfg['min_num_matches'], 8)
+            colmap_cfg['init_num_trials'] = max(colmap_cfg['init_num_trials'], 320)
+
+    recovery_matching_pass = build_orbit_safe_bridge_recovery_pass(
+        geometry_stats,
+        colmap_cfg.get('matcher_params'),
+    )
+    if recovery_matching_pass:
+        colmap_cfg['recovery_matching_pass'] = recovery_matching_pass
+
     if project_id:
         append_log_line(
             project_id,
@@ -833,8 +921,64 @@ def refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id=None):
                 project_id,
                 "🧠 Bridge-aware tuning applied before sparse reconstruction to preserve borderline frames",
             )
+        if recovery_matching_pass:
+            append_log_line(
+                project_id,
+                "🧠 Bridge-recovery matching pass queued: "
+                f"overlap={recovery_matching_pass['matcher_params']['SequentialMatching.overlap']} | "
+                f"reason={recovery_matching_pass['reason']}",
+            )
 
     return colmap_cfg
+
+
+def run_orbit_safe_bridge_recovery_matching_pass(
+    project_id,
+    paths,
+    colmap_exe,
+    colmap_cfg,
+    has_cuda,
+    line_handler=None,
+):
+    recovery_matching_pass = colmap_cfg.get('recovery_matching_pass')
+    if not recovery_matching_pass:
+        return colmap_cfg
+
+    if colmap_cfg.get('matcher_type') != 'sequential':
+        return colmap_cfg
+
+    matcher_params = dict(recovery_matching_pass['matcher_params'])
+    loop_detection_enabled = matcher_params.get('SequentialMatching.loop_detection') == '1'
+    use_gpu_matching = has_cuda and not loop_detection_enabled
+
+    append_log_line(
+        project_id,
+        "🔁 Running orbit-safe bridge recovery matching pass: "
+        f"overlap={matcher_params['SequentialMatching.overlap']} | "
+        f"reason={recovery_matching_pass['reason']}",
+    )
+    if loop_detection_enabled and has_cuda:
+        append_log_line(
+            project_id,
+            "🧠 Bridge recovery pass uses CPU matcher because loop detection is enabled",
+        )
+
+    cmd = [
+        colmap_exe,
+        'sequential_matcher',
+        '--database_path', str(paths['database_path']),
+        '--FeatureMatching.max_num_matches', str(colmap_cfg['max_num_matches']),
+        '--FeatureMatching.use_gpu', '1' if use_gpu_matching else '0',
+    ]
+
+    for param, value in matcher_params.items():
+        cmd.extend([f'--{param}', value])
+
+    run_command_with_logs(project_id, cmd, line_handler=line_handler)
+
+    colmap_cfg['matcher_params'] = matcher_params
+    colmap_cfg['recovery_matching_pass'] = None
+    return refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id)
 
 
 def get_sequential_matcher_params(num_images, quality_mode, orbit_safe_mode=False, orbit_safe_policy=None):
@@ -2387,6 +2531,14 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None):
     current = matching_progress['current'] or matching_progress['total']
     total_pairs = matching_progress['total'] or matching_progress['current']
     colmap_cfg = refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id)
+    colmap_cfg = run_orbit_safe_bridge_recovery_matching_pass(
+        project_id,
+        paths,
+        colmap_exe,
+        colmap_cfg,
+        has_cuda,
+        line_handler=matching_line_handler,
+    )
     sync_reconstruction_framework(project_id, config, colmap_cfg, phase='matching_complete')
     if total_pairs:
         update_stage_detail(project_id, 'feature_matching', text=f'Matching pairs: {min(current, total_pairs)}/{total_pairs}', subtext='Feature matching complete')

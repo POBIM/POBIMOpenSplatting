@@ -999,7 +999,7 @@ def get_sequential_matcher_params(num_images, quality_mode, orbit_safe_mode=Fals
             else (
                 "30"
                 if quality_mode == "professional"
-                else ("25" if quality_mode in ["high", "ultra"] else "20")
+                else ("28" if quality_mode == "hard" else ("25" if quality_mode in ["high", "ultra"] else "20"))
             )
         )
         quadratic_overlap = "1"
@@ -1010,7 +1010,7 @@ def get_sequential_matcher_params(num_images, quality_mode, orbit_safe_mode=Fals
             else (
                 "25"
                 if quality_mode == "professional"
-                else ("18" if quality_mode in ["high", "ultra"] else "12")
+                else ("22" if quality_mode == "hard" else ("18" if quality_mode in ["high", "ultra"] else "12"))
             )
         )
         quadratic_overlap = "1"
@@ -1021,7 +1021,7 @@ def get_sequential_matcher_params(num_images, quality_mode, orbit_safe_mode=Fals
             else (
                 "20"
                 if quality_mode == "professional"
-                else ("15" if quality_mode in ["high", "ultra"] else "12")
+                else ("18" if quality_mode == "hard" else ("15" if quality_mode in ["high", "ultra"] else "12"))
             )
         )
         quadratic_overlap = "1"
@@ -1032,7 +1032,7 @@ def get_sequential_matcher_params(num_images, quality_mode, orbit_safe_mode=Fals
             else (
                 "12"
                 if quality_mode == "professional"
-                else ("8" if quality_mode in ["high", "ultra"] else "5")
+                else ("10" if quality_mode == "hard" else ("8" if quality_mode in ["high", "ultra"] else "5"))
             )
         )
         quadratic_overlap = "0"
@@ -1204,7 +1204,8 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
                     base_config = {
                         'mode': config.get('extraction_mode', 'frames'),
                         'preview_count': config.get('preview_count', 10),
-                        'use_gpu': config.get('use_gpu_extraction', True)
+                        'use_gpu': config.get('use_gpu_extraction', True),
+                        'replacement_search_radius': config.get('replacement_search_radius', 4),
                     }
                     
                     if config.get('extraction_mode') == 'fps':
@@ -1251,8 +1252,53 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
                         progress_callback=frame_progress_callback
                     )
 
+                    extraction_stats = video_processor.get_last_extraction_stats()
                     total_extracted_frames += len(extracted)
                     append_log_line(project_id, f"✅ Extracted {len(extracted)} frames from video {i + 1}")
+                    if extraction_stats:
+                        extraction_stats = {
+                            **extraction_stats,
+                            'filename': Path(video_path).name,
+                        }
+                        with project_store.status_lock:
+                            project_entry = project_store.processing_status.get(project_id)
+                            if project_entry is not None:
+                                diagnostics = project_entry.setdefault('video_extraction_diagnostics', {
+                                    'strategy': extraction_stats.get('strategy'),
+                                    'mode': extraction_stats.get('mode'),
+                                    'search_radius': extraction_stats.get('search_radius'),
+                                    'videos': [],
+                                })
+                                diagnostics['strategy'] = extraction_stats.get('strategy')
+                                diagnostics['mode'] = extraction_stats.get('mode')
+                                diagnostics['search_radius'] = extraction_stats.get('search_radius')
+                                diagnostics['requested_targets'] = diagnostics.get('requested_targets', 0) + extraction_stats.get('requested_targets', 0)
+                                diagnostics['saved_frames'] = diagnostics.get('saved_frames', 0) + extraction_stats.get('saved_frames', 0)
+                                diagnostics['replaced_targets'] = diagnostics.get('replaced_targets', 0) + extraction_stats.get('replaced_targets', 0)
+                                diagnostics['rejected_candidates'] = diagnostics.get('rejected_candidates', 0) + extraction_stats.get('rejected_candidates', 0)
+                                diagnostics.setdefault('videos', []).append(extraction_stats)
+                                project_entry.setdefault('config', {})['replacement_search_radius'] = extraction_stats.get('search_radius')
+                                project_entry['video_extraction_diagnostics'] = diagnostics
+                                save_projects_db()
+                        append_log_line(
+                            project_id,
+                            "🧠 Smart frame selection: "
+                            f"targets={extraction_stats.get('requested_targets', 0)} | "
+                            f"saved={extraction_stats.get('saved_frames', 0)} | "
+                            f"replaced={extraction_stats.get('replaced_targets', 0)} | "
+                            f"radius=±{extraction_stats.get('search_radius', 0)}",
+                        )
+                        for selection in extraction_stats.get('selections', []):
+                            offset = int(selection.get('offset', 0))
+                            if offset == 0:
+                                continue
+                            append_log_line(
+                                project_id,
+                                "   ↳ target "
+                                f"{selection.get('target_index')} -> selected {selection.get('selected_index')} "
+                                f"(offset {offset:+d}, sharpness={selection.get('sharpness')}, "
+                                f"{'fallback' if selection.get('fallback_used') else 'quality-pass'})",
+                            )
                     
                     # Extract high-resolution training images if enabled
                     # Use extract_matching_frames to ensure EXACT same frames as COLMAP
@@ -1620,6 +1666,7 @@ def get_colmap_config(num_images, project_id=None, quality_mode='balanced', cust
         'balanced': {'size': 1.0, 'features': 1.0, 'matches': 2.5, 'octaves': 0},  # Increased from 2.0 to 2.5
         'high': {'size': 1.0, 'features': 1.0, 'matches': 3.0, 'octaves': 0},  # Increased from 2.0 to 3.0
         'ultra': {'size': 1.2, 'features': 1.2, 'matches': 3.5, 'octaves': 0},  # Increased from 2.5 to 3.5
+        'hard': {'size': 1.4, 'features': 1.75, 'matches': 5.0, 'octaves': -1},
         'professional': {'size': 1.5, 'features': 1.5, 'matches': 4.0, 'octaves': 0},  # Increased from 2.5 to 4.0
         'ultra_professional': {'size': 1.8, 'features': 1.8, 'matches': 4.5, 'octaves': 0},  # Increased from 3.0 to 4.5
         'robust': {'size': 1.0, 'features': 1.0, 'matches': 3.5, 'octaves': 0},  # Increased from 2.5 to 3.5
@@ -1667,10 +1714,14 @@ def get_colmap_config(num_images, project_id=None, quality_mode='balanced', cust
     # CRITICAL: Prevent GPU OOM by capping max_num_matches based on expected feature count
     # For images with 70K-80K features, max_num_matches should be <= 40K to avoid GPU memory issues
     # This is especially important for CUDA-based feature matching
-    if max_num_matches > 65536:
+    max_match_limit = 65536 if quality_mode == 'hard' else 45960
+    if max_num_matches > max_match_limit:
         if project_id:
-            append_log_line(project_id, f"⚠️ Reducing max_num_matches from {max_num_matches} to 45960 to prevent GPU memory overflow")
-        max_num_matches = 45960  # Safe limit for high-feature images
+            append_log_line(
+                project_id,
+                f"⚠️ Reducing max_num_matches from {max_num_matches} to {max_match_limit} to prevent GPU memory overflow",
+            )
+        max_num_matches = max_match_limit
 
     explicit_matcher_type = normalize_matcher_type(preferred_matcher_type)
     orbit_safe_forced_matcher = False
@@ -1683,6 +1734,16 @@ def get_colmap_config(num_images, project_id=None, quality_mode='balanced', cust
         matcher_params = {}
         if project_id:
             append_log_line(project_id, "🔧 Using ROBUST mode: Exhaustive matching for maximum coverage")
+    elif quality_mode == 'hard':
+        if num_images <= 250:
+            matcher_type = 'exhaustive'
+            matcher_params = {}
+            max_num_matches = min(max_num_matches, 65536)
+        else:
+            matcher_type = 'sequential'
+            matcher_params = get_sequential_matcher_params(num_images, quality_mode)
+        if project_id:
+            append_log_line(project_id, "🔧 Using HARD mode: aggressive feature coverage with lighter first-pass training")
     elif quality_mode == 'ultra' and num_images <= 200:
         # Ultra quality: Use exhaustive for smaller datasets
         matcher_type = 'exhaustive'
@@ -1753,6 +1814,7 @@ def get_colmap_config(num_images, project_id=None, quality_mode='balanced', cust
         'balanced': {'matches': 0.8, 'trials': 1.5, 'models': 2.0},  # Same as High (aggressive for better results)
         'high': {'matches': 0.8, 'trials': 1.5, 'models': 2.0},  # Aggressive reconstruction
         'ultra': {'matches': 0.7, 'trials': 2.0, 'models': 3.0},  # Very aggressive
+        'hard': {'matches': 0.55, 'trials': 2.2, 'models': 4.0},  # Coverage-first without long training
         'professional': {'matches': 0.6, 'trials': 2.5, 'models': 5.0},  # Maximum for 4K+ (30,000 iterations)
         'ultra_professional': {'matches': 0.5, 'trials': 3.0, 'models': 7.0},  # Ultra maximum (60,000 iterations)
         'unlimited': {'matches': 0.6, 'trials': 2.5, 'models': 5.0},  # Maximum for 4K - same as robust
@@ -1774,7 +1836,7 @@ def get_colmap_config(num_images, project_id=None, quality_mode='balanced', cust
         base_min_model_size = 15
         base_max_models = 20
         base_init_trials = 150
-        max_extra_param = 1 if quality_mode in ['high', 'ultra', 'professional', 'ultra_professional'] else 0
+        max_extra_param = 1 if quality_mode in ['high', 'ultra', 'hard', 'professional', 'ultra_professional'] else 0
     elif num_images <= 1000:
         base_min_matches = 12  # Reduced from 25 for better registration
         base_min_model_size = 8  # Reduced from 20 to accept smaller valid models
@@ -1837,6 +1899,12 @@ def get_colmap_config(num_images, project_id=None, quality_mode='balanced', cust
             'peak_threshold': 0.004,  # Ultra low = maximum features detected
             'edge_threshold': 25,      # Ultra high = most robust edge filtering
             'max_num_orientations': 5,  # Ultra maximum orientations for best matching
+        })
+    elif quality_mode == 'hard':
+        sift_params.update({
+            'peak_threshold': 0.005,
+            'edge_threshold': 22,
+            'max_num_orientations': 4,
         })
     elif quality_mode == 'professional':
         # Professional mode: Maximum feature quality for 4K+ images (30,000 iterations)
@@ -1933,6 +2001,14 @@ def get_opensplat_config(quality_mode='balanced', num_images=100, custom_params=
             'opacity_reset_interval': 3000,
             'prune_opacity': 0.003  # Lower = more conservative pruning
         },
+        'hard': {
+            'iterations': 5000,
+            'densify_from': 900,
+            'densify_until': 3200,
+            'densify_grad_threshold': 0.00012,
+            'opacity_reset_interval': 2400,
+            'prune_opacity': 0.002
+        },
         'high': {
             'iterations': 7000,
             'densify_from': 1000,
@@ -1987,7 +2063,7 @@ def get_opensplat_config(quality_mode='balanced', num_images=100, custom_params=
         base_config['iterations'] = max(1000, int(base_config['iterations'] * 0.8))
 
     # Additional high-quality parameters
-    if quality_mode in ['high', 'ultra', 'balanced']:
+    if quality_mode in ['high', 'ultra', 'hard', 'balanced']:
         base_config.update({
             'learning_rate': 0.0025,  # Lower learning rate for stability
             'position_lr_init': 0.00016,
@@ -1996,7 +2072,7 @@ def get_opensplat_config(quality_mode='balanced', num_images=100, custom_params=
             'opacity_lr': 0.05,
             'scaling_lr': 0.005,
             'rotation_lr': 0.001,
-            'percent_dense': 0.1 if quality_mode == 'ultra' else 0.01,
+            'percent_dense': 0.1 if quality_mode == 'ultra' else (0.05 if quality_mode == 'hard' else 0.01),
         })
 
     # Override with custom parameters if provided
@@ -2132,6 +2208,8 @@ def run_hloc_feature_extraction_stage(project_id, paths, config, colmap_config=N
         quality_mode = config.get('quality_mode', 'balanced')
         if quality_mode == 'fast':
             feature_conf = {**feature_conf, 'max_keypoints': 2048}
+        elif quality_mode == 'hard':
+            feature_conf = {**feature_conf, 'max_keypoints': 8192}
         elif quality_mode == 'quality':
             feature_conf = {**feature_conf, 'max_keypoints': 8192}
         else:
@@ -3181,6 +3259,7 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
                             'resolution': training_resolution,
                             'quality': 100,  # Always max quality for training images
                             'use_gpu': config.get('use_gpu_extraction', True),
+                            'replacement_search_radius': config.get('replacement_search_radius', 4),
                             'motion_threshold': config.get('motion_threshold', 0.15),
                             'blur_threshold': config.get('blur_threshold', 100)
                         }
@@ -3210,7 +3289,7 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
             append_log_line(project_id, "⚠️ Training images path not configured, using COLMAP images")
 
         # Add advanced quality parameters for high/ultra/custom modes (using correct OpenSplat parameter names)
-        if quality_mode in ['high', 'ultra', 'custom', 'balanced']:
+        if quality_mode in ['high', 'ultra', 'hard', 'custom', 'balanced']:
             # Map our config to actual OpenSplat parameters
             densify_threshold = opensplat_config.get('densify_grad_threshold')
             refine_every = 75
@@ -3277,6 +3356,10 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
                 refine_every = 50
                 warmup = 1000
                 ssim = 0.3
+            elif quality_mode == 'hard':
+                refine_every = 60
+                warmup = 900
+                ssim = 0.28
             elif quality_mode == 'high':
                 refine_every = 75
                 warmup = 750
@@ -3295,6 +3378,8 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
 
             if quality_mode == 'ultra':
                 cmd.extend(['--reset-alpha-every', '20'])   # More frequent opacity reset (default: 30)
+            elif quality_mode == 'hard':
+                cmd.extend(['--reset-alpha-every', '24'])
 
             append_log_line(project_id, f"⚡ Enhanced parameters: densify_threshold={densify_threshold}, refine_every={refine_every}")
 
@@ -3487,7 +3572,7 @@ def run_opensplat_training(project_id, paths, config, processing_start_time, tim
             append_log_line(project_id, f"🧩 Using patch-based training with crop size: {crop_size}")
 
         # Add advanced quality parameters for high/ultra/custom modes
-        if quality_mode in ['high', 'ultra', 'custom', 'balanced']:
+        if quality_mode in ['high', 'ultra', 'hard', 'custom', 'balanced']:
             densify_threshold = opensplat_config.get('densify_grad_threshold')
             refine_every = 75
             warmup = 750
@@ -3553,6 +3638,10 @@ def run_opensplat_training(project_id, paths, config, processing_start_time, tim
                 refine_every = 50
                 warmup = 1000
                 ssim = 0.3
+            elif quality_mode == 'hard':
+                refine_every = 60
+                warmup = 900
+                ssim = 0.28
             elif quality_mode == 'high':
                 refine_every = 75
                 warmup = 750
@@ -3571,6 +3660,8 @@ def run_opensplat_training(project_id, paths, config, processing_start_time, tim
 
             if quality_mode == 'ultra':
                 cmd.extend(['--reset-alpha-every', '20'])
+            elif quality_mode == 'hard':
+                cmd.extend(['--reset-alpha-every', '24'])
 
             append_log_line(project_id, f"⚡ Enhanced parameters: densify_threshold={densify_threshold}")
 

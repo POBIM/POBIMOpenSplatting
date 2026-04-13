@@ -22,14 +22,15 @@ export default function UploadPage() {
   const [policyPreviewLoading, setPolicyPreviewLoading] = useState(false);
   const [config, setConfig] = useState({
     project_name: '',
-    quality_mode: 'high',
+    quality_mode: 'hard',
     camera_model: 'SIMPLE_RADIAL',
-    matcher_type: 'auto' as MatcherMode,
+    matcher_type: 'exhaustive' as MatcherMode,
     extraction_mode: 'fps',
     max_frames: 100,
     target_fps: 2.0,
     quality: 100,  // Legacy - kept for backward compatibility
     preview_count: 10,
+    replacement_search_radius: 4,
     sfm_engine: 'glomap',  // 'colmap' or 'glomap' - default to GLOMAP for 10-100x faster reconstruction
     feature_method: 'sift',  // 'sift' (COLMAP), 'aliked' (hloc), 'superpoint' (hloc) - neural features are 10-20x faster
     use_gpu_extraction: true,  // GPU-accelerated video frame extraction (5-10x faster)
@@ -41,6 +42,7 @@ export default function UploadPage() {
     // 8K Optimization
     crop_size: 0  // Patch-based training (0 = disabled)
   });
+  const hardModeForcesExhaustive = config.quality_mode === 'hard';
 
   // Custom parameters - starts with High quality (7000 iter) baseline
   const [customParams, setCustomParams] = useState({
@@ -231,7 +233,9 @@ export default function UploadPage() {
   const hasImages = files.some(file => file.type.startsWith('image/'));
   const totalSize = files.reduce((sum, file) => sum + file.size, 0);
   const inputProfile = hasVideo && hasImages ? 'mixed' : hasVideo ? 'video' : hasImages ? 'images' : 'unknown';
-  const matcherRecommendation = hasVideo
+  const matcherRecommendation = hardModeForcesExhaustive
+    ? 'Hard mode locks matcher to Exhaustive in the frontend so the first pass maximizes pair coverage before a later training retry.'
+    : hasVideo
     ? 'Auto is recommended for video and orbit captures. The backend can switch into orbit-safe sequential matching and refine sparse reconstruction from pair geometry.'
     : hasImages && !hasVideo
       ? 'Auto is recommended for most photo sets. The backend can choose exhaustive for smaller unordered image collections and sequential when the input looks ordered.'
@@ -541,6 +545,12 @@ export default function UploadPage() {
         : Info;
 
   useEffect(() => {
+    if (hardModeForcesExhaustive && config.matcher_type !== 'exhaustive') {
+      setConfig((current) => ({ ...current, matcher_type: 'exhaustive' }));
+    }
+  }, [hardModeForcesExhaustive, config.matcher_type]);
+
+  useEffect(() => {
     let cancelled = false;
     const timeoutId = window.setTimeout(async () => {
       try {
@@ -574,6 +584,7 @@ export default function UploadPage() {
     const info = {
       fast: { iterations: 500, time: '~30s-2m', desc: 'Quick preview' },
       balanced: { iterations: 7000, time: '~5-15m', desc: 'High quality (NEW default)' },
+      hard: { iterations: 5000, time: '~6-18m', desc: 'Coverage-first COLMAP pass, tuned for later retry' },
       high: { iterations: 7000, time: '~5-15m', desc: 'High detail' },
       ultra: { iterations: 15000, time: '~10-30m', desc: 'Maximum quality' },
       professional: { iterations: 30000, time: '~20-60m', desc: 'Professional grade for 4K+ images' },
@@ -678,6 +689,7 @@ export default function UploadPage() {
                     onChange={(e) => setConfig({ ...config, quality_mode: e.target.value })}
                     className="input"
                   >
+                    <option value="hard">🧱 Hard ({getQualityInfo('hard').iterations} iter) - {getQualityInfo('hard').time} - AGGRESSIVE COVERAGE</option>
                     <option value="high">🎯 High ({getQualityInfo('high').iterations} iter) - {getQualityInfo('high').time}</option>
                     <option value="ultra">✨ Ultra ({getQualityInfo('ultra').iterations} iter) - {getQualityInfo('ultra').time}</option>
                     <option value="professional">💎 Professional ({getQualityInfo('professional').iterations} iter) - {getQualityInfo('professional').time} - 4K+ SUPPORT</option>
@@ -687,6 +699,12 @@ export default function UploadPage() {
                   <p className="text-xs text-gray-500 mt-1">
                     {config.quality_mode === 'custom' ? 'Fine-tune all parameters' : getQualityInfo(config.quality_mode).desc}
                   </p>
+                  {config.quality_mode === 'hard' && (
+                    <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                      <strong>Hard mode plan:</strong> เน้นเก็บ sparse coverage และ feature matching ให้กว้างก่อน โดยเริ่มเทรนเพียง 5000 รอบ
+                      ถ้าภาพรวมดีค่อย Retry ต่อเป็น Professional หรือเพิ่ม iterations ภายหลัง
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1137,13 +1155,21 @@ export default function UploadPage() {
                       <select
                         value={config.matcher_type}
                         onChange={(e) => setConfig({ ...config, matcher_type: e.target.value as MatcherMode })}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        disabled={hardModeForcesExhaustive}
+                        className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
+                          hardModeForcesExhaustive ? 'cursor-not-allowed bg-gray-100 text-gray-500' : ''
+                        }`}
                       >
                         <option value="auto">Auto (Recommended, backend decides)</option>
                         <option value="sequential">Sequential (Override for sequences)</option>
                         <option value="exhaustive">Exhaustive (Override for broader coverage)</option>
                       </select>
                       <p className="mt-2 text-xs text-gray-500">{matcherRecommendation}</p>
+                      {hardModeForcesExhaustive && (
+                        <p className="mt-1 text-xs font-medium text-amber-700">
+                          Hard preset is forcing `exhaustive` matching for the first pass.
+                        </p>
+                      )}
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">Camera Model</label>
@@ -1232,6 +1258,23 @@ export default function UploadPage() {
                             <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:bg-purple-500 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
                           </div>
                         </label>
+                      </div>
+                      <div className="mt-3">
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Smart Replacement Radius</label>
+                        <select
+                          value={config.replacement_search_radius}
+                          onChange={(e) => setConfig({ ...config, replacement_search_radius: parseInt(e.target.value) || 4 })}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        >
+                          <option value={2}>±2 frames</option>
+                          <option value={4}>±4 frames - Recommended</option>
+                          <option value={6}>±6 frames</option>
+                          <option value={8}>±8 frames</option>
+                          <option value={12}>±12 frames</option>
+                        </select>
+                        <p className="mt-1 text-xs text-gray-500">
+                          ถ้าเฟรมเป้าหมายเบลอ ระบบจะค้นหาเฟรมข้างเคียงในช่วงนี้เพื่อแทนที่ด้วยภาพที่คมกว่า
+                        </p>
                       </div>
                     </div>
                   )}
@@ -1621,6 +1664,9 @@ export default function UploadPage() {
                   <li>• Best results with good lighting and multiple angles</li>
                   <li>• Current input profile: {inputProfile}</li>
                   <li>• Estimated time: {getQualityInfo(config.quality_mode).time} for {config.quality_mode} quality</li>
+                  {config.quality_mode === 'hard' && (
+                    <li>• Hard mode uses a heavier COLMAP policy first, then leaves long training for a later retry</li>
+                  )}
                 </ul>
               </div>
             </div>

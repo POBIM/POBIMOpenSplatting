@@ -220,6 +220,7 @@ class VideoProcessor:
         self.supported_formats = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.m4v'}
         self.problematic_codecs = {'hevc', 'h265', 'av1'}  # Codecs that often cause issues
         self.recommended_codecs = {'h264', 'avc', 'mpeg4'}
+        self.last_extraction_stats: Dict[str, Any] = {}
 
     def is_video_file(self, filename):
         """Check if file is a supported video format"""
@@ -711,9 +712,14 @@ class VideoProcessor:
             logger.info(f"Scaling: {width}x{height} → {target_width}x{target_height}")
 
         extracted_frames = []
-        frame_count = 0
         saved_count = 0
         prev_frame = None
+        target_indices = self._build_target_frame_indices(total_frames, fps, extraction_config)
+        search_radius = max(1, int(extraction_config.get('replacement_search_radius', 4)))
+        quality_percent = extraction_config.get('quality', 100)
+        selection_records = []
+        replaced_targets = 0
+        rejected_candidates = 0
         
         # Use ThreadPoolExecutor for parallel frame saving
         max_workers = min(os.cpu_count() or 4, 8)
@@ -730,59 +736,58 @@ class VideoProcessor:
                 return None
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
+            expected_total = len(target_indices)
+            for target_index in target_indices:
+                selection = self._select_best_frame_near_target(
+                    cap,
+                    target_index,
+                    total_frames,
+                    prev_frame,
+                    quality_percent,
+                    search_radius,
+                )
+                selection_records.append(selection)
+                rejected_candidates += selection['rejected_candidates']
 
-                if frame_count % frame_interval != 0:
-                    frame_count += 1
+                if selection['selected_index'] != target_index:
+                    replaced_targets += 1
+
+                frame = selection['frame']
+                if frame is None:
+                    logger.warning(f"Could not recover a usable frame near target index {target_index}")
                     continue
 
-                # Use resolution for quality check (map to approximate percentage)
-                approx_quality = {'720p': 50, '1080p': 75, '2K': 75, '4K': 100, '8K': 100, 'original': 100}.get(resolution, 100)
-                if self._is_good_quality_frame(frame, prev_frame, approx_quality):
+                try:
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+                    if need_scale:
+                        frame_rgb = cv2.resize(
+                            frame_rgb,
+                            (target_width, target_height),
+                            interpolation=cv2.INTER_LANCZOS4,
+                        )
+
+                except Exception as e:
+                    logger.error(f"Error processing frame {saved_count}: {e}")
+                    continue
+
+                frame_filename = f"frame_{saved_count:06d}.jpg"
+                frame_path = output_dir / frame_filename
+
+                future = executor.submit(save_frame_task, frame_rgb.copy(), frame_path, jpeg_quality)
+                pending_saves.append((future, frame_path, saved_count))
+
+                saved_count += 1
+                prev_frame = frame.copy()
+
+                if progress_callback and (saved_count % 5 == 0 or saved_count == expected_total):
                     try:
-                        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                        progress_callback(saved_count, expected_total, str(frame_path))
+                    except Exception as cb_err:
+                        logger.warning(f"Progress callback error: {cb_err}")
 
-                        # Apply scaling if needed
-                        if need_scale:
-                            frame_rgb = cv2.resize(frame_rgb, (target_width, target_height), 
-                                                 interpolation=cv2.INTER_LANCZOS4)
-
-                    except Exception as e:
-                        logger.error(f"Error processing frame {saved_count}: {e}")
-                        frame_count += 1
-                        continue
-
-                    frame_filename = f"frame_{saved_count:06d}.jpg"
-                    frame_path = output_dir / frame_filename
-
-                    # Submit save task to thread pool
-                    future = executor.submit(save_frame_task, frame_rgb.copy(), frame_path, jpeg_quality)
-                    pending_saves.append((future, frame_path, saved_count))
-                    
-                    saved_count += 1
-                    prev_frame = frame.copy()
-
-                    if mode == 'frames':
-                        expected_total = max_frames if max_frames else total_frames // frame_interval
-                    else:
-                        expected_total = total_frames // frame_interval
-
-                    if progress_callback and saved_count % 5 == 0:
-                        try:
-                            progress_callback(saved_count, expected_total, str(frame_path))
-                        except Exception as cb_err:
-                            logger.warning(f"Progress callback error: {cb_err}")
-
-                    if saved_count % 10 == 0:
-                        logger.info(f"Extracted {saved_count} frames so far...")
-
-                    if mode == 'frames' and max_frames and saved_count >= max_frames:
-                        break
-
-                frame_count += 1
+                if saved_count % 10 == 0:
+                    logger.info(f"Extracted {saved_count} frames so far...")
 
             # Wait for all saves to complete
             for future, frame_path, idx in pending_saves:
@@ -797,6 +802,28 @@ class VideoProcessor:
         
         # Sort frames by filename
         extracted_frames.sort()
+
+        self.last_extraction_stats = {
+            'strategy': 'smart_neighbor_replacement',
+            'mode': mode,
+            'requested_targets': len(target_indices),
+            'saved_frames': len(extracted_frames),
+            'replaced_targets': replaced_targets,
+            'search_radius': search_radius,
+            'rejected_candidates': rejected_candidates,
+            'selections': [
+                {
+                    'target_index': item['target_index'],
+                    'selected_index': item['selected_index'],
+                    'offset': item['selected_index'] - item['target_index'],
+                    'sharpness': round(item['metrics']['sharpness'], 2),
+                    'accepted': item['accepted'],
+                    'fallback_used': item['fallback_used'],
+                }
+                for item in selection_records
+                if item.get('selected_index') is not None
+            ],
+        }
 
         logger.info(f"CPU extraction complete: {len(extracted_frames)} frames from {total_frames} total")
         return extracted_frames
@@ -835,10 +862,16 @@ class VideoProcessor:
                 'preview_count': 10,
                 'use_gpu': True
             }
-        
+
         # Check if GPU should be used
         use_gpu = extraction_config.get('use_gpu', True)
-        
+        smart_selection = extraction_config.get('smart_frame_selection', True)
+        self.last_extraction_stats = {}
+
+        if use_gpu and smart_selection:
+            logger.info("🧠 Smart frame selection enabled; using CPU extraction so neighbor replacement can inspect nearby frames")
+            use_gpu = False
+
         if use_gpu:
             gpu_info = get_gpu_decode_info()
             if gpu_info['available']:
@@ -854,6 +887,9 @@ class VideoProcessor:
             logger.info("🖥️ GPU acceleration disabled by config, using CPU extraction")
         
         return self._extract_frames_cpu(video_path, output_dir, extraction_config, progress_callback)
+
+    def get_last_extraction_stats(self) -> Dict[str, Any]:
+        return dict(self.last_extraction_stats)
 
     def get_preview_frames(self, video_path, preview_count=10, quality_percent=50):
         """Extract preview frames for display"""
@@ -950,6 +986,134 @@ class VideoProcessor:
         except Exception as e:
             logger.warning(f"Error in quality assessment, accepting frame: {e}")
             return True  # Accept frame if quality check fails
+
+    def _build_target_frame_indices(self, total_frames: int, fps: float, extraction_config: Dict[str, Any]) -> List[int]:
+        mode = extraction_config.get('mode', 'frames')
+        if total_frames <= 0:
+            return []
+
+        if mode == 'fps':
+            target_fps = float(extraction_config.get('target_fps', 1.0) or 1.0)
+            frame_interval = max(1, int(fps / target_fps)) if fps > 0 else 1
+            return list(range(0, total_frames, frame_interval))
+
+        max_frames = int(extraction_config.get('max_frames', 100) or 100)
+        if max_frames >= total_frames:
+            return list(range(total_frames))
+
+        if max_frames <= 1:
+            return [0]
+
+        positions = np.linspace(0, total_frames - 1, num=max_frames)
+        indices = [int(round(position)) for position in positions]
+        deduped = []
+        seen = set()
+        for index in indices:
+            index = max(0, min(total_frames - 1, index))
+            if index not in seen:
+                deduped.append(index)
+                seen.add(index)
+        return deduped
+
+    def _score_frame_candidate(self, frame, prev_frame, quality_percent=100):
+        height, width = frame.shape[:2]
+        if width > 1920 or height > 1080:
+            scale = min(1920 / width, 1080 / height)
+            analysis_width = int(width * scale)
+            analysis_height = int(height * scale)
+            analysis_frame = cv2.resize(frame, (analysis_width, analysis_height), interpolation=cv2.INTER_LINEAR)
+        else:
+            analysis_frame = frame
+
+        gray = cv2.cvtColor(analysis_frame, cv2.COLOR_BGR2GRAY)
+        sharpness = cv2.Laplacian(gray, cv2.CV_64F).var()
+        brightness = float(gray.mean())
+
+        if quality_percent == 100:
+            blur_threshold = 30 if width > 1920 else 50
+        elif quality_percent == 75:
+            blur_threshold = 20 if width > 1920 else 35
+        else:
+            blur_threshold = 15 if width > 1920 else 25
+
+        brightness_ok = 10 <= brightness <= 245
+
+        duplicate_penalty = 0.0
+        diff_mean = None
+        duplicate_ok = True
+        if prev_frame is not None:
+            if width > 1920 or height > 1080:
+                prev_analysis = cv2.resize(prev_frame, (gray.shape[1], gray.shape[0]), interpolation=cv2.INTER_LINEAR)
+            else:
+                prev_analysis = prev_frame
+            prev_gray = cv2.cvtColor(prev_analysis, cv2.COLOR_BGR2GRAY)
+            diff_mean = float(cv2.absdiff(gray, prev_gray).mean())
+            duplicate_ok = diff_mean >= 1.0
+            duplicate_penalty = max(0.0, 1.5 - diff_mean) * 40.0
+
+        brightness_penalty = abs(brightness - 128.0) * 0.3
+        score = sharpness - brightness_penalty - duplicate_penalty
+        accepted = sharpness >= blur_threshold and brightness_ok and duplicate_ok
+
+        return {
+            'accepted': accepted,
+            'score': score,
+            'metrics': {
+                'sharpness': float(sharpness),
+                'brightness': brightness,
+                'diff_mean': diff_mean,
+                'blur_threshold': float(blur_threshold),
+            },
+        }
+
+    def _select_best_frame_near_target(
+        self,
+        cap,
+        target_index: int,
+        total_frames: int,
+        prev_frame,
+        quality_percent: int,
+        search_radius: int,
+    ) -> Dict[str, Any]:
+        start = max(0, target_index - search_radius)
+        end = min(total_frames - 1, target_index + search_radius)
+        best_accepted = None
+        best_fallback = None
+        rejected_candidates = 0
+
+        for candidate_index in range(start, end + 1):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, candidate_index)
+            ret, frame = cap.read()
+            if not ret:
+                continue
+
+            candidate = self._score_frame_candidate(frame, prev_frame, quality_percent)
+            candidate.update({
+                'target_index': target_index,
+                'selected_index': candidate_index,
+                'frame': frame,
+            })
+
+            if candidate['accepted']:
+                if best_accepted is None or candidate['score'] > best_accepted['score']:
+                    best_accepted = candidate
+            else:
+                rejected_candidates += 1
+
+            if best_fallback is None or candidate['score'] > best_fallback['score']:
+                best_fallback = candidate
+
+        winner = best_accepted or best_fallback or {
+            'target_index': target_index,
+            'selected_index': None,
+            'frame': None,
+            'accepted': False,
+            'score': float('-inf'),
+            'metrics': {'sharpness': 0.0, 'brightness': 0.0, 'diff_mean': None, 'blur_threshold': 0.0},
+        }
+        winner['fallback_used'] = best_accepted is None
+        winner['rejected_candidates'] = rejected_candidates
+        return winner
 
     def get_video_info(self, video_path):
         """Get basic video information"""

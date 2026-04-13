@@ -165,6 +165,7 @@ export default function ProjectDetailPage() {
     colmap_resolution: '',
     training_resolution: '',
     use_separate_training_images: false,
+    replacement_search_radius: '',
   });
   const [expandedStage, setExpandedStage] = useState<string | null>(null);
   const [showImagePreview, setShowImagePreview] = useState(false);
@@ -175,6 +176,7 @@ export default function ProjectDetailPage() {
   const [plyFiles, setPlyFiles] = useState<PlyFile[]>([]);
   const [loadingPlyFiles, setLoadingPlyFiles] = useState(false);
   const framework = project?.reconstruction_framework;
+  const videoDiagnostics = project?.video_extraction_diagnostics;
 
   // Auto-expand the running stage
   useEffect(() => {
@@ -488,6 +490,9 @@ export default function ProjectDetailPage() {
         if (retryParams.colmap_resolution) {
           params.colmap_resolution = retryParams.colmap_resolution;
         }
+        if (retryParams.replacement_search_radius) {
+          params.replacement_search_radius = parseInt(retryParams.replacement_search_radius);
+        }
         if (retryParams.use_separate_training_images) {
           params.use_separate_training_images = true;
           if (retryParams.training_resolution) {
@@ -559,6 +564,7 @@ export default function ProjectDetailPage() {
         colmap_resolution: '',
         training_resolution: '',
         use_separate_training_images: false,
+        replacement_search_radius: '',
       });
       await loadProject();
     } catch (err) {
@@ -614,6 +620,7 @@ export default function ProjectDetailPage() {
         colmap_resolution: '',
         training_resolution: '',
         use_separate_training_images: false,
+        replacement_search_radius: project?.config?.replacement_search_radius?.toString() || '',
       });
     }
 
@@ -953,6 +960,64 @@ export default function ProjectDetailPage() {
                         <div className="flex items-center justify-between"><span>Weak boundaries</span><span className="font-medium text-black">{framework.pair_geometry_stats?.weak_boundary_count ?? '--'}</span></div>
                         <div className="flex items-center justify-between"><span>Weak ratio</span><span className="font-medium text-black">{formatPercent(framework.pair_geometry_stats?.weak_boundary_ratio)}</span></div>
                       </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {videoDiagnostics && (
+                <div className="border border-gray-200 rounded-2xl p-6 bg-amber-50/40">
+                  <div className="flex items-start justify-between gap-4 mb-5">
+                    <div>
+                      <h3 className="text-sm font-medium text-black">Video Extraction Diagnostics</h3>
+                      <p className="text-sm text-gray-500 mt-1">
+                        Smart neighbor replacement summary stored with the project for later review.
+                      </p>
+                    </div>
+                    <span className="inline-flex items-center rounded-full border border-amber-200 px-3 py-1 text-xs font-medium text-amber-900 bg-white">
+                      radius ±{videoDiagnostics.search_radius ?? project?.config?.replacement_search_radius ?? '--'}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-5">
+                    <div className="rounded-xl border border-gray-200 bg-white p-4">
+                      <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Targets</p>
+                      <p className="text-sm font-medium text-black">{videoDiagnostics.requested_targets ?? '--'}</p>
+                    </div>
+                    <div className="rounded-xl border border-gray-200 bg-white p-4">
+                      <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Saved</p>
+                      <p className="text-sm font-medium text-black">{videoDiagnostics.saved_frames ?? '--'}</p>
+                    </div>
+                    <div className="rounded-xl border border-gray-200 bg-white p-4">
+                      <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Replaced</p>
+                      <p className="text-sm font-medium text-black">{videoDiagnostics.replaced_targets ?? '--'}</p>
+                    </div>
+                    <div className="rounded-xl border border-gray-200 bg-white p-4">
+                      <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Rejected Candidates</p>
+                      <p className="text-sm font-medium text-black">{videoDiagnostics.rejected_candidates ?? '--'}</p>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-gray-200 bg-white p-4">
+                    <p className="text-xs uppercase tracking-wide text-gray-500 mb-3">Recent Replacements</p>
+                    <div className="space-y-2 text-sm text-gray-700">
+                      {(videoDiagnostics.videos || [])
+                        .flatMap((video) => (video.selections || []).map((selection) => ({ ...selection, filename: video.filename })))
+                        .filter((selection) => selection.offset !== 0)
+                        .slice(0, 12)
+                        .map((selection, index) => (
+                          <div key={`${selection.filename || 'video'}-${selection.target_index}-${index}`} className="flex items-center justify-between gap-4">
+                            <span className="truncate">{selection.filename || 'video'}: target {selection.target_index} {'->'} {selection.selected_index}</span>
+                            <span className="shrink-0 font-medium text-black">
+                              offset {selection.offset > 0 ? `+${selection.offset}` : selection.offset} · sharpness {selection.sharpness}
+                            </span>
+                          </div>
+                        ))}
+                      {!(videoDiagnostics.videos || [])
+                        .flatMap((video) => video.selections || [])
+                        .some((selection) => selection.offset !== 0) && (
+                        <p className="text-sm text-gray-500">No replacements were needed in the stored extraction summary.</p>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1505,6 +1570,25 @@ export default function ProjectDetailPage() {
                     </select>
                   </div>
 
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                      Smart Replacement Radius
+                    </label>
+                    <select
+                      value={retryParams.replacement_search_radius}
+                      onChange={(e) => setRetryParams({...retryParams, replacement_search_radius: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                    >
+                      <option value="">ใช้ค่าเดิม</option>
+                      <option value="2">±2 frames</option>
+                      <option value="4">±4 frames - Recommended</option>
+                      <option value="6">±6 frames</option>
+                      <option value="8">±8 frames</option>
+                      <option value="12">±12 frames</option>
+                    </select>
+                    <p className="text-xs text-gray-400 mt-1">ขยายช่วงค้นหาเฟรมรอบ target เพื่อแทนเฟรมเบลอด้วยเฟรมที่คมกว่า</p>
+                  </div>
+
                   <div className="flex items-center">
                     <input
                       type="checkbox"
@@ -1564,6 +1648,7 @@ export default function ProjectDetailPage() {
                       <option value="">ใช้ค่าเดิม</option>
                       <option value="fast">Fast (500 iterations)</option>
                       <option value="balanced">Balanced (7000 iterations)</option>
+                      <option value="hard">Hard (5000 iterations, coverage-first)</option>
                       <option value="high">High (7000 iterations)</option>
                       <option value="ultra">Ultra (15000 iterations)</option>
                       <option value="professional">Professional (30000 iterations)</option>
@@ -1723,6 +1808,7 @@ export default function ProjectDetailPage() {
                       <option value="">ใช้ค่าเดิม</option>
                       <option value="fast">Fast</option>
                       <option value="balanced">Balanced</option>
+                      <option value="hard">Hard (coverage-first)</option>
                       <option value="high">High</option>
                       <option value="ultra">Ultra</option>
                       <option value="robust">Robust (สำหรับ dataset ยาก)</option>
@@ -1783,6 +1869,7 @@ export default function ProjectDetailPage() {
                       <option value="">ใช้ค่าเดิม</option>
                       <option value="fast">Fast</option>
                       <option value="balanced">Balanced</option>
+                      <option value="hard">Hard (coverage-first)</option>
                       <option value="high">High</option>
                       <option value="ultra">Ultra</option>
                       <option value="robust">Robust (สำหรับ dataset ยาก)</option>

@@ -468,6 +468,7 @@ def upload_policy_preview():
         "target_fps": parse_float(payload.get("target_fps"), 1.0),
         "quality": parse_int(payload.get("quality"), 100),
         "preview_count": parse_int(payload.get("preview_count"), 10),
+        "replacement_search_radius": parse_int(payload.get("replacement_search_radius"), 4),
         "use_gpu_extraction": parse_bool(payload.get("use_gpu_extraction"), True),
         "colmap_resolution": payload.get("colmap_resolution", "2K"),
         "training_resolution": payload.get("training_resolution", "4K"),
@@ -603,6 +604,7 @@ def upload_files():
             request.form.get("quality", 100)
         ),  # Legacy - kept for backward compatibility
         "preview_count": int(request.form.get("preview_count", 10)),
+        "replacement_search_radius": int(request.form.get("replacement_search_radius", 4)),
         # GPU acceleration for video frame extraction (5-10x faster)
         "use_gpu_extraction": request.form.get("use_gpu_extraction", "true").lower()
         == "true",
@@ -1254,6 +1256,7 @@ def retry_project(project_id):
                 "colmap_resolution",
                 "training_resolution",
                 "use_separate_training_images",
+                "replacement_search_radius",
             ]:
                 if param_key in new_params and new_params[param_key] is not None:
                     config[param_key] = new_params[param_key]

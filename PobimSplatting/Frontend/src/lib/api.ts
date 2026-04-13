@@ -46,9 +46,11 @@ export interface Project {
   config?: {
     sfm_engine?: 'glomap' | 'colmap' | 'fastmap';
     feature_method?: 'sift' | 'aliked' | 'superpoint';
+    replacement_search_radius?: number;
     [key: string]: any;
   };
   reconstruction_framework?: ReconstructionFramework;
+  video_extraction_diagnostics?: VideoExtractionDiagnostics;
 }
 
 export interface ReconstructionFramework {
@@ -90,6 +92,36 @@ export interface ProcessingStatus {
   ply_file?: string;
   frame_previews?: string[];
   reconstruction_framework?: ReconstructionFramework;
+  video_extraction_diagnostics?: VideoExtractionDiagnostics;
+}
+
+export interface VideoExtractionSelection {
+  target_index: number;
+  selected_index: number;
+  offset: number;
+  sharpness: number;
+  accepted: boolean;
+  fallback_used: boolean;
+}
+
+export interface VideoExtractionDiagnostics {
+  strategy?: string;
+  mode?: string;
+  requested_targets?: number;
+  saved_frames?: number;
+  replaced_targets?: number;
+  search_radius?: number;
+  rejected_candidates?: number;
+  selections?: VideoExtractionSelection[];
+  videos?: Array<{
+    filename?: string;
+    requested_targets?: number;
+    saved_frames?: number;
+    replaced_targets?: number;
+    search_radius?: number;
+    rejected_candidates?: number;
+    selections?: VideoExtractionSelection[];
+  }>;
 }
 
 export interface PlyFile {
@@ -122,6 +154,7 @@ export interface UploadConfig {
   target_fps?: number;
   quality?: number;
   preview_count?: number;
+  replacement_search_radius?: number;
   custom_params?: any;
 }
 
@@ -267,6 +300,7 @@ export const api = {
     if (config.target_fps) formData.append('target_fps', config.target_fps.toString());
     if (config.quality !== undefined) formData.append('quality', config.quality.toString());
     if (config.preview_count) formData.append('preview_count', config.preview_count.toString());
+    if (config.replacement_search_radius !== undefined) formData.append('replacement_search_radius', config.replacement_search_radius.toString());
     if (config.vram_size !== undefined) formData.append('vram_size', config.vram_size.toString());
     // GPU acceleration for video frame extraction (5-10x faster with NVDEC)
     if (config.use_gpu_extraction !== undefined) formData.append('use_gpu_extraction', config.use_gpu_extraction.toString());

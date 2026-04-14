@@ -55,6 +55,11 @@ GPU_COMPUTE_CAP=""
 
 # Yes to all mode (skip all prompts)
 YES_TO_ALL="false"
+USE_PREBUILT_RUNTIME="false"
+PREBUILT_RUNTIME_READY="false"
+PREBUILT_RUNTIME_URL_DEFAULT="https://drive.google.com/file/d/16D3y9BRhQuvcJegztrdwhI-9cBvQv9jD/view?usp=sharing"
+PREBUILT_RUNTIME_URL="$PREBUILT_RUNTIME_URL_DEFAULT"
+PREBUILT_RUNTIME_TMP_ARCHIVE=""
 
 # Log file
 mkdir -p "$LOGS_DIR"
@@ -102,6 +107,274 @@ check_command() {
     else
         return 1
     fi
+}
+
+parse_args() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --yes|-y)
+                YES_TO_ALL="true"
+                ;;
+            --use-prebuilt-runtime)
+                USE_PREBUILT_RUNTIME="true"
+                ;;
+            --prebuilt-runtime-url)
+                shift
+                if [ $# -eq 0 ]; then
+                    print_error "--prebuilt-runtime-url requires a value"
+                    exit 1
+                fi
+                PREBUILT_RUNTIME_URL="$1"
+                ;;
+            --help|-h)
+                cat << EOF
+Usage: ./install.sh [options]
+
+Options:
+  --yes, -y                    Accept default prompts automatically
+  --use-prebuilt-runtime       Download and extract prebuilt runtime artifacts
+  --prebuilt-runtime-url URL   Override the default Google Drive artifact URL
+  --help, -h                   Show this help text
+EOF
+                exit 0
+                ;;
+            *)
+                print_warning "Unknown argument ignored: $1"
+                ;;
+        esac
+        shift
+    done
+}
+
+extract_google_drive_file_id() {
+    local url="$1"
+    if [[ "$url" =~ /file/d/([^/]+) ]]; then
+        printf '%s' "${BASH_REMATCH[1]}"
+        return 0
+    fi
+    if [[ "$url" =~ id=([^&]+) ]]; then
+        printf '%s' "${BASH_REMATCH[1]}"
+        return 0
+    fi
+    return 1
+}
+
+is_probably_html_file() {
+    local path="$1"
+    if [ ! -f "$path" ]; then
+        return 1
+    fi
+
+    if head -c 512 "$path" 2>/dev/null | grep -Eiq '<!doctype html|<html|<head|<body'; then
+        return 0
+    fi
+
+    return 1
+}
+
+download_google_drive_with_curl() {
+    local file_id="$1"
+    local output_path="$2"
+    local cookie_file="/tmp/pobim-gdrive-cookie-$$.txt"
+    local probe_file="/tmp/pobim-gdrive-probe-$$.html"
+    local confirm_token=""
+    local direct_url="https://drive.google.com/uc?export=download&id=${file_id}"
+    local confirmed_url=""
+
+    rm -f "$cookie_file" "$probe_file"
+
+    curl -L -c "$cookie_file" -o "$probe_file" "$direct_url" >/dev/null 2>&1 || {
+        rm -f "$cookie_file" "$probe_file"
+        return 1
+    }
+
+    confirm_token="$(sed -n 's/.*confirm=\([0-9A-Za-z_-]*\).*/\1/p' "$probe_file" | head -n1)"
+    if [ -z "$confirm_token" ]; then
+        confirm_token="$(grep -o 'confirm=[0-9A-Za-z_-]*' "$probe_file" | head -n1 | cut -d= -f2)"
+    fi
+
+    if [ -n "$confirm_token" ]; then
+        confirmed_url="https://drive.google.com/uc?export=download&confirm=${confirm_token}&id=${file_id}"
+        curl -L -b "$cookie_file" -o "$output_path" "$confirmed_url" >/dev/null 2>&1 || {
+            rm -f "$cookie_file" "$probe_file"
+            return 1
+        }
+    else
+        cp "$probe_file" "$output_path"
+    fi
+
+    rm -f "$cookie_file" "$probe_file"
+    return 0
+}
+
+download_google_drive_with_wget() {
+    local file_id="$1"
+    local output_path="$2"
+    local cookie_file="/tmp/pobim-gdrive-cookie-$$.txt"
+    local probe_file="/tmp/pobim-gdrive-probe-$$.html"
+    local confirm_token=""
+    local direct_url="https://drive.google.com/uc?export=download&id=${file_id}"
+    local confirmed_url=""
+
+    rm -f "$cookie_file" "$probe_file"
+
+    wget --save-cookies "$cookie_file" --keep-session-cookies -O "$probe_file" "$direct_url" >/dev/null 2>&1 || {
+        rm -f "$cookie_file" "$probe_file"
+        return 1
+    }
+
+    confirm_token="$(sed -n 's/.*confirm=\([0-9A-Za-z_-]*\).*/\1/p' "$probe_file" | head -n1)"
+    if [ -z "$confirm_token" ]; then
+        confirm_token="$(grep -o 'confirm=[0-9A-Za-z_-]*' "$probe_file" | head -n1 | cut -d= -f2)"
+    fi
+
+    if [ -n "$confirm_token" ]; then
+        confirmed_url="https://drive.google.com/uc?export=download&confirm=${confirm_token}&id=${file_id}"
+        wget --load-cookies "$cookie_file" --progress=bar:force:noscroll -O "$output_path" "$confirmed_url" || {
+            rm -f "$cookie_file" "$probe_file"
+            return 1
+        }
+    else
+        cp "$probe_file" "$output_path"
+    fi
+
+    rm -f "$cookie_file" "$probe_file"
+    return 0
+}
+
+download_prebuilt_runtime_archive() {
+    local url="$1"
+    local output_path="$2"
+    local file_id=""
+
+    if [[ "$url" == https://drive.google.com/* ]] || [[ "$url" == http://drive.google.com/* ]]; then
+        file_id="$(extract_google_drive_file_id "$url" || true)"
+        if [ -z "$file_id" ]; then
+            print_error "Could not extract Google Drive file id from URL"
+            return 1
+        fi
+
+        if check_command gdown; then
+            print_info "Downloading prebuilt runtime with gdown..."
+            if gdown --fuzzy "$url" -O "$output_path"; then
+                if ! is_probably_html_file "$output_path"; then
+                    return 0
+                fi
+                print_warning "gdown returned an HTML response, trying manual Google Drive fallback..."
+            else
+                print_warning "gdown download failed, trying manual Google Drive fallback..."
+            fi
+        fi
+
+        if check_command curl; then
+            print_info "Downloading prebuilt runtime with curl + Google Drive confirm token fallback..."
+            if download_google_drive_with_curl "$file_id" "$output_path" && ! is_probably_html_file "$output_path"; then
+                return 0
+            fi
+            print_warning "curl Google Drive fallback did not return the archive"
+        fi
+
+        if check_command wget; then
+            print_info "Downloading prebuilt runtime with wget + Google Drive confirm token fallback..."
+            if download_google_drive_with_wget "$file_id" "$output_path" && ! is_probably_html_file "$output_path"; then
+                return 0
+            fi
+            print_warning "wget Google Drive fallback did not return the archive"
+        fi
+
+        print_error "Google Drive download failed or returned an HTML confirmation page"
+        return 1
+    fi
+
+    if check_command wget; then
+        print_info "Downloading prebuilt runtime with wget..."
+        wget --progress=bar:force:noscroll -O "$output_path" "$url"
+        return $?
+    fi
+
+    if check_command curl; then
+        print_info "Downloading prebuilt runtime with curl..."
+        curl -L "$url" -o "$output_path"
+        return $?
+    fi
+
+    print_error "No supported downloader found (need wget or curl)"
+    return 1
+}
+
+verify_prebuilt_runtime() {
+    local missing=0
+    local required_paths=(
+        "$PROJECT_ROOT/build/opensplat"
+        "$COLMAP_INSTALL_DIR/bin/colmap"
+        "$COLMAP_BUILD_DIR/src/glomap/glomap"
+        "$PROJECT_ROOT/fastmap/run.py"
+        "$PROJECT_ROOT/hloc/setup.py"
+    )
+
+    print_info "Verifying prebuilt runtime contents..."
+
+    local required_path
+    for required_path in "${required_paths[@]}"; do
+        if [ -e "$required_path" ]; then
+            print_success "Found: ${required_path#$PROJECT_ROOT/}"
+        else
+            print_warning "Missing: ${required_path#$PROJECT_ROOT/}"
+            missing=1
+        fi
+    done
+
+    if [ -f "$PROJECT_ROOT/build/opensplat" ]; then
+        chmod +x "$PROJECT_ROOT/build/opensplat" 2>/dev/null || true
+    fi
+    if [ -f "$COLMAP_INSTALL_DIR/bin/colmap" ]; then
+        chmod +x "$COLMAP_INSTALL_DIR/bin/colmap" 2>/dev/null || true
+    fi
+    if [ -f "$COLMAP_BUILD_DIR/src/glomap/glomap" ]; then
+        chmod +x "$COLMAP_BUILD_DIR/src/glomap/glomap" 2>/dev/null || true
+    fi
+
+    if [ "$missing" -eq 0 ]; then
+        PREBUILT_RUNTIME_READY="true"
+        print_success "Prebuilt runtime is ready"
+        return 0
+    fi
+
+    PREBUILT_RUNTIME_READY="false"
+    print_warning "Prebuilt runtime is incomplete"
+    return 1
+}
+
+install_prebuilt_runtime() {
+    print_header "Installing Prebuilt Runtime Artifacts"
+
+    print_info "Artifact URL: $PREBUILT_RUNTIME_URL"
+
+    PREBUILT_RUNTIME_TMP_ARCHIVE="/tmp/pobim-prebuilt-runtime-$$.tar.gz"
+    rm -f "$PREBUILT_RUNTIME_TMP_ARCHIVE"
+
+    if ! download_prebuilt_runtime_archive "$PREBUILT_RUNTIME_URL" "$PREBUILT_RUNTIME_TMP_ARCHIVE"; then
+        print_error "Failed to download prebuilt runtime archive"
+        return 1
+    fi
+
+    if [ ! -s "$PREBUILT_RUNTIME_TMP_ARCHIVE" ]; then
+        print_error "Downloaded archive is empty"
+        rm -f "$PREBUILT_RUNTIME_TMP_ARCHIVE"
+        return 1
+    fi
+
+    print_info "Extracting prebuilt runtime into $PROJECT_ROOT ..."
+    tar -xzf "$PREBUILT_RUNTIME_TMP_ARCHIVE" -C "$PROJECT_ROOT"
+    rm -f "$PREBUILT_RUNTIME_TMP_ARCHIVE"
+
+    verify_prebuilt_runtime || return 1
+
+    print_info "Refreshing legacy glomap symlink if possible..."
+    build_glomap_internal || true
+
+    print_success "Prebuilt runtime installation complete"
+    echo ""
 }
 
 get_colmap_binary_path() {
@@ -1860,51 +2133,75 @@ main() {
     # Step 5: Setup LibTorch
     setup_libtorch
     
-    # Step 6: Build SfM Engines (COLMAP + GLOMAP together)
-    if prompt_yes_no "Build SfM engines (COLMAP global mapper + legacy glomap fallback)?" "y"; then
+    # Step 6: Optionally install prebuilt runtime artifacts
+    if [ "$USE_PREBUILT_RUNTIME" = "true" ]; then
+        install_prebuilt_runtime || print_warning "Prebuilt runtime install failed - you can still build from source below"
+    else
+        echo -e "${BOLD}${YELLOW}Prebuilt Runtime Option:${NC}"
+        echo -e "  Default Google Drive artifact:"
+        echo -e "  ${CYAN}$PREBUILT_RUNTIME_URL${NC}"
+        echo -e "  This can skip long builds for OpenSplat / COLMAP / GLOMAP.\n"
+        if prompt_yes_no "Install prebuilt runtime artifacts from Google Drive?" "y"; then
+            USE_PREBUILT_RUNTIME="true"
+            install_prebuilt_runtime || print_warning "Prebuilt runtime install failed - you can still build from source below"
+        fi
+    fi
+    
+    # Step 7: Build SfM Engines (COLMAP + GLOMAP together)
+    local build_sfm_default="y"
+    if [ "$PREBUILT_RUNTIME_READY" = "true" ]; then
+        build_sfm_default="n"
+        print_info "Prebuilt COLMAP/GLOMAP detected - source build is optional"
+    fi
+    if prompt_yes_no "Build SfM engines (COLMAP global mapper + legacy glomap fallback)?" "$build_sfm_default"; then
         build_sfm_engines
     fi
     
-    # Step 7: Build OpenSplat
-    if prompt_yes_no "Build OpenSplat?" "y"; then
+    # Step 8: Build OpenSplat
+    local build_opensplat_default="y"
+    if [ "$PREBUILT_RUNTIME_READY" = "true" ] && [ -f "$BUILD_DIR/opensplat" ]; then
+        build_opensplat_default="n"
+        print_info "Prebuilt OpenSplat detected - source build is optional"
+    fi
+    if prompt_yes_no "Build OpenSplat?" "$build_opensplat_default"; then
         build_opensplat
     fi
     
-    # Step 8: Setup Python backend
+    # Step 9: Setup Python backend
     if [ -d "$BACKEND_DIR" ]; then
         if prompt_yes_no "Setup Python backend?" "y"; then
             setup_python_backend
         fi
     fi
     
-    # Step 9: Setup hloc (neural feature matching)
+    # Step 10: Setup hloc (neural feature matching)
     if [ -d "$PROJECT_ROOT/hloc" ]; then
         if prompt_yes_no "Setup hloc (neural feature matching with SuperPoint/LightGlue)?" "y"; then
             setup_hloc
         fi
     fi
     
-    # Step 10: Setup FastMap (fast SfM)
+    # Step 11: Setup FastMap (fast SfM)
     if [ -d "$PROJECT_ROOT/fastmap" ]; then
         if prompt_yes_no "Setup FastMap (fast first-order SfM optimization)?" "y"; then
             setup_fastmap
         fi
     fi
     
-    # Step 11: Setup Node.js frontend
+    # Step 12: Setup Node.js frontend
     if [ -d "$FRONTEND_DIR" ]; then
         if prompt_yes_no "Setup Node.js frontend?" "y"; then
             setup_nodejs_frontend
         fi
     fi
     
-    # Step 12: Create quick start script
+    # Step 13: Create quick start script
     create_quick_start_script
     
-    # Step 13: Create environment config
+    # Step 14: Create environment config
     create_env_config
     
-    # Step 14: Summary
+    # Step 15: Summary
     print_summary
     
     # Ask to start now
@@ -1914,4 +2211,5 @@ main() {
 }
 
 # Run main installation
+parse_args "$@"
 main

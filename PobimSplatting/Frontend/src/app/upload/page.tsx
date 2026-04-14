@@ -4,9 +4,11 @@ import { useState, useCallback, useEffect } from 'react';
 import { Upload, FileVideo, Image, CheckCircle, AlertCircle, Settings, Clock, Info, Zap, Sliders, Wrench } from 'lucide-react';
 import { Accordion } from '@/components/ui';
 import { api, UploadPolicyPreview } from '@/lib/api';
+import { getMatcherLabelWithMode, getSfmEngineCompactLabel, getSfmEngineLabel } from '@/lib/sfm-display';
 import { useRouter } from 'next/navigation';
 
-type MatcherMode = 'auto' | 'sequential' | 'exhaustive';
+type MatcherMode = 'auto' | 'sequential' | 'exhaustive' | 'vocab_tree';
+type SfmBackendMode = 'cli' | 'pycolmap';
 
 export default function UploadPage() {
   const router = useRouter();
@@ -31,7 +33,8 @@ export default function UploadPage() {
     quality: 100,  // Legacy - kept for backward compatibility
     preview_count: 10,
     replacement_search_radius: 4,
-    sfm_engine: 'glomap',  // 'colmap' or 'glomap' - default to GLOMAP for 10-100x faster reconstruction
+    sfm_engine: 'glomap',  // Legacy alias kept for backend compatibility; UI shows COLMAP Global SfM
+    sfm_backend: 'cli' as SfmBackendMode,
     feature_method: 'sift',  // 'sift' (COLMAP), 'aliked' (hloc), 'superpoint' (hloc) - neural features are 10-20x faster
     use_gpu_extraction: true,  // GPU-accelerated video frame extraction (5-10x faster)
     mixed_precision: false,
@@ -43,6 +46,7 @@ export default function UploadPage() {
     crop_size: 0  // Patch-based training (0 = disabled)
   });
   const hardModeForcesExhaustive = config.quality_mode === 'hard';
+  const usesGlobalSfm = config.sfm_engine === 'glomap';
 
   // Custom parameters - starts with High quality (7000 iter) baseline
   const [customParams, setCustomParams] = useState({
@@ -233,16 +237,19 @@ export default function UploadPage() {
   const hasImages = files.some(file => file.type.startsWith('image/'));
   const totalSize = files.reduce((sum, file) => sum + file.size, 0);
   const inputProfile = hasVideo && hasImages ? 'mixed' : hasVideo ? 'video' : hasImages ? 'images' : 'unknown';
+  const largeImageSet = inputProfile === 'images' && files.length >= 300;
   const matcherRecommendation = hardModeForcesExhaustive
-    ? 'Hard mode locks matcher to Exhaustive in the frontend so the first pass maximizes pair coverage before a later training retry.'
+    ? 'Hard mode locks the first pass to Exhaustive so the backend maximizes pair coverage before a later training retry. Global SfM is the default fit for unordered photos, Sequential is better for ordered captures, and Vocabulary Tree is the experimental scale-up path for larger unordered sets.'
     : hasVideo
-    ? 'Auto is recommended for video and orbit captures. The backend can switch into orbit-safe sequential matching and refine sparse reconstruction from pair geometry.'
+    ? 'Auto is recommended for video and orbit captures. Sequential matching usually fits ordered frames best, Global SfM is the safer fallback for harder cases, and Exhaustive is only worth forcing when you want maximum pair coverage.'
     : hasImages && !hasVideo
-      ? 'Auto is recommended for most photo sets. The backend can choose exhaustive for smaller unordered image collections and sequential when the input looks ordered.'
+      ? largeImageSet
+        ? 'Auto is recommended for most photo sets. The backend can choose Exhaustive for smaller unordered groups, Vocabulary Tree as an experimental option for larger unordered collections, and Sequential only when the capture order is meaningful.'
+        : 'Auto is recommended for most photo sets. The backend can choose Exhaustive for smaller unordered image collections, Vocabulary Tree as an experimental option for larger unordered collections, and Sequential only when the input looks ordered.'
       : 'Auto lets the backend pick a matcher after inspecting the uploaded media.';
   const engineRecommendation = hasVideo
-    ? 'For ordered video/orbit captures, the backend may tighten reconstruction policy or fall back to incremental behavior even if GLOMAP is selected here.'
-    : 'Engine selection here is a preferred starting point. The backend framework can still apply safer reconstruction policy when the capture looks risky.';
+    ? 'For ordered video/orbit captures, COLMAP Incremental is the conservative choice, COLMAP Global SfM can still work when the pair graph is strong, and FastMap stays the speed-first option for dense GPU-friendly inputs.'
+    : 'For unordered photo sets, COLMAP Global SfM is usually the best starting point. COLMAP Incremental is safer when you want step-by-step recovery, and FastMap is the GPU-first option when speed matters more than robustness.';
   const policyLegend = [
     {
       key: 'video',
@@ -276,9 +283,9 @@ export default function UploadPage() {
         tone: 'border-emerald-200 bg-emerald-50 text-emerald-900',
         badgeTone: 'border-emerald-200 bg-emerald-100 text-emerald-900',
         profileBadge: 'video orbit',
-        matcherBadge: config.matcher_type === 'auto' ? 'auto -> sequential' : config.matcher_type,
-        engineBadge: config.sfm_engine === 'glomap' ? 'glomap + safe fallback' : `${config.sfm_engine} preferred`,
-        summary: 'Ordered frames usually start with sequential matching, then the backend can tighten sparse reconstruction and bridge weak transitions with geometry-aware rules.',
+        matcherBadge: config.matcher_type === 'auto' ? 'auto -> sequential' : getMatcherLabelWithMode(config.matcher_type),
+        engineBadge: `${getSfmEngineCompactLabel(config.sfm_engine)} preferred`,
+        summary: 'Ordered frames usually start with Sequential matching. Global SfM can still be used as a fallback, while FastMap is the speed-first option for dense GPU-oriented inputs.',
         icon: FileVideo,
       };
     }
@@ -289,9 +296,9 @@ export default function UploadPage() {
         tone: 'border-amber-200 bg-amber-50 text-amber-900',
         badgeTone: 'border-amber-200 bg-amber-100 text-amber-900',
         profileBadge: 'mixed input',
-        matcherBadge: config.matcher_type === 'auto' ? 'auto -> inspect ordering' : config.matcher_type,
-        engineBadge: `${config.sfm_engine} preferred`,
-        summary: 'Mixed uploads are treated cautiously. The backend inspects whether the set behaves more like ordered frames or unordered photos before locking the matcher and mapper policy.',
+        matcherBadge: config.matcher_type === 'auto' ? 'auto -> inspect ordering' : getMatcherLabelWithMode(config.matcher_type),
+        engineBadge: `${getSfmEngineCompactLabel(config.sfm_engine)} preferred`,
+        summary: 'Mixed uploads are treated cautiously. The backend inspects whether the set behaves more like ordered frames or unordered photos before choosing between Sequential, Exhaustive, Vocabulary Tree, or a safer mapper fallback.',
         icon: Upload,
       };
     }
@@ -302,9 +309,11 @@ export default function UploadPage() {
         tone: 'border-sky-200 bg-sky-50 text-sky-900',
         badgeTone: 'border-sky-200 bg-sky-100 text-sky-900',
         profileBadge: 'image collection',
-        matcherBadge: config.matcher_type === 'auto' ? 'auto -> exhaustive or sequential' : config.matcher_type,
-        engineBadge: `${config.sfm_engine} preferred`,
-        summary: 'For image collections, the backend usually prefers exhaustive matching on smaller unordered sets and sequential only when filenames or capture order look strongly ordered.',
+        matcherBadge: config.matcher_type === 'auto' ? (largeImageSet ? 'auto -> exhaustive / vocab tree' : 'auto -> exhaustive or sequential') : getMatcherLabelWithMode(config.matcher_type),
+        engineBadge: `${getSfmEngineCompactLabel(config.sfm_engine)} preferred`,
+        summary: largeImageSet
+          ? 'For photo collections, the backend usually prefers Exhaustive on smaller unordered sets, Vocabulary Tree as an experimental scale-up option for larger unordered collections, and Sequential only when filenames or capture order look strongly ordered.'
+          : 'For photo collections, the backend usually prefers Exhaustive on smaller unordered sets, Vocabulary Tree as an experimental scale-up option for larger unordered collections, and Sequential only when filenames or capture order look strongly ordered.',
         icon: Image,
       };
     }
@@ -314,8 +323,8 @@ export default function UploadPage() {
       tone: 'border-gray-200 bg-gray-50 text-gray-800',
       badgeTone: 'border-gray-200 bg-white text-gray-700',
       profileBadge: 'no files yet',
-      matcherBadge: config.matcher_type === 'auto' ? 'auto' : config.matcher_type,
-      engineBadge: `${config.sfm_engine} preferred`,
+      matcherBadge: config.matcher_type === 'auto' ? 'auto' : getMatcherLabelWithMode(config.matcher_type),
+      engineBadge: `${getSfmEngineCompactLabel(config.sfm_engine)} preferred`,
       summary: 'Select files first, then this panel will estimate which reconstruction policy the backend is most likely to apply.',
       icon: Info,
     };
@@ -326,7 +335,7 @@ export default function UploadPage() {
 
     if (config.matcher_type !== 'auto') {
       score -= 18;
-      reasons.push(`matcher override: ${config.matcher_type}`);
+      reasons.push(`matcher override: ${getMatcherLabelWithMode(config.matcher_type)}`);
     } else {
       reasons.push('matcher auto enabled');
     }
@@ -349,6 +358,11 @@ export default function UploadPage() {
     if (inputProfile === 'images' && config.matcher_type === 'sequential') {
       score -= 14;
       reasons.push('sequential override on photos');
+    }
+
+    if (config.matcher_type === 'vocab_tree') {
+      score -= 4;
+      reasons.push('experimental vocab tree matcher');
     }
 
     if (hasVideo && config.extraction_mode === 'fps') {
@@ -428,7 +442,7 @@ export default function UploadPage() {
     if (config.matcher_type !== 'auto') {
       rules.push({
         level: 'warning',
-        text: `Matcher override is active. The backend will respect ${config.matcher_type} instead of choosing automatically.`,
+        text: `Matcher override is active. The backend will respect ${getMatcherLabelWithMode(config.matcher_type)} instead of choosing automatically.`,
       });
     } else {
       rules.push({
@@ -437,10 +451,17 @@ export default function UploadPage() {
       });
     }
 
+    if (config.matcher_type === 'vocab_tree') {
+      rules.push({
+        level: 'info',
+        text: 'Vocabulary Tree is an experimental matcher that can help larger unordered photo collections. Use it when Exhaustive starts getting too expensive.',
+      });
+    }
+
     if (inputProfile === 'images' && config.sfm_engine === 'fastmap') {
       rules.push({
         level: 'warning',
-        text: 'FastMap with an image-only set is a riskier combination. GLOMAP or COLMAP is usually safer for unordered photo collections.',
+        text: 'FastMap with an image-only set is a riskier combination. COLMAP Global SfM or COLMAP Incremental is usually safer for unordered photo collections.',
       });
     }
 
@@ -468,7 +489,7 @@ export default function UploadPage() {
     if (inputProfile === 'video' && config.sfm_engine === 'colmap') {
       rules.push({
         level: 'info',
-        text: 'COLMAP is a conservative choice for video input and aligns well with stricter orbit-safe incremental reconstruction.',
+        text: 'COLMAP Incremental is a conservative choice for video input and aligns well with stricter orbit-safe reconstruction.',
       });
     }
 
@@ -549,6 +570,12 @@ export default function UploadPage() {
       setConfig((current) => ({ ...current, matcher_type: 'exhaustive' }));
     }
   }, [hardModeForcesExhaustive, config.matcher_type]);
+
+  useEffect(() => {
+    if (config.sfm_engine !== 'glomap' && config.sfm_backend !== 'cli') {
+      setConfig((current) => ({ ...current, sfm_backend: 'cli' }));
+    }
+  }, [config.sfm_engine, config.sfm_backend]);
 
   useEffect(() => {
     let cancelled = false;
@@ -780,6 +807,9 @@ export default function UploadPage() {
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2 text-xs text-gray-600">
                     <span className="rounded-full border border-gray-200 bg-white px-3 py-1">feature: {config.feature_method}</span>
+                    {usesGlobalSfm && (
+                      <span className="rounded-full border border-gray-200 bg-white px-3 py-1">backend: {config.sfm_backend}</span>
+                    )}
                     {hasVideo && config.extraction_mode === 'fps' && (
                       <span className="rounded-full border border-gray-200 bg-white px-3 py-1">target fps: {config.target_fps}</span>
                     )}
@@ -865,16 +895,16 @@ export default function UploadPage() {
                         />
                         <div className="flex items-center justify-between">
                           <div>
-                            <span className="font-bold text-green-700 text-lg">🚀 GLOMAP</span>
+                            <span className="font-bold text-green-700 text-lg">🚀 {getSfmEngineLabel('glomap')}</span>
                             <span className="ml-2 px-2 py-0.5 bg-green-500 text-white text-xs rounded-full">RECOMMENDED</span>
                           </div>
-                          <span className="text-green-600 font-semibold">10-100x Faster</span>
+                          <span className="text-green-600 font-semibold">Global SfM</span>
                         </div>
                         <p className="text-sm text-gray-600 mt-2">
-                          Global SfM - Processes all camera poses simultaneously.
-                          <strong className="text-green-700"> Best for most datasets.</strong>
+                          COLMAP Global SfM - processes the sparse model globally instead of registering images one by one.
+                          <strong className="text-green-700"> Best for most unordered photo sets.</strong>
                         </p>
-                        <p className="text-xs text-green-600 mt-1">✓ Same quality as COLMAP ✓ Much faster ✓ GPU accelerated</p>
+                        <p className="text-xs text-green-600 mt-1">✓ Good for wide photo collections ✓ Faster than incremental on many datasets ✓ Keeps compatibility with legacy glomap alias</p>
                       </label>
 
                       <label className={`flex-1 p-4 rounded-xl border-2 cursor-pointer transition-all ${config.sfm_engine === 'fastmap'
@@ -897,8 +927,8 @@ export default function UploadPage() {
                           <span className="text-purple-600 font-semibold">GPU-First</span>
                         </div>
                         <p className="text-sm text-gray-600 mt-2">
-                          First-order SfM optimized for GPU.
-                          <strong className="text-purple-700"> Best for video/dense scenes.</strong>
+                          First-order SfM optimized for GPU-first throughput.
+                          <strong className="text-purple-700"> Best for dense video or capture streams where speed matters most.</strong>
                         </p>
                         <p className="text-xs text-purple-600 mt-1">✓ GPU-native ✓ Dense coverage ⚠️ Less robust</p>
                       </label>
@@ -923,8 +953,8 @@ export default function UploadPage() {
                           <span className="text-gray-500 font-semibold">Standard Speed</span>
                         </div>
                         <p className="text-sm text-gray-600 mt-2">
-                          Incremental SfM - Processes images one by one.
-                          <strong className="text-blue-700"> Most mature &amp; stable.</strong>
+                          Incremental SfM - registers images one by one and can recover more cautiously from hard inputs.
+                          <strong className="text-blue-700"> Best when you want step-by-step control or conservative fallback behavior.</strong>
                         </p>
                         <p className="text-xs text-blue-600 mt-1">✓ Battle-tested ✓ Handles edge cases ✓ More options</p>
                       </label>
@@ -935,7 +965,24 @@ export default function UploadPage() {
                         <p className="text-sm text-yellow-800">
                           <strong>⚠️ FastMap Notice:</strong> Best for video frames with dense scene coverage. 
                           May fail on sparse photo collections or low-quality images. 
-                          Use GLOMAP or COLMAP for more robust results.
+                          Use COLMAP Global SfM or COLMAP Incremental for more robust results.
+                        </p>
+                      </div>
+                    )}
+
+                    {usesGlobalSfm && (
+                      <div className="mt-3 rounded-lg border border-emerald-200 bg-white px-4 py-3">
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Global SfM Backend</label>
+                        <select
+                          value={config.sfm_backend}
+                          onChange={(e) => setConfig({ ...config, sfm_backend: e.target.value as SfmBackendMode })}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                        >
+                          <option value="cli">CLI Global Mapper (Recommended)</option>
+                          <option value="pycolmap">pycolmap.global_mapping (Experimental)</option>
+                        </select>
+                        <p className="mt-2 text-xs text-gray-600">
+                          `pycolmap` is experimental here. The backend will try Python global mapping first, then fall back to the CLI global mapper automatically if the installed `pycolmap` is missing or too old.
                         </p>
                       </div>
                     )}
@@ -1161,8 +1208,9 @@ export default function UploadPage() {
                         }`}
                       >
                         <option value="auto">Auto (Recommended, backend decides)</option>
-                        <option value="sequential">Sequential (Override for sequences)</option>
-                        <option value="exhaustive">Exhaustive (Override for broader coverage)</option>
+                        <option value="sequential">Sequential (Ordered sequences / video)</option>
+                        <option value="exhaustive">Exhaustive (Smaller unordered photo sets)</option>
+                        <option value="vocab_tree">Vocabulary Tree (Experimental, large unordered photo sets)</option>
                       </select>
                       <p className="mt-2 text-xs text-gray-500">{matcherRecommendation}</p>
                       {hardModeForcesExhaustive && (

@@ -63,15 +63,32 @@ Script จะทำงานดังนี้:
 1. ✅ ตรวจสอบ GPU, CUDA, RAM, Disk space
 2. ✅ ติดตั้ง dependencies ทั้งหมด (build tools, Python, Node.js, libraries)
 3. ✅ ดาวน์โหลดและติดตั้ง LibTorch ที่เหมาะสมกับ CUDA ของคุณ
-4. ✅ Compile COLMAP
-5. ✅ Compile OpenSplat
-6. ✅ ติดตั้ง Python backend dependencies
-7. ✅ ติดตั้ง Node.js frontend dependencies
-8. ✅ สร้าง quick-start script สำหรับเปิดใช้งานครั้งต่อไป
+4. ✅ Compile และ install COLMAP โดยใช้ `global_mapper` เป็นเส้นทาง SfM หลัก
+5. ✅ สามารถเลือก build `pycolmap` จาก source COLMAP ชุดเดียวกันสำหรับ backend แบบ experimental
+6. ✅ Compile OpenSplat
+7. ✅ ติดตั้ง Python backend dependencies
+8. ✅ ติดตั้ง Node.js frontend dependencies
+9. ✅ สร้าง quick-start script สำหรับเปิดใช้งานครั้งต่อไป
 
 **หมายเหตุ**: ระหว่างติดตั้ง script จะถามคำถามต่างๆ ให้ตอบ `y` (yes) หรือ `n` (no)
 
 ---
+
+## 🎯 คำแนะนำสำหรับ SfM
+
+- ใช้ `COLMAP global_mapper` เป็นเส้นทาง global SfM หลักของโปรเจคนี้
+- ถ้าจะใช้ `sfm_backend=pycolmap` ควร build `pycolmap` จาก source COLMAP ชุดเดียวกัน ไม่ควรพึ่ง wheel คนละเวอร์ชันแบบลอยๆ
+- ให้ `GLOMAP` แบบ standalone เป็น legacy fallback เท่านั้น ไม่ควรวางแผนติดตั้งใหม่โดยยึดเป็นค่าเริ่มต้น
+- ใช้ `sequential` กับวิดีโอหรือ orbit capture ที่มีลำดับเฟรม, ใช้ `exhaustive` กับชุดภาพ unordered ขนาดเล็ก และใช้ `vocab_tree` แบบ experimental กับชุดภาพ unordered ขนาดใหญ่
+- ปล่อย matcher mode เป็น `auto` ไว้ก่อน เว้นแต่มีเหตุผลเฉพาะของ dataset ที่ต้อง override
+
+## 🧪 Experimental pycolmap Backend
+
+ตอนนี้ `install.sh` มีทางเลือกให้ build `pycolmap` จาก source ในโฟลเดอร์ `colmap/` หลังจาก build และ install COLMAP ลงที่ `colmap-build/install` แล้ว
+
+- เหมาะเมื่อจะใช้ `sfm_backend=pycolmap`
+- health endpoint และหน้า dashboard ของระบบจะแสดงว่าฟังก์ชัน `pycolmap global_mapping` พร้อมใช้งานจริงหรือไม่
+- ถ้าข้ามขั้นตอนนี้หรือ build ไม่ผ่าน ระบบยังใช้งานได้ปกติและจะ fallback ไปใช้ CLI `COLMAP global_mapper`
 
 ## 🎯 วิธีเปิดใช้งาน
 
@@ -212,7 +229,7 @@ docker build -t pobim-opensplat -f Dockerfile.rocm6 .
 docker run -it --gpus all -p 3000:3000 -p 5000:5000 pobim-opensplat
 ```
 
-**หมายเหตุ**: ไฟล์ binary ที่ compile แล้ว (`build/opensplat`, `colmap-build/colmap`) **ไม่สามารถ** คัดลอกไปใช้กับเครื่องอื่นได้โดยตรง เพราะมี dependencies ที่ผูกติดกับเครื่องต้นทาง ต้องใช้ installation script compile ใหม่บนแต่ละเครื่อง
+**หมายเหตุ**: ไฟล์ binary ที่ compile แล้ว (`build/opensplat`, `colmap-build/install/bin/colmap`) **ไม่สามารถ** คัดลอกไปใช้กับเครื่องอื่นได้โดยตรง เพราะมี dependencies ที่ผูกติดกับเครื่องต้นทาง ต้องใช้ installation script compile ใหม่บนแต่ละเครื่อง
 
 ---
 

@@ -3,6 +3,7 @@
 import { useState, useEffect, lazy, Suspense, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { api } from '@/lib/api';
+import { getSfmEngineLabel } from '@/lib/sfm-display';
 import type { CameraPose, CameraPosesData } from '@/components/CameraPoseVisualization';
 import { Breadcrumbs } from '@/components/ui';
 import {
@@ -153,7 +154,7 @@ export default function CameraPosesPage() {
             <div className="text-xs text-gray-400 space-y-0.5">
               <div>Project: {data.project_name || projectId.slice(0, 8)}</div>
               {data.sfm_engine && (
-                <div>Engine: <span className="text-gray-300">{data.sfm_engine.toUpperCase()}</span></div>
+                <div>Engine: <span className="text-gray-300">{getSfmEngineLabel(data.sfm_engine)}</span></div>
               )}
               {data.sparse_point_count != null && data.sparse_point_count > 0 && (
                 <div className="flex items-center gap-1">

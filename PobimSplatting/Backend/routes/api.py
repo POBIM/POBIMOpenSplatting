@@ -35,6 +35,8 @@ from ..pipeline.runner import (
     build_upload_policy_preview,
     finalize_project,
     get_colmap_executable,
+    get_pycolmap_module,
+    pycolmap_supports_global_mapping,
     run_processing_pipeline,
     run_processing_pipeline_from_stage,
     select_best_sparse_model,
@@ -395,6 +397,10 @@ def _load_project_camera_poses(project_id):
 
 @api_bp.route("/health", methods=["GET"])
 def health_check():
+    pycolmap_module = get_pycolmap_module()
+    pycolmap_version = getattr(pycolmap_module, "__version__", None) if pycolmap_module else None
+    pycolmap_ready = pycolmap_supports_global_mapping()
+
     return jsonify(
         {
             "status": "healthy",
@@ -407,6 +413,15 @@ def health_check():
                 "colmap": "available"
                 if shutil.which(get_colmap_executable())
                 else "not_found",
+                "pycolmap": "available" if pycolmap_module else "not_found",
+                "pycolmap_global_mapping": "ready" if pycolmap_ready else "not_ready",
+            },
+            "experimental": {
+                "pycolmap": {
+                    "installed": pycolmap_module is not None,
+                    "version": pycolmap_version,
+                    "global_mapping_ready": pycolmap_ready,
+                }
             },
         }
     )
@@ -461,6 +476,7 @@ def upload_policy_preview():
         "matcher_type": payload.get("matcher_type"),
         "quality_mode": payload.get("quality_mode", "balanced"),
         "sfm_engine": payload.get("sfm_engine", "glomap"),
+        "sfm_backend": payload.get("sfm_backend", "cli"),
         "fast_sfm": parse_bool(payload.get("fast_sfm"), False),
         "feature_method": payload.get("feature_method", "sift"),
         "extraction_mode": payload.get("extraction_mode", "frames"),
@@ -592,6 +608,7 @@ def upload_files():
         "matcher_type": matcher_type,
         "quality_mode": quality_mode,
         "sfm_engine": request.form.get("sfm_engine", "glomap"),
+        "sfm_backend": request.form.get("sfm_backend", "cli"),
         "fast_sfm": request.form.get("fast_sfm", "false").lower() == "true",
         "feature_method": request.form.get("feature_method", "sift"),
         # Frame extraction configuration for videos

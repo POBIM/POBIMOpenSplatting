@@ -8,12 +8,12 @@
 # 2. Install CUDA Toolkit automatically if needed
 # 3. Install required system packages
 # 4. Download and setup LibTorch
-# 5. Build COLMAP with CUDA support
-# 6. Build GLOMAP (10-100x faster sparse reconstruction)
+# 5. Build COLMAP with CUDA support and install prefix
+# 6. Setup legacy standalone GLOMAP fallback if available
 # 7. Build OpenSplat
-# 8. Setup hloc (neural feature matching with SuperPoint/SuperGlue/LightGlue)
-# 9. Setup FastMap (fast first-order SfM optimization)
-# 10. Setup Python environments (with reportlab for ArUco markers)
+# 8. Setup Python environments and optional experimental pycolmap backend
+# 9. Setup hloc (neural feature matching with SuperPoint/SuperGlue/LightGlue)
+# 10. Setup FastMap (fast first-order SfM optimization)
 # 11. Setup Node.js frontend
 # 12. Create quick-start script
 # =============================================================================
@@ -34,6 +34,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$SCRIPT_DIR"
 BUILD_DIR="$PROJECT_ROOT/build"
 COLMAP_BUILD_DIR="$PROJECT_ROOT/colmap-build"
+COLMAP_INSTALL_DIR="$COLMAP_BUILD_DIR/install"
 POBIM_SPLATTING_DIR="$PROJECT_ROOT/PobimSplatting"
 FRONTEND_DIR="$POBIM_SPLATTING_DIR/Frontend"
 BACKEND_DIR="$POBIM_SPLATTING_DIR/Backend"
@@ -101,6 +102,37 @@ check_command() {
     else
         return 1
     fi
+}
+
+get_colmap_binary_path() {
+    local candidates=(
+        "$COLMAP_INSTALL_DIR/bin/colmap"
+        "$COLMAP_BUILD_DIR/src/colmap/exe/colmap"
+        "$COLMAP_BUILD_DIR/src/exe/colmap"
+        "/usr/local/bin/colmap"
+    )
+
+    local candidate
+    for candidate in "${candidates[@]}"; do
+        if [ -f "$candidate" ] && [ -x "$candidate" ]; then
+            printf '%s' "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+check_pycolmap_ready() {
+    if [ ! -d "$BACKEND_DIR/venv" ]; then
+        return 1
+    fi
+
+    if ! "$BACKEND_DIR/venv/bin/python" -c "import pycolmap; assert hasattr(pycolmap, 'global_mapping'); assert hasattr(pycolmap, 'GlobalMapperOptions'); assert hasattr(pycolmap, 'GlobalPipelineOptions')" >/dev/null 2>&1; then
+        return 1
+    fi
+
+    return 0
 }
 
 prompt_yes_no() {
@@ -765,6 +797,7 @@ build_colmap_internal() {
         "$PROJECT_ROOT/colmap"
         "-DCMAKE_BUILD_TYPE=Release"
         "-DGUI_ENABLED=$GUI_ENABLED"
+        "-DCMAKE_INSTALL_PREFIX=$COLMAP_INSTALL_DIR"
     )
     
     if [ "$CUDA_ENABLED" = "ON" ]; then
@@ -792,13 +825,11 @@ build_colmap_internal() {
         return 1
     fi
     
+    print_info "Installing COLMAP into $COLMAP_INSTALL_DIR..."
+    cmake --install .
+
     # Find and setup COLMAP binary
-    COLMAP_BIN=""
-    if [ -f "$COLMAP_BUILD_DIR/src/colmap/exe/colmap" ]; then
-        COLMAP_BIN="$COLMAP_BUILD_DIR/src/colmap/exe/colmap"
-    elif [ -f "$COLMAP_BUILD_DIR/src/exe/colmap" ]; then
-        COLMAP_BIN="$COLMAP_BUILD_DIR/src/exe/colmap"
-    fi
+    COLMAP_BIN="$(get_colmap_binary_path || true)"
     
     if [ -n "$COLMAP_BIN" ]; then
         print_success "COLMAP build complete"
@@ -950,11 +981,11 @@ upgrade_cmake() {
 }
 
 # =============================================================================
-# Setup GLOMAP (included with COLMAP 3.14+)
+# Setup GLOMAP (legacy fallback only)
 # =============================================================================
 
 build_glomap_internal() {
-    print_info "Setting up GLOMAP (included with COLMAP 3.14+)..."
+    print_info "Setting up legacy GLOMAP fallback..."
     
     # GLOMAP is now built as part of COLMAP 3.14+
     # No separate build needed - just create symlink to the COLMAP-integrated version
@@ -994,9 +1025,8 @@ build_glomap_internal() {
         
         # Test GLOMAP
         if command -v glomap &> /dev/null; then
-            print_success "GLOMAP is ready to use!"
-            print_info "GLOMAP provides 10-100x faster sparse reconstruction than COLMAP mapper"
-            print_info "NOTE: GLOMAP is built with COLMAP to ensure database compatibility"
+            print_success "GLOMAP legacy fallback is ready to use"
+            print_info "The project now prefers COLMAP global_mapper first and uses standalone glomap only as a compatibility fallback"
         fi
         
         # Clean up old standalone glomap-build if exists
@@ -1017,6 +1047,65 @@ build_glomap_internal() {
         print_info "Sparse reconstruction will use COLMAP mapper instead (slower but works)"
         return 1
     fi
+}
+
+# =============================================================================
+# Build pycolmap from local COLMAP source
+# =============================================================================
+
+build_pycolmap_from_source() {
+    print_header "Building pycolmap (Experimental Global SfM Backend)"
+
+    if [ ! -d "$BACKEND_DIR/venv" ]; then
+        print_warning "Backend venv not found - setup Python backend first"
+        return 1
+    fi
+
+    if [ ! -d "$PROJECT_ROOT/colmap" ]; then
+        print_warning "COLMAP source directory not found at $PROJECT_ROOT/colmap"
+        return 1
+    fi
+
+    if [ ! -d "$COLMAP_INSTALL_DIR" ]; then
+        print_warning "COLMAP install prefix not found at $COLMAP_INSTALL_DIR"
+        print_info "Build COLMAP first so pycolmap can link against the matching install"
+        return 1
+    fi
+
+    source "$BACKEND_DIR/venv/bin/activate"
+
+    print_info "Installing pycolmap build requirements..."
+    pip install --quiet scikit-build-core pybind11 || {
+        print_error "Failed to install pycolmap build requirements"
+        deactivate
+        return 1
+    }
+
+    print_info "Building pycolmap from local COLMAP source..."
+    pip uninstall -y pycolmap >/dev/null 2>&1 || true
+    CMAKE_PREFIX_PATH="$COLMAP_INSTALL_DIR" \
+        pip install --no-build-isolation -Ccmake.define.GENERATE_STUBS=OFF "$PROJECT_ROOT/colmap"
+
+    if [ $? -ne 0 ]; then
+        print_error "pycolmap build failed"
+        deactivate
+        return 1
+    fi
+
+    if python -c "import pycolmap; assert hasattr(pycolmap, 'global_mapping'); assert hasattr(pycolmap, 'GlobalMapperOptions'); assert hasattr(pycolmap, 'GlobalPipelineOptions'); print(pycolmap.__version__)" >/tmp/pobim_pycolmap_version.txt 2>/dev/null; then
+        PYCOLMAP_VERSION=$(cat /tmp/pobim_pycolmap_version.txt 2>/dev/null || echo "unknown")
+        rm -f /tmp/pobim_pycolmap_version.txt
+        print_success "pycolmap built and installed successfully"
+        print_info "pycolmap version: $PYCOLMAP_VERSION"
+        print_info "Experimental backend status: ready for global_mapping"
+        deactivate
+        return 0
+    fi
+
+    rm -f /tmp/pobim_pycolmap_version.txt
+    print_error "pycolmap installed but readiness checks failed"
+    deactivate
+    return 1
 }
 
 # =============================================================================
@@ -1048,7 +1137,12 @@ setup_hloc() {
         
         print_info "Installing hloc dependencies..."
         pip install --quiet torch torchvision 2>/dev/null || print_warning "PyTorch may need manual installation"
-        pip install --quiet tqdm matplotlib plotly scipy h5py kornia gdown pycolmap 2>/dev/null || true
+        pip install --quiet tqdm matplotlib plotly scipy h5py kornia gdown 2>/dev/null || true
+        if python -c "import pycolmap" >/dev/null 2>&1; then
+            print_success "pycolmap already available in backend venv"
+        else
+            print_warning "pycolmap not found in backend venv; hloc can still run, but the experimental global mapping backend will remain unavailable"
+        fi
         
         print_info "Installing LightGlue (fast feature matcher)..."
         pip install --quiet "git+https://github.com/cvg/LightGlue" 2>/dev/null || print_warning "LightGlue installation may have failed"
@@ -1368,9 +1462,24 @@ setup_python_backend() {
     
     pip install --quiet reportlab 2>/dev/null && print_success "reportlab installed (ArUco marker PDF generation)" || true
     
-    pip install --quiet h5py pycolmap 2>/dev/null && print_success "h5py, pycolmap installed (hloc support)" || true
+    pip install --quiet h5py 2>/dev/null && print_success "h5py installed (hloc support)" || true
     
     pip install --quiet kornia gdown 2>/dev/null && print_success "kornia, gdown installed (neural feature support)" || true
+
+    if [ -d "$PROJECT_ROOT/colmap" ] && [ -d "$COLMAP_INSTALL_DIR" ]; then
+        if prompt_yes_no "Build experimental pycolmap backend from local COLMAP source?" "y"; then
+            deactivate
+            cd "$PROJECT_ROOT"
+            build_pycolmap_from_source || print_warning "Experimental pycolmap backend is not ready; CLI global mapper will still work"
+            cd "$BACKEND_DIR"
+            source venv/bin/activate
+        else
+            print_info "Skipping experimental pycolmap build"
+            print_info "The project will use CLI COLMAP global_mapper and fall back automatically where needed"
+        fi
+    else
+        print_info "Skipping pycolmap source build because matching COLMAP source/install was not found yet"
+    fi
     
     deactivate
     
@@ -1547,15 +1656,17 @@ print_summary() {
         if [[ "$COLMAP_INFO" =~ "with CUDA" ]]; then
             echo -e "    ${GREEN}(with CUDA support)${NC}"
         fi
+    elif [ -f "$COLMAP_INSTALL_DIR/bin/colmap" ]; then
+        echo "  • COLMAP: $COLMAP_INSTALL_DIR/bin/colmap"
     elif [ -f "$COLMAP_BUILD_DIR/src/colmap/exe/colmap" ]; then
         echo "  • COLMAP: $COLMAP_BUILD_DIR/src/colmap/exe/colmap"
     fi
     
     if [ -f "$COLMAP_BUILD_DIR/src/glomap/glomap" ]; then
-        echo -e "  • GLOMAP: $COLMAP_BUILD_DIR/src/glomap/glomap ${GREEN}(built with COLMAP)${NC}"
+        echo -e "  • GLOMAP: $COLMAP_BUILD_DIR/src/glomap/glomap ${GREEN}(legacy fallback built with COLMAP)${NC}"
     elif command -v glomap &> /dev/null; then
         GLOMAP_PATH=$(which glomap)
-        echo -e "  • GLOMAP: $GLOMAP_PATH ${GREEN}(10-100x faster sparse reconstruction)${NC}"
+        echo -e "  • GLOMAP: $GLOMAP_PATH ${GREEN}(legacy fallback path)${NC}"
     fi
     
     if [ -d "$PROJECT_ROOT/hloc" ]; then
@@ -1574,11 +1685,18 @@ print_summary() {
     
     echo "  • Frontend: $FRONTEND_DIR"
     echo "  • Backend: $BACKEND_DIR"
+    if check_pycolmap_ready; then
+        PYCOLMAP_VERSION=$("$BACKEND_DIR/venv/bin/python" -c "import pycolmap; print(pycolmap.__version__)" 2>/dev/null || echo "unknown")
+        echo -e "  • pycolmap: $PYCOLMAP_VERSION ${GREEN}(experimental global_mapping ready)${NC}"
+    else
+        echo -e "  • pycolmap: ${YELLOW}not ready${NC} (CLI global mapper remains the default path)"
+    fi
     echo ""
     echo -e "${CYAN}SfM Engine Options:${NC}"
-    echo "  • GLOMAP: Recommended for faster processing (10-100x faster mapper)"
-    echo "  • COLMAP: Classic option, more stable but slower"
-    echo "  • Select engine in Frontend upload page"
+    echo "  • COLMAP Global Mapper: Preferred global SfM path"
+    echo "  • pycolmap: Experimental Python-native global mapping backend"
+    echo "  • Standalone GLOMAP: Legacy fallback only"
+    echo "  • Select engine/backend in the Frontend upload page"
     echo ""
     echo -e "${CYAN}Feature Matching Options:${NC}"
     echo "  • SIFT: Classic feature matching (default, fast)"
@@ -1609,13 +1727,13 @@ print_summary() {
 # =============================================================================
 
 build_sfm_engines() {
-    print_header "Building SfM Engines (COLMAP + GLOMAP)"
+    print_header "Building SfM Engines (COLMAP Global Mapper + Legacy GLOMAP)"
     
-    echo -e "${CYAN}This will build COLMAP and GLOMAP with the same CUDA configuration:${NC}"
+    echo -e "${CYAN}This will build COLMAP and prepare the legacy standalone glomap fallback with the same CUDA configuration:${NC}"
     echo ""
-    echo "  • COLMAP: Feature extraction, matching, dense reconstruction"
-    echo "  • GLOMAP: Fast global mapper (10-100x faster than COLMAP mapper)"
-    echo "  • Both tools share COLMAP libraries for consistency"
+    echo "  • COLMAP: Feature extraction, matching, dense reconstruction, and preferred global_mapper path"
+    echo "  • GLOMAP: Legacy standalone fallback only"
+    echo "  • Both tools should share compatible COLMAP libraries"
     echo ""
     echo -e "${CYAN}Additional tools available after build:${NC}"
     echo "  • hloc: Neural feature matching (SuperPoint/LightGlue)"
@@ -1663,12 +1781,12 @@ build_sfm_engines() {
     print_header "Step 1/2: Building COLMAP"
     build_colmap_internal
     if [ $? -ne 0 ]; then
-        print_error "COLMAP build failed - cannot continue with GLOMAP"
+        print_error "COLMAP build failed - cannot continue with global SfM setup"
         return 1
     fi
     
     # Build GLOMAP (depends on COLMAP)
-    print_header "Step 2/2: Setting up GLOMAP"
+    print_header "Step 2/2: Setting up legacy GLOMAP fallback"
     build_glomap_internal
     if [ $? -ne 0 ]; then
         print_warning "GLOMAP setup failed - COLMAP is still available"
@@ -1682,7 +1800,7 @@ build_sfm_engines() {
     echo -e "${CYAN}Build Summary:${NC}"
     
     if [ -f "$COLMAP_BUILD_DIR/src/colmap/exe/colmap" ]; then
-        echo -e "  ${GREEN}✓${NC} COLMAP: $COLMAP_BUILD_DIR/src/colmap/exe/colmap"
+        echo -e "  ${GREEN}✓${NC} COLMAP: $COLMAP_INSTALL_DIR/bin/colmap"
     elif command -v colmap &> /dev/null; then
         echo -e "  ${GREEN}✓${NC} COLMAP: $(which colmap)"
     else
@@ -1691,7 +1809,7 @@ build_sfm_engines() {
     
     # GLOMAP is now part of COLMAP build
     if [ -f "$COLMAP_BUILD_DIR/src/glomap/glomap" ]; then
-        echo -e "  ${GREEN}✓${NC} GLOMAP: $COLMAP_BUILD_DIR/src/glomap/glomap (built with COLMAP)"
+        echo -e "  ${GREEN}✓${NC} GLOMAP: $COLMAP_BUILD_DIR/src/glomap/glomap (legacy fallback)"
     elif command -v glomap &> /dev/null; then
         echo -e "  ${GREEN}✓${NC} GLOMAP: $(which glomap)"
     else
@@ -1743,7 +1861,7 @@ main() {
     setup_libtorch
     
     # Step 6: Build SfM Engines (COLMAP + GLOMAP together)
-    if prompt_yes_no "Build SfM engines (COLMAP + GLOMAP)?" "y"; then
+    if prompt_yes_no "Build SfM engines (COLMAP global mapper + legacy glomap fallback)?" "y"; then
         build_sfm_engines
     fi
     

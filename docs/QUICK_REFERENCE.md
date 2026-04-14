@@ -46,6 +46,24 @@ cd PobimSplatting && ./start.sh status
 
 ---
 
+## 🧭 SfM Defaults
+
+- Preferred global SfM path: `COLMAP global_mapper`
+- Experimental Python-native backend: `pycolmap.global_mapping` when the backend health check reports it as ready
+- Standalone `GLOMAP`: legacy fallback only for older installs
+- Ordered video/orbit captures: `sequential` matcher
+- Small unordered photo sets: `exhaustive` matcher
+- Large unordered photo collections: `vocab_tree` matcher, used experimentally when available
+- When matcher mode is `auto`, the backend picks the path based on the input pattern instead of forcing one policy
+
+### Check Experimental pycolmap Readiness
+```bash
+cd PobimSplatting/Backend
+venv/bin/python -c "import pycolmap; print(pycolmap.__version__); print(hasattr(pycolmap, 'global_mapping'))"
+```
+
+---
+
 ## 🔧 Common Issues & Fixes
 
 ### Port Already in Use
@@ -118,7 +136,7 @@ cd PobimSplatting && ./start.sh
 
 ### Test COLMAP
 ```bash
-./colmap-build/colmap --version
+./colmap-build/install/bin/colmap --version
 ```
 
 ### Test GPU
@@ -150,7 +168,7 @@ POBIMOpenSplat/
 ├── install.sh           # Installation script
 ├── quick-start.sh       # Quick start (auto-generated)
 ├── build/opensplat      # Main binary
-├── colmap-build/colmap  # COLMAP binary
+├── colmap-build/install/bin/colmap  # COLMAP binary
 ├── libtorch-*/          # PyTorch libraries
 ├── PobimSplatting/      # Web platform
 │   ├── start.sh        # Server manager

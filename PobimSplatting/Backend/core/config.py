@@ -40,6 +40,24 @@ MAX_CONTENT_LENGTH = 5 * 1024 * 1024 * 1024  # 5GB
 logger = logging.getLogger(__name__)
 
 
+def _first_existing_file(candidates: Iterable[Path]) -> Path | None:
+    """Return the first candidate that exists as a file."""
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                return candidate
+        except OSError:
+            continue
+    return None
+
+
+def _resolve_env_path(env_value: str | None) -> Path | None:
+    """Resolve an optional environment path to an absolute Path."""
+    if not env_value:
+        return None
+    return Path(env_value).expanduser().resolve()
+
+
 def create_flask_app() -> Flask:
     """
     Create the Flask application instance with static configuration applied.
@@ -85,6 +103,7 @@ UPLOAD_FOLDER: Path = BACKEND_ROOT / "uploads"
 RESULTS_FOLDER: Path = BACKEND_ROOT / "results"
 FRAMES_FOLDER: Path = BACKEND_ROOT / "frames"
 VOCAB_TREE_FOLDER: Path = BACKEND_ROOT / "vocab_trees"
+VOCAB_TREE_CACHE_FOLDER: Path = VOCAB_TREE_FOLDER / "cache"
 PROJECTS_DB_FILE: Path = BACKEND_ROOT / "projects_db.json"
 
 
@@ -95,6 +114,7 @@ def ensure_runtime_directories() -> None:
         RESULTS_FOLDER,
         FRAMES_FOLDER,
         VOCAB_TREE_FOLDER,
+        VOCAB_TREE_CACHE_FOLDER,
     ):
         directory.mkdir(parents=True, exist_ok=True)
 
@@ -112,12 +132,19 @@ else:
 OPENSPLAT_BUILD_PATH: Path = OPENSPLAT_BINARY_PATH.parent
 
 COLMAP_ENV_PATH = os.getenv("COLMAP_PATH")
+COLMAP_EXECUTABLE_NAME = "colmap"
+COLMAP_GLOBAL_MAPPER_SUBCOMMAND = "global_mapper"
 COLMAP_CANDIDATE_PATHS = []
-if COLMAP_ENV_PATH:
-    COLMAP_CANDIDATE_PATHS.append(Path(COLMAP_ENV_PATH).expanduser())
+_colmap_env_path = _resolve_env_path(COLMAP_ENV_PATH)
+if _colmap_env_path:
+    COLMAP_CANDIDATE_PATHS.append(_colmap_env_path)
+    if _colmap_env_path.is_dir():
+        COLMAP_CANDIDATE_PATHS.append(_colmap_env_path / COLMAP_EXECUTABLE_NAME)
 
 COLMAP_CANDIDATE_PATHS.extend(
     [
+        # Installed repo-local prefix from install.sh / manual rebuilds
+        (REPO_ROOT / "colmap-build" / "install" / "bin" / "colmap").resolve(),
         # System-wide installation (highest priority if installed via install.sh)
         Path("/usr/local/bin/colmap"),
         # GPU-enabled COLMAP (highest priority) - actual build location
@@ -147,12 +174,26 @@ COLMAP_CANDIDATE_PATHS.extend(
         ).resolve(),
     ]
 )
+COLMAP_BINARY_PATH: Path | None = _first_existing_file(COLMAP_CANDIDATE_PATHS)
+COLMAP_PATH: Path | None = COLMAP_BINARY_PATH
+COLMAP_AVAILABLE: bool = COLMAP_BINARY_PATH is not None
+COLMAP_GLOBAL_MAPPER_PATH: Path | None = COLMAP_BINARY_PATH
+COLMAP_GLOBAL_MAPPER_AVAILABLE: bool = COLMAP_AVAILABLE
+COLMAP_GLOBAL_MAPPER_COMMAND: tuple[str, ...] = (
+    str(COLMAP_BINARY_PATH) if COLMAP_BINARY_PATH else COLMAP_EXECUTABLE_NAME,
+    COLMAP_GLOBAL_MAPPER_SUBCOMMAND,
+)
 
 # GLOMAP binary discovery (must be compatible with COLMAP version)
 GLOMAP_ENV_PATH = os.getenv("GLOMAP_PATH")
+GLOMAP_EXECUTABLE_NAME = "glomap"
+GLOMAP_MAPPER_SUBCOMMAND = "mapper"
 GLOMAP_CANDIDATE_PATHS = []
-if GLOMAP_ENV_PATH:
-    GLOMAP_CANDIDATE_PATHS.append(Path(GLOMAP_ENV_PATH).expanduser())
+_glomap_env_path = _resolve_env_path(GLOMAP_ENV_PATH)
+if _glomap_env_path:
+    GLOMAP_CANDIDATE_PATHS.append(_glomap_env_path)
+    if _glomap_env_path.is_dir():
+        GLOMAP_CANDIDATE_PATHS.append(_glomap_env_path / GLOMAP_EXECUTABLE_NAME)
 
 GLOMAP_CANDIDATE_PATHS.extend(
     [
@@ -163,11 +204,23 @@ GLOMAP_CANDIDATE_PATHS.extend(
         Path("/usr/local/bin/glomap"),
     ]
 )
+GLOMAP_BINARY_PATH: Path | None = _first_existing_file(GLOMAP_CANDIDATE_PATHS)
+GLOMAP_PATH: Path | None = GLOMAP_BINARY_PATH
+GLOMAP_AVAILABLE: bool = GLOMAP_BINARY_PATH is not None
+LEGACY_GLOMAP_PATH: Path | None = GLOMAP_BINARY_PATH
+LEGACY_GLOMAP_AVAILABLE: bool = GLOMAP_AVAILABLE
+GLOMAP_COMMAND: tuple[str, ...] = (
+    str(GLOMAP_BINARY_PATH) if GLOMAP_BINARY_PATH else GLOMAP_EXECUTABLE_NAME,
+    GLOMAP_MAPPER_SUBCOMMAND,
+)
 
 FASTMAP_ENV_PATH = os.getenv("FASTMAP_PATH")
 FASTMAP_CANDIDATE_PATHS = []
-if FASTMAP_ENV_PATH:
-    FASTMAP_CANDIDATE_PATHS.append(Path(FASTMAP_ENV_PATH).expanduser())
+_fastmap_env_path = _resolve_env_path(FASTMAP_ENV_PATH)
+if _fastmap_env_path:
+    FASTMAP_CANDIDATE_PATHS.append(_fastmap_env_path)
+    if _fastmap_env_path.is_dir():
+        FASTMAP_CANDIDATE_PATHS.append(_fastmap_env_path / "run.py")
 
 FASTMAP_CANDIDATE_PATHS.extend(
     [
@@ -175,14 +228,12 @@ FASTMAP_CANDIDATE_PATHS.extend(
         Path("/usr/local/bin/fastmap"),
     ]
 )
+FASTMAP_BINARY_PATH: Path | None = _first_existing_file(FASTMAP_CANDIDATE_PATHS)
+
 
 def get_fastmap_executable():
-    for candidate in FASTMAP_CANDIDATE_PATHS:
-        try:
-            if candidate.is_file():
-                return str(candidate)
-        except OSError:
-            continue
+    if FASTMAP_BINARY_PATH is not None:
+        return str(FASTMAP_BINARY_PATH)
     return None
 
 FASTMAP_PATH = get_fastmap_executable()
@@ -207,6 +258,32 @@ HLOC_INSTALLED = check_hloc_available()
 # Vocabulary tree configuration
 VOCAB_TREE_URL = "https://demuc.de/colmap/vocab_tree_flickr100K_words32K.bin"
 VOCAB_TREE_FILENAME = "vocab_tree_flickr100K_words32K.bin"
+VOCAB_TREE_ENV_PATH = os.getenv("VOCAB_TREE_PATH") or os.getenv("COLMAP_VOCAB_TREE_PATH")
+VOCAB_TREE_DEFAULT_PATH: Path = VOCAB_TREE_FOLDER / VOCAB_TREE_FILENAME
+VOCAB_TREE_CACHE_PATH: Path = VOCAB_TREE_CACHE_FOLDER / VOCAB_TREE_FILENAME
+VOCAB_TREE_CANDIDATE_PATHS = []
+_vocab_tree_env_path = _resolve_env_path(VOCAB_TREE_ENV_PATH)
+if _vocab_tree_env_path:
+    VOCAB_TREE_CANDIDATE_PATHS.append(_vocab_tree_env_path)
+    if _vocab_tree_env_path.is_dir():
+        VOCAB_TREE_CANDIDATE_PATHS.append(_vocab_tree_env_path / VOCAB_TREE_FILENAME)
+
+VOCAB_TREE_CANDIDATE_PATHS.extend(
+    [
+        VOCAB_TREE_CACHE_PATH,
+        VOCAB_TREE_DEFAULT_PATH,
+        (REPO_ROOT / VOCAB_TREE_FILENAME).resolve(),
+    ]
+)
+VOCAB_TREE_PATH: Path | None = _first_existing_file(VOCAB_TREE_CANDIDATE_PATHS)
+VOCAB_TREE_AVAILABLE: bool = VOCAB_TREE_PATH is not None
+
+# Preferred SfM engine order for the migration path.
+SFM_ENGINE_PREFERENCE = (
+    "colmap_global_mapper",
+    "glomap",
+    "colmap",
+)
 
 # ---------------------------------------------------------------------------
 # File types
@@ -253,4 +330,3 @@ PIPELINE_STAGES = [
 STAGE_WEIGHTS = {stage["key"]: stage["weight"] for stage in PIPELINE_STAGES}
 STAGE_LABELS = {stage["key"]: stage["label"] for stage in PIPELINE_STAGES}
 MAX_LOG_LINES_IN_RESPONSE = 500
-

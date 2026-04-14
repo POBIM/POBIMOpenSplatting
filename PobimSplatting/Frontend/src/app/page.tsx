@@ -139,6 +139,22 @@ export default function DashboardPage() {
                 <p className="text-xs text-gray-500">CUDA Available</p>
               </div>
             </div>
+
+            <div className="flex items-center space-x-4">
+              {health.experimental?.pycolmap?.global_mapping_ready ? (
+                <CheckCircle className="h-6 w-6" style={{ color: 'var(--success-icon)' }} />
+              ) : (
+                <XCircle className="h-6 w-6" style={{ color: 'var(--error-icon)' }} />
+              )}
+              <div>
+                <p className="text-sm font-medium text-black">Experimental pycolmap</p>
+                <p className="text-xs text-gray-500">
+                  {health.experimental?.pycolmap?.global_mapping_ready
+                    ? `ready (${health.experimental?.pycolmap?.version || 'unknown version'})`
+                    : `not ready${health.experimental?.pycolmap?.version ? ` (${health.experimental.pycolmap.version})` : ''}`}
+                </p>
+              </div>
+            </div>
           </div>
         ) : (
           <p className="text-gray-500">Checking system status...</p>

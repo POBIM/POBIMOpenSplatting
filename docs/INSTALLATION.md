@@ -63,11 +63,12 @@ The script will:
 1. ✅ Check GPU, CUDA, RAM, and disk space
 2. ✅ Install all dependencies (build tools, Python, Node.js, libraries)
 3. ✅ Download and setup LibTorch compatible with your CUDA version
-4. ✅ Compile COLMAP
-5. ✅ Compile OpenSplat
-6. ✅ Install Python backend dependencies
-7. ✅ Install Node.js frontend dependencies
-8. ✅ Create quick-start script for future use
+4. ✅ Compile and install COLMAP with `global_mapper` as the preferred SfM path
+5. ✅ Optionally build `pycolmap` from the same local COLMAP source for the experimental Python backend
+6. ✅ Compile OpenSplat
+7. ✅ Install Python backend dependencies
+8. ✅ Install Node.js frontend dependencies
+9. ✅ Create quick-start script for future use
 
 **Note**: The script will prompt you with questions. Answer with `y` (yes) or `n` (no).
 
@@ -96,6 +97,24 @@ cd PobimSplatting
 cd PobimSplatting
 ./start.sh
 ```
+
+---
+
+## 🎯 SfM Recommendations
+
+- Use `COLMAP global_mapper` for the default global SfM path in this project.
+- Build `pycolmap` from the same local COLMAP source if you want the experimental Python-native backend; avoid relying on an unrelated wheel version.
+- Treat standalone `GLOMAP` binaries as legacy fallback only; do not plan new installs around them.
+- Use `sequential` for ordered video or orbit captures, `exhaustive` for smaller unordered sets, and `vocab_tree` experimentally for large unordered photo collections.
+- Leave matcher mode on `auto` unless you have a specific dataset reason to override it.
+
+## 🧪 Experimental pycolmap Backend
+
+`install.sh` now offers an optional step to build `pycolmap` directly from the vendored `colmap/` source after COLMAP itself is built and installed into `colmap-build/install`.
+
+- Recommended when you want to use `sfm_backend=pycolmap`
+- The backend health endpoint and dashboard report whether `pycolmap global_mapping` is actually ready
+- If this step is skipped or fails, the system still works and falls back to CLI `COLMAP global_mapper`
 
 ---
 
@@ -212,7 +231,7 @@ docker build -t pobim-opensplat -f Dockerfile.rocm6 .
 docker run -it --gpus all -p 3000:3000 -p 5000:5000 pobim-opensplat
 ```
 
-**Important Note**: Pre-compiled binaries (`build/opensplat`, `colmap-build/colmap`) **cannot** be directly copied to another machine due to system-specific dependencies. You must run the installation script on each machine.
+**Important Note**: Pre-compiled binaries (`build/opensplat`, `colmap-build/install/bin/colmap`) **cannot** be directly copied to another machine due to system-specific dependencies. You must run the installation script on each machine.
 
 ---
 
@@ -320,6 +339,7 @@ POBIMOpenSplat/
 5. **Check logs regularly** when troubleshooting issues
 6. **Clear ports** if you encounter port conflicts
 7. **Update dependencies periodically** with `pip install --upgrade` and `npm update`
+8. **Use COLMAP global mapper by default**; reserve `vocab_tree` for large unordered photo sets and keep `GLOMAP` only for legacy compatibility
 
 ---
 

@@ -14,7 +14,7 @@ REPO_ROOT="$(cd "$PROJECT_ROOT/.." && pwd)"
 FRONTEND_DIR="$PROJECT_ROOT/Frontend"
 BACKEND_DIR="$PROJECT_ROOT/Backend"
 OPENSPLAT_BINARY="$REPO_ROOT/build/opensplat"
-COLMAP_BINARY="$REPO_ROOT/colmap-build/colmap"
+COLMAP_BINARY="$REPO_ROOT/colmap-build/install/bin/colmap"
 LOGS_DIR="$PROJECT_ROOT/logs"
 RUNTIME_DIR="$PROJECT_ROOT/runtime"
 

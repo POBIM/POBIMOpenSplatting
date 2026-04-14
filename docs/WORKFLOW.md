@@ -89,6 +89,9 @@
 │  │ cp src/exe/colmap → colmap-build/colmap                            │  │
 │  └───────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────┘
+
+> Operational note: this project treats COLMAP's global mapper as the preferred global SfM path. Standalone GLOMAP is legacy fallback only, and `vocab_tree` matching can be enabled experimentally for large unordered photo collections.
+
                             │
                             ▼
 ┌─────────────────────────────────────────────────────────────────────────┐

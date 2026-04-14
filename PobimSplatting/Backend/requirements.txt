@@ -16,3 +16,5 @@ simple-websocket>=1.0.0
 pymeshlab==2023.12
 scipy==1.11.4
 pygltflib==1.16.1
+# Optional for experimental Python-native global SfM:
+# install a pycolmap build that matches the local COLMAP source/binary when enabling sfm_backend=pycolmap.

@@ -44,7 +44,8 @@ export interface Project {
   camera_model?: string;
   thumbnail_url?: string;
   config?: {
-    sfm_engine?: 'glomap' | 'colmap' | 'fastmap';
+    sfm_engine?: 'glomap' | 'global' | 'global_mapper' | 'colmap' | 'fastmap';
+    sfm_backend?: 'cli' | 'pycolmap' | string;
     feature_method?: 'sift' | 'aliked' | 'superpoint';
     replacement_search_radius?: number;
     [key: string]: any;
@@ -55,7 +56,8 @@ export interface Project {
 
 export interface ReconstructionFramework {
   phase?: string;
-  sfm_engine?: 'glomap' | 'colmap' | 'fastmap' | string;
+  sfm_engine?: 'glomap' | 'global' | 'global_mapper' | 'colmap' | 'fastmap' | string;
+  sfm_backend?: 'cli' | 'pycolmap' | string;
   feature_method?: 'sift' | 'aliked' | 'superpoint' | string;
   matcher_type?: string;
   orbit_safe_mode?: boolean;
@@ -148,7 +150,8 @@ export interface UploadConfig {
   quality_mode?: string;
   iterations?: number;
   camera_model?: string;
-  matcher_type?: 'auto' | 'sequential' | 'exhaustive' | string;
+  sfm_backend?: 'cli' | 'pycolmap' | string;
+  matcher_type?: 'auto' | 'sequential' | 'exhaustive' | 'vocab_tree' | string;
   extraction_mode?: string;
   max_frames?: number;
   target_fps?: number;
@@ -291,6 +294,7 @@ export const api = {
       formData.append('matcher_type', config.matcher_type);
     }
     if (config.sfm_engine) formData.append('sfm_engine', config.sfm_engine);
+    if (config.sfm_backend) formData.append('sfm_backend', config.sfm_backend);
     if (config.fast_sfm !== undefined) formData.append('fast_sfm', config.fast_sfm.toString());
     if (config.feature_method) formData.append('feature_method', config.feature_method);
 

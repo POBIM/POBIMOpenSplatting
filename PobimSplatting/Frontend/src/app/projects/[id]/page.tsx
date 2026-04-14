@@ -4,6 +4,7 @@ import { useParams, useRouter } from 'next/navigation';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { api, Project, PlyFile } from '@/lib/api';
 import { websocket } from '@/lib/websocket';
+import { getMatcherLabelWithMode, getSfmEngineCompactLabel, getSfmEngineLabel, isGlobalSfmEngine } from '@/lib/sfm-display';
 import MeshExportPanel from '@/components/MeshExportPanel';
 import ExportedMeshesList from '@/components/ExportedMeshesList';
 import {
@@ -43,7 +44,7 @@ import { Breadcrumbs } from '@/components/ui';
 
 const getStageLabelForEngine = (
   stageKey: string, 
-  sfmEngine: 'glomap' | 'colmap' | 'fastmap' = 'glomap',
+  sfmEngine: 'glomap' | 'global' | 'global_mapper' | 'colmap' | 'fastmap' = 'glomap',
   featureMethod: 'sift' | 'aliked' | 'superpoint' = 'sift'
 ) => {
   const isNeuralFeatures = featureMethod === 'aliked' || featureMethod === 'superpoint';
@@ -56,8 +57,8 @@ const getStageLabelForEngine = (
     'feature_matching': isNeuralFeatures
       ? 'LightGlue Neural Matching'
       : 'COLMAP Feature Matching',
-    'sparse_reconstruction': sfmEngine === 'glomap' 
-      ? 'GLOMAP Sparse Reconstruction' 
+    'sparse_reconstruction': isGlobalSfmEngine(sfmEngine)
+      ? 'COLMAP Global SfM Sparse Reconstruction'
       : sfmEngine === 'fastmap'
         ? 'FastMap Sparse Reconstruction'
         : 'COLMAP Sparse Reconstruction',
@@ -802,8 +803,8 @@ export default function ProjectDetailPage() {
 
               <div className="text-sm text-gray-500">
                 {getCurrentStage() ? (getStageLabelForEngine(getCurrentStage()?.key || '', project?.config?.sfm_engine, project?.config?.feature_method) || PIPELINE_STAGES.find(s => s.key === getCurrentStage()?.key)?.label) : 'Initializing...'}
-                {getCurrentStage()?.key === 'sparse_reconstruction' && 
-                 (project?.config?.sfm_engine === 'glomap' || project?.config?.sfm_engine === 'fastmap') && 
+                {getCurrentStage()?.key === 'sparse_reconstruction' &&
+                 (isGlobalSfmEngine(project?.config?.sfm_engine) || project?.config?.sfm_engine === 'fastmap') &&
                  stageDetails['sparse_reconstruction']?.text && (
                   <span className={`ml-2 ${project?.config?.sfm_engine === 'fastmap' ? 'text-purple-600' : 'text-blue-600'}`}>
                     • {stageDetails['sparse_reconstruction'].text}
@@ -825,7 +826,7 @@ export default function ProjectDetailPage() {
                       <Eye className="h-4 w-4 mr-2" />
                       ตรวจสอบ Sparse Model
                     </button>
-                    <p className="text-xs text-gray-500 mt-2">เปิดหน้า Camera Poses เพื่อตรวจสอบผล {project?.config?.sfm_engine === 'glomap' ? 'GLOMAP' : project?.config?.sfm_engine === 'fastmap' ? 'FastMap' : 'COLMAP'} sparse reconstruction</p>
+                    <p className="text-xs text-gray-500 mt-2">เปิดหน้า Camera Poses เพื่อตรวจสอบผล {getSfmEngineCompactLabel(project?.config?.sfm_engine)} sparse reconstruction</p>
                   </div>
                 );
               })()}
@@ -863,7 +864,7 @@ export default function ProjectDetailPage() {
                         }`}
                       >
                         <Eye className="h-4 w-4 mr-2" />
-                        {project?.config?.sfm_engine === 'glomap' ? 'GLOMAP' : project?.config?.sfm_engine === 'fastmap' ? 'FastMap' : 'COLMAP'}
+                        {getSfmEngineCompactLabel(project?.config?.sfm_engine)}
                       </button>
                       <button
                         onClick={handleDownload}
@@ -920,12 +921,12 @@ export default function ProjectDetailPage() {
                   <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-5">
                     <div className="rounded-xl border border-gray-200 bg-white p-4">
                       <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Pipeline</p>
-                      <p className="text-sm font-medium text-black">{framework.sfm_engine || project?.config?.sfm_engine || '--'} / {framework.feature_method || project?.config?.feature_method || '--'}</p>
+                      <p className="text-sm font-medium text-black">{getSfmEngineLabel(framework.sfm_engine || project?.config?.sfm_engine) || '--'} / {framework.feature_method || project?.config?.feature_method || '--'}</p>
                       <p className="text-xs text-gray-500 mt-1">Phase: {framework.phase || '--'}</p>
                     </div>
                     <div className="rounded-xl border border-gray-200 bg-white p-4">
                       <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Matching Policy</p>
-                      <p className="text-sm font-medium text-black">{framework.matcher_type || '--'}</p>
+                      <p className="text-sm font-medium text-black">{getMatcherLabelWithMode(framework.matcher_type) || '--'}</p>
                       <p className="text-xs text-gray-500 mt-1">
                         overlap {framework.matcher_params?.['SequentialMatching.overlap'] || '--'}
                         {' · '}
@@ -1188,10 +1189,10 @@ export default function ProjectDetailPage() {
                           </div>
                         )}
 
-                        {/* GLOMAP Sub-stages for sparse_reconstruction */}
-                        {expandedStage === 'sparse_reconstruction' && project?.config?.sfm_engine === 'glomap' && stage.status === 'running' && (
+                        {/* Global SfM Sub-stages for sparse_reconstruction */}
+                        {expandedStage === 'sparse_reconstruction' && isGlobalSfmEngine(project?.config?.sfm_engine) && stage.status === 'running' && (
                           <div className="border-t border-gray-200 pt-4">
-                            <p className="text-xs font-medium text-gray-500 mb-3">GLOMAP Pipeline Steps</p>
+                            <p className="text-xs font-medium text-gray-500 mb-3">Global SfM Pipeline Steps</p>
                             <div className="space-y-2">
                               {[
                                 { key: 'preprocessing', icon: '🔧', label: 'Preprocessing', progress: 5 },

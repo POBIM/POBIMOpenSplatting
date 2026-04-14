@@ -9,7 +9,9 @@ import shutil
 import sqlite3
 import subprocess
 import time
+import importlib
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -84,8 +86,119 @@ def normalize_matcher_type(matcher_type):
         return None
 
     normalized = str(matcher_type).strip().lower()
-    if normalized in {"sequential", "exhaustive"}:
+    if normalized in {"sequential", "exhaustive", "vocab_tree"}:
         return normalized
+
+    return None
+
+
+def normalize_sfm_engine(sfm_engine):
+    if sfm_engine is None:
+        return 'glomap'
+
+    normalized = str(sfm_engine).strip().lower()
+    if normalized in {'glomap', 'global', 'global_mapper'}:
+        return 'glomap'
+    if normalized in {'colmap', 'incremental'}:
+        return 'colmap'
+    if normalized == 'fastmap':
+        return 'fastmap'
+    return 'glomap'
+
+
+def normalize_sfm_backend(sfm_backend):
+    if sfm_backend is None:
+        return 'cli'
+
+    normalized = str(sfm_backend).strip().lower()
+    if normalized in {'cli', 'command', 'subprocess'}:
+        return 'cli'
+    if normalized in {'pycolmap', 'python'}:
+        return 'pycolmap'
+    return 'cli'
+
+
+@lru_cache(maxsize=1)
+def get_pycolmap_module():
+    try:
+        return importlib.import_module('pycolmap')
+    except Exception:
+        return None
+
+
+def pycolmap_supports_global_mapping():
+    pycolmap = get_pycolmap_module()
+    return bool(
+        pycolmap
+        and hasattr(pycolmap, 'global_mapping')
+        and hasattr(pycolmap, 'GlobalMapperOptions')
+        and hasattr(pycolmap, 'BundleAdjustmentOptions')
+    )
+
+
+@lru_cache(maxsize=4)
+def colmap_supports_global_mapper(colmap_exe):
+    try:
+        result = subprocess.run(
+            [colmap_exe, 'global_mapper', '-h'],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception:
+        return False
+
+    output = f"{result.stdout}\n{result.stderr}".lower()
+    return result.returncode == 0 or 'global_mapper' in output
+
+
+@lru_cache(maxsize=4)
+def get_colmap_feature_extraction_max_image_size_flag(colmap_exe):
+    try:
+        result = subprocess.run(
+            [colmap_exe, 'feature_extractor', '-h'],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception:
+        return '--FeatureExtraction.max_image_size'
+
+    output = f"{result.stdout}\n{result.stderr}"
+    if 'FeatureExtraction.max_image_size' in output:
+        return '--FeatureExtraction.max_image_size'
+    if 'SiftExtraction.max_image_size' in output:
+        return '--SiftExtraction.max_image_size'
+
+    return '--FeatureExtraction.max_image_size'
+
+
+def get_vocab_tree_matcher_params():
+    matcher_params = {}
+    vocab_tree_path = getattr(app_config, 'VOCAB_TREE_PATH', None)
+    if vocab_tree_path and Path(vocab_tree_path).exists():
+        matcher_params['VocabTreeMatching.vocab_tree_path'] = str(vocab_tree_path)
+    return matcher_params
+
+
+def resolve_global_sfm_backend(colmap_exe):
+    global_command = getattr(app_config, 'COLMAP_GLOBAL_MAPPER_COMMAND', None)
+    if colmap_supports_global_mapper(colmap_exe):
+        return {
+            'mode': 'colmap_global',
+            'command': list(global_command) if global_command else [colmap_exe, 'global_mapper'],
+            'label': 'COLMAP Global Mapper',
+            'subtext': 'COLMAP global SfM',
+        }
+
+    legacy_glomap_command = getattr(app_config, 'GLOMAP_COMMAND', None)
+    if GLOMAP_PATH is not None:
+        return {
+            'mode': 'legacy_glomap',
+            'command': list(legacy_glomap_command) if legacy_glomap_command else [GLOMAP_PATH, 'mapper'],
+            'label': 'Legacy GLOMAP',
+            'subtext': 'Legacy standalone glomap',
+        }
 
     return None
 
@@ -347,6 +460,7 @@ def sync_reconstruction_framework(project_id, config, colmap_cfg, *, phase, extr
     framework_state = {
         'phase': phase,
         'sfm_engine': config.get('sfm_engine', 'glomap'),
+        'sfm_backend': config.get('sfm_backend', 'cli'),
         'feature_method': config.get('feature_method', 'sift'),
         'matcher_type': colmap_cfg.get('matcher_type'),
         'orbit_safe_mode': colmap_cfg.get('orbit_safe_mode', False),
@@ -505,6 +619,7 @@ def build_upload_policy_preview(config, media_summary):
         add_signal('sift-video', 'SIFT compatibility', 2, 'SIFT remains a stable baseline for video input')
 
     sfm_engine = str(preview_config.get('sfm_engine', 'glomap'))
+    sfm_backend = normalize_sfm_backend(preview_config.get('sfm_backend', 'cli'))
     if input_profile == 'images' and sfm_engine == 'fastmap':
         score -= 20
         add_signal('fastmap-images', 'Engine mismatch', -20, 'FastMap is less reliable on unordered photo collections')
@@ -580,13 +695,17 @@ def build_upload_policy_preview(config, media_summary):
         add_rule('info', 'Matcher is on Auto, so the backend can still adapt from capture ordering and pair geometry.')
 
     if input_profile == 'images' and sfm_engine == 'fastmap':
-        add_rule('warning', 'FastMap with an image-only set is a riskier combination. GLOMAP or COLMAP is usually safer for unordered photo collections.')
+        add_rule('warning', 'FastMap with an image-only set is a riskier combination. COLMAP Global SfM or incremental COLMAP is usually safer for unordered photo collections.')
     if input_profile == 'mixed' and sfm_engine == 'fastmap':
         add_rule('warning', 'FastMap on mixed media can be brittle when some inputs behave like unordered photos.')
     if input_profile == 'video' and explicit_matcher == 'exhaustive':
         add_rule('warning', 'Exhaustive matching on video/orbit input may reduce the benefit of orbit-safe sequential policy.')
     if input_profile == 'images' and explicit_matcher == 'sequential':
         add_rule('warning', 'Sequential override assumes the filenames or capture order are meaningful. Use Auto or Exhaustive for unordered photos.')
+    if input_profile == 'video' and explicit_matcher == 'vocab_tree':
+        add_rule('warning', 'Vocab-tree retrieval is tuned for large unordered photo collections, not ordered video/orbit input.')
+    if input_profile == 'images' and explicit_matcher == 'vocab_tree':
+        add_rule('info', 'Vocab-tree retrieval is a strong experimental option for larger unordered photo collections.')
     if input_profile in {'video', 'mixed'} and extraction_mode == 'fps':
         try:
             target_fps = float(preview_config.get('target_fps') or 2.0)
@@ -610,6 +729,8 @@ def build_upload_policy_preview(config, media_summary):
         add_rule('info', 'Separate high-resolution training images are enabled. This improves training quality but does not change the sparse policy directly.')
     if input_profile == 'video' and sfm_engine == 'colmap':
         add_rule('info', 'COLMAP is a conservative choice for video input and aligns well with stricter orbit-safe incremental reconstruction.')
+    if sfm_backend == 'pycolmap':
+        add_rule('info', 'Experimental backend enabled: pycolmap global mapping will be attempted first, then the backend falls back to CLI global mapping if unsupported.')
 
     if input_profile == 'video':
         expected_policy = {
@@ -618,7 +739,7 @@ def build_upload_policy_preview(config, media_summary):
             'badgeTone': 'border-emerald-200 bg-emerald-100 text-emerald-900',
             'profileBadge': 'video orbit',
             'matcherBadge': colmap_cfg.get('matcher_type'),
-            'engineBadge': 'glomap + safe fallback' if sfm_engine == 'glomap' else f'{sfm_engine} preferred',
+            'engineBadge': 'global sfm + safe fallback' if sfm_engine == 'glomap' else f'{sfm_engine} preferred',
             'summary': 'Ordered frames usually start with sequential matching, then the backend can tighten sparse reconstruction and bridge weak transitions with geometry-aware rules.',
             'toneKey': tone_key,
         }
@@ -1057,6 +1178,9 @@ def generate_hloc_pairs(pairs_path, image_list, matcher_type, matcher_params):
         pairs_from_exhaustive.main(pairs_path, image_list=image_list)
         return len(image_list) * (len(image_list) - 1) // 2
 
+    if matcher_type == "vocab_tree":
+        raise ValueError("hloc pair generation does not support vocab-tree retrieval yet")
+
     overlap = max(1, int(matcher_params.get("SequentialMatching.overlap", "10")))
     quadratic_overlap = matcher_params.get("SequentialMatching.quadratic_overlap", "0") == "1"
     pair_set = set()
@@ -1080,7 +1204,7 @@ def generate_hloc_pairs(pairs_path, image_list, matcher_type, matcher_params):
 
 
 def should_prefer_incremental_sfm(config, paths, num_images):
-    if config.get('sfm_engine', 'glomap') != 'glomap':
+    if normalize_sfm_engine(config.get('sfm_engine', 'glomap')) != 'glomap':
         return False, None
 
     if config.get('fast_sfm', False):
@@ -1766,9 +1890,9 @@ def get_colmap_config(num_images, project_id=None, quality_mode='balanced', cust
         matcher_type = 'sequential'
         matcher_params = get_sequential_matcher_params(num_images, quality_mode)
     else:
-        # Very large: Optimized sequential
-        matcher_type = 'sequential'
-        matcher_params = get_sequential_matcher_params(num_images, quality_mode)
+        # Very large unordered photo sets benefit from retrieval-based pairing.
+        matcher_type = 'vocab_tree'
+        matcher_params = get_vocab_tree_matcher_params()
 
     if orbit_safe_mode:
         if explicit_matcher_type == 'exhaustive':
@@ -1802,6 +1926,8 @@ def get_colmap_config(num_images, project_id=None, quality_mode='balanced', cust
         if matcher_type == 'exhaustive':
             matcher_params = {}
             max_num_matches = min(max_num_matches, 45960)
+        elif matcher_type == 'vocab_tree':
+            matcher_params = get_vocab_tree_matcher_params()
         else:
             matcher_params = get_sequential_matcher_params(num_images, quality_mode)
 
@@ -1941,9 +2067,11 @@ def get_colmap_config(num_images, project_id=None, quality_mode='balanced', cust
             if 'max_num_orientations' in custom_params and custom_params['max_num_orientations'] is not None:
                 append_log_line(project_id, f"🔧 Custom max_num_orientations: {custom_params['max_num_orientations']}")
 
-    # Vocab tree matching disabled due to format incompatibility
-    # Sequential/exhaustive matching provides sufficient coverage
-    use_vocab_tree = False
+    if project_id and matcher_type == 'vocab_tree':
+        if matcher_params.get('VocabTreeMatching.vocab_tree_path'):
+            append_log_line(project_id, "🌲 Using vocab-tree matching with cached tree")
+        else:
+            append_log_line(project_id, "🌲 Using vocab-tree matching; modern COLMAP builds can auto-download/cache the tree if needed")
 
     config = {
         # Feature extraction - Enhanced
@@ -1970,7 +2098,11 @@ def get_colmap_config(num_images, project_id=None, quality_mode='balanced', cust
 
         # Quality metadata
         'quality_mode': quality_mode,
-        'total_expected_matches': int(num_images * float(matcher_params.get('SequentialMatching.overlap', '10')) if matcher_type == 'sequential' else num_images * (num_images - 1) / 2),
+        'total_expected_matches': int(
+            num_images * float(matcher_params.get('SequentialMatching.overlap', '10'))
+            if matcher_type == 'sequential'
+            else (num_images * 100 if matcher_type == 'vocab_tree' else num_images * (num_images - 1) / 2)
+        ),
         'orbit_safe_mode': orbit_safe_mode,
         'orbit_safe_profile': orbit_safe_policy['profile_name'] if orbit_safe_policy else None,
         'bridge_risk_score': orbit_safe_policy['bridge_risk_score'] if orbit_safe_policy else None,
@@ -2400,6 +2532,7 @@ def run_feature_extraction_stage(project_id, paths, config, colmap_config=None):
     num_images, colmap_cfg, colmap_exe, has_cuda = get_colmap_config_for_pipeline(paths, config, project_id)
     if colmap_config:
         colmap_cfg = colmap_config
+    max_image_size_flag = get_colmap_feature_extraction_max_image_size_flag(colmap_exe)
     
     update_state(project_id, 'feature_extraction', status='running')
     update_stage_detail(project_id, 'feature_extraction', text=f'Images processed: 0/{num_images}', subtext=None)
@@ -2410,6 +2543,11 @@ def run_feature_extraction_stage(project_id, paths, config, colmap_config=None):
         append_log_line(project_id, "🚀 Using GPU-accelerated COLMAP for feature extraction")
     else:
         append_log_line(project_id, "⚠️ COLMAP CUDA support not detected; falling back to CPU mode")
+
+    if max_image_size_flag == '--SiftExtraction.max_image_size':
+        append_log_line(project_id, "ℹ️ Detected legacy COLMAP feature_extractor option layout")
+    else:
+        append_log_line(project_id, "ℹ️ Detected modern COLMAP feature_extractor option layout")
     
     cmd = [
         colmap_exe, 'feature_extractor',
@@ -2418,7 +2556,7 @@ def run_feature_extraction_stage(project_id, paths, config, colmap_config=None):
         '--ImageReader.camera_model', config['camera_model'],
         '--ImageReader.single_camera', '1',
         '--FeatureExtraction.use_gpu', '1' if has_cuda else '0',
-        '--SiftExtraction.max_image_size', str(colmap_cfg['max_image_size']),
+        max_image_size_flag, str(colmap_cfg['max_image_size']),
         '--SiftExtraction.max_num_features', str(colmap_cfg['max_num_features']),
         '--SiftExtraction.first_octave', str(colmap_cfg['first_octave']),
         '--SiftExtraction.num_octaves', str(colmap_cfg['num_octaves'])
@@ -2627,6 +2765,95 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None):
     return colmap_cfg
 
 
+def try_run_pycolmap_global_mapping(project_id, paths, config, colmap_cfg, num_images):
+    pycolmap = get_pycolmap_module()
+    if not pycolmap_supports_global_mapping():
+        append_log_line(project_id, "⚠️ Experimental pycolmap global mapping requested, but this environment does not provide pycolmap.global_mapping")
+        return False
+
+    try:
+        append_log_line(project_id, "🧪 Experimental backend: pycolmap.global_mapping")
+        update_stage_detail(
+            project_id,
+            'sparse_reconstruction',
+            text='Initializing experimental pycolmap global mapping...',
+            subtext=f'{num_images} images',
+        )
+        emit_stage_progress(
+            project_id,
+            'sparse_reconstruction',
+            5,
+            {
+                'text': 'Initializing experimental pycolmap global mapping',
+                'current_item': 5,
+                'total_items': 100,
+                'item_name': 'initializing',
+                'sfm_engine': 'glomap',
+                'sfm_backend': 'pycolmap',
+            },
+        )
+
+        bundle_adjustment = pycolmap.BundleAdjustmentOptions()
+        for attr in ('refine_focal_length', 'refine_principal_point', 'refine_extra_params'):
+            if hasattr(bundle_adjustment, attr):
+                setattr(bundle_adjustment, attr, False)
+        if hasattr(bundle_adjustment, 'use_gpu'):
+            setattr(bundle_adjustment, 'use_gpu', True)
+        if hasattr(bundle_adjustment, 'gpu_index'):
+            setattr(bundle_adjustment, 'gpu_index', 0)
+
+        mapper_options = pycolmap.GlobalMapperOptions()
+        if hasattr(mapper_options, 'bundle_adjustment'):
+            mapper_options.bundle_adjustment = bundle_adjustment
+        if hasattr(mapper_options, 'num_threads'):
+            mapper_options.num_threads = os.cpu_count() or 8
+        if hasattr(mapper_options, 'min_num_matches'):
+            mapper_options.min_num_matches = int(colmap_cfg['min_num_matches'])
+
+        if hasattr(pycolmap, 'GlobalPipelineOptions'):
+            pipeline_options = pycolmap.GlobalPipelineOptions()
+            if hasattr(pipeline_options, 'mapper'):
+                pipeline_options.mapper = mapper_options
+        else:
+            pipeline_options = mapper_options
+
+        if config.get('fast_sfm', False):
+            for target in (mapper_options, pipeline_options):
+                if hasattr(target, 'ba_iteration_num'):
+                    setattr(target, 'ba_iteration_num', 2)
+                if hasattr(target, 'retriangulation_iteration_num'):
+                    setattr(target, 'retriangulation_iteration_num', 0)
+
+        append_log_line(project_id, f"🔧 pycolmap.global_mapping on {num_images} images with {os.cpu_count() or 8} threads")
+
+        pycolmap.global_mapping(
+            str(paths['database_path']),
+            str(paths['images_path']),
+            str(paths['sparse_path']),
+            pipeline_options,
+        )
+
+        emit_stage_progress(
+            project_id,
+            'sparse_reconstruction',
+            95,
+            {
+                'text': 'pycolmap global mapping finished',
+                'current_item': 95,
+                'total_items': 100,
+                'item_name': 'finalizing',
+                'sfm_engine': 'glomap',
+                'sfm_backend': 'pycolmap',
+            },
+        )
+        append_log_line(project_id, "✅ pycolmap.global_mapping completed")
+        return True
+    except Exception as exc:
+        append_log_line(project_id, f"⚠️ pycolmap.global_mapping failed, falling back to CLI global mapper: {exc}")
+        logger.warning("pycolmap.global_mapping failed for %s: %s", project_id, exc)
+        return False
+
+
 def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=None):
     """Run Sparse Reconstruction stage using GLOMAP (fast) or COLMAP (classic)."""
     num_images, colmap_cfg, colmap_exe, has_cuda = get_colmap_config_for_pipeline(paths, config, project_id)
@@ -2635,9 +2862,17 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
     colmap_cfg = refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id)
     sync_reconstruction_framework(project_id, config, colmap_cfg, phase='sparse_reconstruction')
     
-    sfm_engine = config.get('sfm_engine', 'glomap')
-    use_glomap = sfm_engine == 'glomap' and GLOMAP_PATH is not None
+    sfm_engine = normalize_sfm_engine(config.get('sfm_engine', 'glomap'))
+    sfm_backend = normalize_sfm_backend(config.get('sfm_backend'))
+    global_backend = resolve_global_sfm_backend(colmap_exe) if sfm_engine == 'glomap' else None
+    use_global_sfm = global_backend is not None
+    use_legacy_glomap = global_backend is not None and global_backend['mode'] == 'legacy_glomap'
     use_fastmap = sfm_engine == 'fastmap' and FASTMAP_PATH is not None
+    use_pycolmap_global = (
+        sfm_backend == 'pycolmap'
+        and use_global_sfm
+        and not use_legacy_glomap
+    )
     fastmap_temp_dir = None  # Will be set if using FastMap
 
     prefer_incremental_sfm, incremental_reason = should_prefer_incremental_sfm(
@@ -2645,9 +2880,11 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
         paths,
         num_images,
     )
-    if use_glomap and prefer_incremental_sfm:
-        use_glomap = False
-        append_log_line(project_id, f"🔁 Falling back from GLOMAP to COLMAP incremental SfM: {incremental_reason}")
+    if use_global_sfm and prefer_incremental_sfm:
+        use_global_sfm = False
+        use_legacy_glomap = False
+        use_pycolmap_global = False
+        append_log_line(project_id, f"🔁 Falling back from global SfM to COLMAP incremental SfM: {incremental_reason}")
     
     update_state(project_id, 'sparse_reconstruction', status='running')
     update_stage_detail(project_id, 'sparse_reconstruction', text=f'Initializing...', subtext=f'{num_images} images')
@@ -2682,12 +2919,12 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
         
         append_log_line(project_id, f"🔧 FastMap path: {FASTMAP_PATH}")
         
-    elif use_glomap:
-        append_log_line(project_id, "🚀 Running GLOMAP Global Structure-from-Motion (10-100x faster)")
+    elif use_global_sfm:
+        append_log_line(project_id, f"🚀 Running {global_backend['label']}")
         append_log_line(project_id, f"⚡ Global SfM mapper for {num_images} images")
-        
+
         cmd = [
-            GLOMAP_PATH, 'mapper',
+            *global_backend['command'],
             '--database_path', str(paths['database_path']),
             '--image_path', str(paths['images_path']),
             '--output_path', str(paths['sparse_path'])
@@ -2700,7 +2937,7 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
                 '--BundleAdjustment.use_gpu', '1',
                 '--BundleAdjustment.gpu_index', '0',
             ])
-            append_log_line(project_id, "🚀 GLOMAP GPU acceleration enabled (Global Positioning + Bundle Adjustment)")
+            append_log_line(project_id, "🚀 Global SfM GPU acceleration enabled (Global Positioning + Bundle Adjustment)")
         
         fast_sfm = config.get('fast_sfm', False)
         if fast_sfm:
@@ -2709,12 +2946,15 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
                 '--retriangulation_iteration_num', '0',
             ])
             append_log_line(project_id, "⚡ Fast SfM mode: reduced iterations for speed")
-        
-        append_log_line(project_id, f"🔧 GLOMAP path: {GLOMAP_PATH}")
+
+        if use_legacy_glomap:
+            append_log_line(project_id, f"🔧 Legacy GLOMAP path: {GLOMAP_PATH}")
+        else:
+            append_log_line(project_id, f"🔧 Using COLMAP executable for global mapper: {colmap_exe}")
         
     else:
-        if sfm_engine == 'glomap' and GLOMAP_PATH is None:
-            append_log_line(project_id, "⚠️ GLOMAP not found, falling back to COLMAP")
+        if sfm_engine == 'glomap' and global_backend is None:
+            append_log_line(project_id, "⚠️ Global SfM backend not found, falling back to COLMAP incremental mapper")
         
         append_log_line(project_id, "🔄 Running COLMAP Incremental Sparse Reconstruction...")
         append_log_line(project_id, f"🏗️ Optimized mapper settings for {num_images} images")
@@ -2826,8 +3066,9 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
                 append_log_line(project_id, f"[FastMap] {line_stripped}")
             return
         
-        if use_glomap:
-            # Detect GLOMAP sub-stages from output
+        if use_global_sfm:
+            # Detect global mapper sub-stages from output. Legacy GLOMAP and COLMAP global_mapper
+            # currently use compatible stage wording, so one parser can cover both.
             stage_patterns = [
                 ('preprocessing', r'running preprocessing'),
                 ('view_graph_calibration', r'running view graph calibration'),
@@ -2961,7 +3202,8 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
             # Log important GLOMAP messages
             important_keywords = ['error', 'warning', 'failed', 'done', 'finished', 'seconds', 'images', 'tracks', 'cameras']
             if any(kw in line_lower for kw in important_keywords):
-                append_log_line(project_id, f"[GLOMAP] {line_stripped}")
+                prefix = "[GLOMAP]" if use_legacy_glomap else "[COLMAP Global]"
+                append_log_line(project_id, f"{prefix} {line_stripped}")
         
         # === COLMAP-specific patterns (fallback) ===
         else:
@@ -3012,7 +3254,18 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
                                       subtext='COLMAP')
                     return
     
-    run_command_with_logs(project_id, cmd, line_handler=sparse_line_handler)
+    pycolmap_completed = False
+    if use_pycolmap_global:
+        pycolmap_completed = try_run_pycolmap_global_mapping(
+            project_id,
+            paths,
+            config,
+            colmap_cfg,
+            num_images,
+        )
+
+    if not pycolmap_completed:
+        run_command_with_logs(project_id, cmd, line_handler=sparse_line_handler)
     
     # FastMap outputs to temp dir - move to sparse_path/0/
     if use_fastmap and fastmap_temp_dir is not None:
@@ -3047,7 +3300,15 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
     
     update_state(project_id, 'sparse_reconstruction', status='completed', progress=100)
     registered = sparse_tracker['registered'] if sparse_tracker['registered'] else num_images
-    engine_name = "FastMap" if use_fastmap else ("GLOMAP" if use_glomap else "COLMAP")
+    if use_fastmap:
+        engine_name = "FastMap"
+    elif use_global_sfm:
+        if use_pycolmap_global and pycolmap_completed:
+            engine_name = "pycolmap Global Mapper"
+        else:
+            engine_name = "Legacy GLOMAP" if use_legacy_glomap else "COLMAP Global Mapper"
+    else:
+        engine_name = "COLMAP"
     update_stage_detail(project_id, 'sparse_reconstruction', text=f'Images registered: {min(registered, num_images)}/{num_images}', subtext=f'{engine_name} reconstruction complete')
     append_log_line(project_id, f"✅ Sparse Reconstruction completed using {engine_name}")
     report_sparse_model_coverage(project_id, paths, config, colmap_cfg, num_images)
@@ -3132,7 +3393,17 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
 
         # Check if using hloc neural features (ALIKED/SuperPoint + LightGlue)
         feature_method = config.get('feature_method', 'sift')
-        use_hloc = feature_method in ['aliked', 'superpoint'] and HLOC_AVAILABLE
+        requested_matcher_type = normalize_matcher_type(config.get('matcher_type'))
+        use_hloc = (
+            feature_method in ['aliked', 'superpoint']
+            and HLOC_AVAILABLE
+            and requested_matcher_type != 'vocab_tree'
+        )
+        if feature_method in ['aliked', 'superpoint'] and requested_matcher_type == 'vocab_tree':
+            append_log_line(
+                project_id,
+                "ℹ️ hloc neural matching is disabled for vocab-tree retrieval mode; using native COLMAP feature extraction/matching instead",
+            )
         
         hloc_data = None  # Will store hloc feature data for matching stage
 

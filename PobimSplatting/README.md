@@ -10,7 +10,7 @@ A modern web platform for 3D reconstruction using OpenSplat, featuring a Next.js
 - **Project Management**: Full CRUD operations with SQLite database
 - **3D Viewer**: Integrated viewer for gaussian splat results
 - **System Monitoring**: Dashboard with GPU, storage, and processing stats
-- **GPU-Accelerated Processing**: Faster sparse reconstruction with CUDA bundle adjustment
+- **GPU-Accelerated Processing**: CUDA-backed COLMAP sparse reconstruction with the global mapper as the preferred path
 
 ## 📚 Documentation
 
@@ -46,7 +46,7 @@ PobimSplatting/
 - Python 3.10-3.12 (3.12 recommended)
 - NVIDIA GPU with CUDA (optional but recommended)
 - OpenSplat built and ready
-- COLMAP (optional for SfM)
+- COLMAP (recommended for SfM; COLMAP global mapper is the preferred path and standalone GLOMAP is legacy fallback only)
 
 ### Setup
 
@@ -185,7 +185,7 @@ OPENSPLAT_PATH=/path/to/opensplat
 
 ### Processing Pipeline
 1. File upload and validation
-2. OpenSplat processing with GPU acceleration
+2. COLMAP sparse reconstruction with the global mapper for unordered photo sets; experimental `vocab_tree` matching is available for large collections
 3. Real-time progress updates via WebSocket
 4. Output generation (PLY format)
 5. Storage and database updates

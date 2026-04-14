@@ -2569,10 +2569,54 @@ def run_feature_extraction_stage(project_id, paths, config, colmap_config=None):
             cmd.extend([f'--SiftExtraction.{param}', str(value)])
     
     progress_tracker = {'count': 0}
-    
+    extraction_health = {
+        'gpu_instability': False,
+        'failed_images': 0,
+    }
+
+    def count_featured_images(database_path):
+        if not Path(database_path).exists():
+            return 0
+        try:
+            with sqlite3.connect(str(database_path)) as conn:
+                row = conn.execute('SELECT COUNT(*) FROM images').fetchone()
+                return int(row[0]) if row else 0
+        except sqlite3.Error as exc:
+            append_log_line(project_id, f"⚠️ Could not inspect COLMAP database after feature extraction: {exc}")
+            return 0
+
+    def reset_colmap_database(database_path):
+        db_path = Path(database_path)
+        for candidate in (db_path, Path(f"{db_path}-shm"), Path(f"{db_path}-wal")):
+            try:
+                if candidate.exists():
+                    candidate.unlink()
+            except OSError as exc:
+                append_log_line(project_id, f"⚠️ Failed to remove stale database file {candidate.name}: {exc}")
+
+    def build_feature_extractor_cmd(use_gpu: bool):
+        rebuilt = []
+        skip_next = False
+        for index, part in enumerate(cmd):
+            if skip_next:
+                skip_next = False
+                continue
+            if part == '--FeatureExtraction.use_gpu' and index + 1 < len(cmd):
+                rebuilt.extend([part, '1' if use_gpu else '0'])
+                skip_next = True
+                continue
+            rebuilt.append(part)
+        return rebuilt
+
     def feature_line_handler(line):
         if num_images == 0:
             return
+
+        line_lower = line.lower()
+        if 'illegal memory access' in line_lower or 'failed to process the image' in line_lower:
+            extraction_health['gpu_instability'] = True
+        if 'failed to process the image' in line_lower:
+            extraction_health['failed_images'] += 1
         
         if any(keyword in line.lower() for keyword in ['processing', 'processed', 'image', 'file', 'features']):
             append_log_line(project_id, f"[DEBUG] Feature extraction: {line.strip()}")
@@ -2624,7 +2668,34 @@ def run_feature_extraction_stage(project_id, paths, config, colmap_config=None):
             update_state(project_id, 'feature_extraction', progress=min(percent, 99), details=details)
             update_stage_detail(project_id, 'feature_extraction', text=f'Images processed: {processed}/{num_images}', subtext=None)
     
-    run_command_with_logs(project_id, cmd, line_handler=feature_line_handler)
+    try:
+        run_command_with_logs(project_id, cmd, line_handler=feature_line_handler)
+    except subprocess.CalledProcessError:
+        if has_cuda:
+            append_log_line(project_id, "⚠️ GPU feature extraction exited with an error; resetting COLMAP database and retrying on CPU")
+            reset_colmap_database(paths['database_path'])
+            run_command_with_logs(project_id, build_feature_extractor_cmd(False), line_handler=feature_line_handler)
+        else:
+            raise
+
+    extracted_image_count = count_featured_images(paths['database_path'])
+    if has_cuda and (
+        extraction_health['gpu_instability']
+        or extraction_health['failed_images'] > 0
+        or extracted_image_count < num_images
+    ):
+        append_log_line(
+            project_id,
+            "⚠️ GPU feature extraction produced incomplete results "
+            f"({extracted_image_count}/{num_images} images in database, failures={extraction_health['failed_images']}); retrying on CPU",
+        )
+        reset_colmap_database(paths['database_path'])
+        extraction_health['gpu_instability'] = False
+        extraction_health['failed_images'] = 0
+        progress_tracker['count'] = 0
+        run_command_with_logs(project_id, build_feature_extractor_cmd(False), line_handler=feature_line_handler)
+        extracted_image_count = count_featured_images(paths['database_path'])
+        append_log_line(project_id, f"✅ CPU feature extraction retry completed with {extracted_image_count}/{num_images} images in database")
     
     update_state(project_id, 'feature_extraction', status='completed', progress=100)
     update_stage_detail(project_id, 'feature_extraction', text=f'Images processed: {num_images}/{num_images}', subtext='Feature extraction complete')

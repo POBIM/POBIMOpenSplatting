@@ -52,6 +52,93 @@ logger = logging.getLogger(__name__)
 video_processor = VideoProcessor()
 
 
+def _clear_directory_contents(path: Path) -> None:
+    if not path.exists():
+        return
+    for child in path.iterdir():
+        if child.is_dir():
+            shutil.rmtree(child, ignore_errors=True)
+        else:
+            try:
+                child.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def _prepare_retry_artifacts(project_id: str, paths: dict, from_stage: str) -> None:
+    cleanup_targets = []
+
+    if from_stage == "ingest":
+        cleanup_targets.extend(
+            [
+                ("dir", paths["images_path"]),
+                ("dir", paths["training_images_path"]),
+                ("dir", paths["frames_path"]),
+                ("file", paths["database_path"]),
+                ("file", Path(f"{paths['database_path']}-shm")),
+                ("file", Path(f"{paths['database_path']}-wal")),
+                ("dir", paths["sparse_path"]),
+                ("dir", paths["text_path"]),
+                ("dir", paths["results_path"]),
+            ]
+        )
+    elif from_stage == "video_extraction":
+        cleanup_targets.extend(
+            [
+                ("dir", paths["images_path"]),
+                ("dir", paths["training_images_path"]),
+                ("file", paths["database_path"]),
+                ("file", Path(f"{paths['database_path']}-shm")),
+                ("file", Path(f"{paths['database_path']}-wal")),
+                ("dir", paths["sparse_path"]),
+                ("dir", paths["text_path"]),
+                ("dir", paths["results_path"]),
+            ]
+        )
+    elif from_stage == "feature_extraction":
+        cleanup_targets.extend(
+            [
+                ("file", paths["database_path"]),
+                ("file", Path(f"{paths['database_path']}-shm")),
+                ("file", Path(f"{paths['database_path']}-wal")),
+                ("dir", paths["sparse_path"]),
+                ("dir", paths["text_path"]),
+                ("dir", paths["results_path"]),
+            ]
+        )
+    elif from_stage == "feature_matching":
+        cleanup_targets.extend(
+            [
+                ("dir", paths["sparse_path"]),
+                ("dir", paths["text_path"]),
+                ("dir", paths["results_path"]),
+            ]
+        )
+    elif from_stage in {"sparse_reconstruction", "model_conversion"}:
+        cleanup_targets.extend(
+            [
+                ("dir", paths["sparse_path"]),
+                ("dir", paths["text_path"]),
+                ("dir", paths["results_path"]),
+            ]
+        )
+    elif from_stage == "gaussian_splatting":
+        cleanup_targets.append(("dir", paths["results_path"]))
+
+    for target_type, target_path in cleanup_targets:
+        if target_type == "dir":
+            _clear_directory_contents(target_path)
+            target_path.mkdir(parents=True, exist_ok=True)
+        else:
+            try:
+                target_path.unlink()
+            except FileNotFoundError:
+                pass
+
+    if cleanup_targets:
+        append_log_line(project_id, f"🧹 Cleared retry artifacts for stage: {from_stage}")
+
+
 def _quaternion_to_rotation_matrix(qw, qx, qy, qz):
     return [
         [
@@ -1210,6 +1297,7 @@ def retry_project(project_id):
         # Get project paths
         paths = setup_project_directories(project_id)
         config = project.get("config", {}).copy()
+        _prepare_retry_artifacts(project_id, paths, from_stage)
 
         # Merge new parameters if provided (for retry with updated settings)
         new_params = data.get("params", {})
@@ -1311,6 +1399,10 @@ def retry_project(project_id):
         with project_store.status_lock:
             project_store.processing_status[project_id]["status"] = "processing"
             project_store.processing_status[project_id]["error"] = None
+            project_store.processing_status[project_id]["end_time"] = None
+
+            if from_stage in {"video_extraction", "feature_extraction", "feature_matching", "sparse_reconstruction"}:
+                project_store.processing_status[project_id].pop("video_extraction_diagnostics", None)
 
             # Reset stages from the specified stage onwards
             stage_found = False

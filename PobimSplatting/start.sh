@@ -112,6 +112,23 @@ clear_sudo_credentials() {
     SUDO_AUTHENTICATED=false
 }
 
+pick_backend_ffmpeg() {
+    local candidate
+    for candidate in /usr/bin/ffmpeg /bin/ffmpeg; do
+        if [ -x "$candidate" ] && "$candidate" -hwaccels 2>/dev/null | grep -qi 'cuda'; then
+            printf '%s' "$candidate"
+            return 0
+        fi
+    done
+
+    if command -v ffmpeg >/dev/null 2>&1; then
+        command -v ffmpeg
+        return 0
+    fi
+
+    return 1
+}
+
 ensure_runtime_layout() {
     mkdir -p "$LOGS_DIR" "$RUNTIME_DIR"
 }
@@ -411,13 +428,29 @@ start_backend() {
         source venv/bin/activate
     fi
 
+    local backend_ffmpeg=""
+    local backend_path="$PATH"
+    if backend_ffmpeg=$(pick_backend_ffmpeg); then
+        local backend_ffmpeg_dir
+        backend_ffmpeg_dir="$(dirname "$backend_ffmpeg")"
+        backend_path="$backend_ffmpeg_dir:/usr/bin:/bin:$PATH"
+        echo -e "${GREEN}✓ Backend ffmpeg: $backend_ffmpeg${NC}"
+        if "$backend_ffmpeg" -hwaccels 2>/dev/null | grep -qi 'cuda'; then
+            echo -e "${GREEN}  Hardware decode: CUDA available${NC}"
+        else
+            echo -e "${YELLOW}  Hardware decode: CUDA not available${NC}"
+        fi
+    else
+        echo -e "${YELLOW}⚠ ffmpeg not found for backend PATH override${NC}"
+    fi
+
     # Kill existing process on port 5000
     kill_port 5000
 
     if [ "${FLASK_ENV:-development}" = "production" ]; then
-        gunicorn --config gunicorn.conf.py "PobimSplatting.Backend.app:app" > "$LOGS_DIR/backend.log" 2>&1 &
+        env PATH="$backend_path" gunicorn --config gunicorn.conf.py "PobimSplatting.Backend.app:app" > "$LOGS_DIR/backend.log" 2>&1 &
     else
-        python app.py > "$LOGS_DIR/backend.log" 2>&1 &
+        env PATH="$backend_path" python app.py > "$LOGS_DIR/backend.log" 2>&1 &
     fi
     BACKEND_PID=$!
     echo "$BACKEND_PID" > "$BACKEND_PID_FILE"

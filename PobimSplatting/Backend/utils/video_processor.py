@@ -607,6 +607,17 @@ class VideoProcessor:
         
         logger.info(f"✅ GPU extraction complete: {len(extracted_frames)} frames")
         
+        self.last_extraction_stats = {
+            'strategy': f'ffmpeg_{gpu_info["method"]}',
+            'mode': mode,
+            'requested_targets': expected_frames,
+            'saved_frames': len(extracted_frames),
+            'replaced_targets': 0,
+            'search_radius': 0,
+            'rejected_candidates': 0,
+            'selections': [],
+        }
+
         # Final progress callback
         if progress_callback and extracted_frames:
             progress_callback(len(extracted_frames), expected_frames, extracted_frames[-1])
@@ -860,12 +871,13 @@ class VideoProcessor:
                 'max_frames': 100,
                 'quality': 100,
                 'preview_count': 10,
-                'use_gpu': True
+                'use_gpu': True,
+                'smart_frame_selection': False,
             }
 
         # Check if GPU should be used
         use_gpu = extraction_config.get('use_gpu', True)
-        smart_selection = extraction_config.get('smart_frame_selection', True)
+        smart_selection = extraction_config.get('smart_frame_selection', False)
         self.last_extraction_stats = {}
 
         if use_gpu and smart_selection:

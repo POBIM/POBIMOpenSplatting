@@ -52,6 +52,7 @@ CUDA_HOME=""
 CUDA_ENABLED="OFF"
 GPU_ARCHS="70;75;80;86;89"  # Default architectures
 GPU_COMPUTE_CAP=""
+APT_LOCK_WAIT_TIMEOUT=600
 
 # Yes to all mode (skip all prompts)
 YES_TO_ALL="false"
@@ -101,6 +102,189 @@ check_command() {
         return 0
     else
         return 1
+    fi
+}
+
+is_file_lock_free() {
+    local lock_path="$1"
+    local python_bin=""
+
+    if command -v python3 &> /dev/null; then
+        python_bin="python3"
+    elif command -v python &> /dev/null; then
+        python_bin="python"
+    else
+        return 0
+    fi
+
+    "$python_bin" - "$lock_path" <<'PY'
+import fcntl
+import os
+import sys
+
+path = sys.argv[1]
+fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+try:
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+except BlockingIOError:
+    os.close(fd)
+    raise SystemExit(1)
+
+os.close(fd)
+raise SystemExit(0)
+PY
+}
+
+wait_for_apt_locks() {
+    local timeout="${1:-$APT_LOCK_WAIT_TIMEOUT}"
+    local interval=5
+    local elapsed=0
+    local warned="false"
+    local lock_paths=(
+        "/var/lib/dpkg/lock-frontend"
+        "/var/lib/dpkg/lock"
+        "/var/lib/apt/lists/lock"
+        "/var/cache/apt/archives/lock"
+    )
+
+    while true; do
+        local lock_path
+        local locks_free="true"
+
+        for lock_path in "${lock_paths[@]}"; do
+            if ! is_file_lock_free "$lock_path"; then
+                locks_free="false"
+                break
+            fi
+        done
+
+        if [ "$locks_free" = "true" ]; then
+            return 0
+        fi
+
+        if [ "$warned" = "false" ]; then
+            print_warning "APT/dpkg is busy; waiting up to ${timeout}s for the package manager lock"
+            if pgrep -x unattended-upgr >/dev/null 2>&1; then
+                print_info "Detected unattended-upgrades in progress"
+            fi
+            warned="true"
+        fi
+
+        if [ "$elapsed" -ge "$timeout" ]; then
+            print_error "Timed out waiting for the package manager lock after ${timeout}s"
+            return 1
+        fi
+
+        sleep "$interval"
+        elapsed=$((elapsed + interval))
+    done
+}
+
+run_apt_get() {
+    local sudo_cmd=()
+    local lock_timeout="$APT_LOCK_WAIT_TIMEOUT"
+
+    if [[ "$1" =~ ^--lock-timeout=([0-9]+)$ ]]; then
+        lock_timeout="${BASH_REMATCH[1]}"
+        shift
+    fi
+
+    if ! check_command apt-get; then
+        print_error "apt-get not found"
+        return 1
+    fi
+
+    wait_for_apt_locks "$lock_timeout" || return 1
+
+    if [ "$EUID" -ne 0 ]; then
+        sudo_cmd=(sudo)
+    fi
+
+    "${sudo_cmd[@]}" apt-get -o DPkg::Lock::Timeout="$lock_timeout" "$@"
+}
+
+run_dpkg() {
+    local sudo_cmd=()
+
+    wait_for_apt_locks "$APT_LOCK_WAIT_TIMEOUT" || return 1
+
+    if [ "$EUID" -ne 0 ]; then
+        sudo_cmd=(sudo)
+    fi
+
+    "${sudo_cmd[@]}" dpkg "$@"
+}
+
+package_manager_update() {
+    local sudo_cmd=()
+
+    if [ "$EUID" -ne 0 ]; then
+        sudo_cmd=(sudo)
+    fi
+
+    case "$PKG_MANAGER" in
+        apt-get)
+            run_apt_get update
+            ;;
+        dnf)
+            "${sudo_cmd[@]}" dnf check-update
+            ;;
+        yum)
+            "${sudo_cmd[@]}" yum check-update
+            ;;
+        *)
+            print_error "No supported package manager found"
+            return 1
+            ;;
+    esac
+}
+
+package_manager_install() {
+    local sudo_cmd=()
+
+    if [ "$EUID" -ne 0 ]; then
+        sudo_cmd=(sudo)
+    fi
+
+    case "$PKG_MANAGER" in
+        apt-get)
+            run_apt_get install -y "$@"
+            ;;
+        dnf)
+            "${sudo_cmd[@]}" dnf install -y "$@"
+            ;;
+        yum)
+            "${sudo_cmd[@]}" yum install -y "$@"
+            ;;
+        *)
+            print_error "No supported package manager found"
+            return 1
+            ;;
+    esac
+}
+
+version_at_least() {
+    local current_version="$1"
+    local required_version="$2"
+
+    if [ -z "$current_version" ] || [ -z "$required_version" ]; then
+        return 1
+    fi
+
+    [ "$(printf '%s\n' "$required_version" "$current_version" | sort -V | head -n1)" = "$required_version" ]
+}
+
+format_compute_capability() {
+    local compute_cap="$1"
+
+    if [ -z "$compute_cap" ]; then
+        return 1
+    fi
+
+    if [ ${#compute_cap} -le 1 ]; then
+        printf '%s.0' "$compute_cap"
+    else
+        printf '%s.%s' "${compute_cap:0:${#compute_cap}-1}" "${compute_cap: -1}"
     fi
 }
 
@@ -208,7 +392,7 @@ detect_cuda_environment() {
         if check_command nvidia-smi; then
             GPU_COMPUTE_CAP=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d '.')
             if [ -n "$GPU_COMPUTE_CAP" ] && [[ "$GPU_COMPUTE_CAP" =~ ^[0-9]+$ ]]; then
-                print_info "GPU compute capability: ${GPU_COMPUTE_CAP:0:1}.${GPU_COMPUTE_CAP:1}"
+                print_info "GPU compute capability: $(format_compute_capability "$GPU_COMPUTE_CAP")"
                 # Add detected architecture if not already in list
                 if [[ ! "$GPU_ARCHS" =~ "$GPU_COMPUTE_CAP" ]]; then
                     GPU_ARCHS="$GPU_ARCHS;$GPU_COMPUTE_CAP"
@@ -290,7 +474,7 @@ check_system_requirements() {
         # Detect GPU compute capability
         COMPUTE_CAP=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d '.')
         if [ -n "$COMPUTE_CAP" ] && [[ "$COMPUTE_CAP" =~ ^[0-9]+$ ]]; then
-            print_info "GPU compute capability: ${COMPUTE_CAP:0:1}.${COMPUTE_CAP:1}"
+            print_info "GPU compute capability: $(format_compute_capability "$COMPUTE_CAP")"
         fi
 
         # Check installed CUDA toolkits
@@ -410,17 +594,17 @@ install_cuda_toolkit() {
         fi
         
         print_info "Installing CUDA repository keyring..."
-        $SUDO dpkg -i /tmp/cuda-keyring.deb
+        run_dpkg -i /tmp/cuda-keyring.deb
         rm -f /tmp/cuda-keyring.deb
         
         print_info "Updating package lists..."
-        $SUDO apt-get update -qq
+        run_apt_get update -qq
         
         print_info "Installing CUDA Toolkit 12.6 (this will take several minutes)..."
         print_warning "Download size: ~3GB, Install size: ~6.7GB"
         echo ""
         
-        $SUDO apt-get install -y cuda-toolkit-12-6
+        run_apt_get install -y cuda-toolkit-12-6
         
         if [ $? -ne 0 ]; then
             print_error "Failed to install CUDA Toolkit"
@@ -477,16 +661,10 @@ install_system_dependencies() {
     # Detect package manager
     if check_command apt-get; then
         PKG_MANAGER="apt-get"
-        PKG_UPDATE="apt-get update"
-        PKG_INSTALL="apt-get install -y"
     elif check_command dnf; then
         PKG_MANAGER="dnf"
-        PKG_UPDATE="dnf check-update"
-        PKG_INSTALL="dnf install -y"
     elif check_command yum; then
         PKG_MANAGER="yum"
-        PKG_UPDATE="yum check-update"
-        PKG_INSTALL="yum install -y"
     else
         print_error "No supported package manager found (apt/dnf/yum)"
         exit 1
@@ -504,7 +682,7 @@ install_system_dependencies() {
     
     # Update package lists
     print_info "Updating package lists..."
-    $SUDO $PKG_UPDATE || true
+    package_manager_update || true
     
     # Essential build tools
     PACKAGES=(
@@ -564,7 +742,7 @@ install_system_dependencies() {
     
     print_info "Installing required packages..."
     for package in "${PACKAGES[@]}"; do
-        if $SUDO $PKG_INSTALL "$package" 2>/dev/null; then
+        if package_manager_install "$package" 2>/dev/null; then
             print_success "Installed: $package"
         else
             print_warning "Could not install: $package (may not be available or already installed)"
@@ -578,7 +756,7 @@ install_system_dependencies() {
     if ! check_command node; then
         print_info "Installing Node.js..."
         curl -fsSL https://deb.nodesource.com/setup_lts.x | $SUDO bash -
-        $SUDO $PKG_INSTALL nodejs
+        package_manager_install nodejs
         print_success "Node.js installed"
     else
         NODE_VERSION=$(node --version)
@@ -587,7 +765,7 @@ install_system_dependencies() {
     
     # Install npm if not present
     if ! check_command npm; then
-        $SUDO $PKG_INSTALL npm
+        package_manager_install npm
     fi
     
     print_success "System dependencies installation complete"
@@ -655,7 +833,7 @@ ensure_unzip() {
     # Try to install unzip
     if check_command apt-get; then
         print_info "Attempting to install unzip..."
-        if $SUDO apt-get install -y unzip 2>/dev/null; then
+        if run_apt_get install -y unzip 2>/dev/null; then
             print_success "unzip installed successfully"
             return 0
         else
@@ -758,6 +936,12 @@ setup_libtorch() {
 build_colmap_internal() {
     print_info "Building COLMAP..."
 
+    if ! upgrade_cmake; then
+        print_error "A newer CMake installation is required before building COLMAP"
+        cd "$PROJECT_ROOT"
+        return 1
+    fi
+
     if [ -f "$COLMAP_BUILD_DIR/src/colmap/exe/colmap" ] || [ -f "$COLMAP_BUILD_DIR/colmap" ]; then
         print_success "COLMAP binary already exists"
         if prompt_yes_no "Rebuild COLMAP?" "n"; then
@@ -796,6 +980,8 @@ build_colmap_internal() {
     CMAKE_ARGS=(
         "$PROJECT_ROOT/colmap"
         "-DCMAKE_BUILD_TYPE=Release"
+        "-DCUDA_ENABLED=$CUDA_ENABLED"
+        "-DGLOMAP_CUDA_ENABLED=$CUDA_ENABLED"
         "-DGUI_ENABLED=$GUI_ENABLED"
         "-DCMAKE_INSTALL_PREFIX=$COLMAP_INSTALL_DIR"
     )
@@ -874,15 +1060,7 @@ upgrade_cmake() {
     # Check current CMake version
     if check_command cmake; then
         CURRENT_CMAKE_VERSION=$(cmake --version | head -n1 | grep -oP '\d+\.\d+\.\d+' | head -1)
-        CURRENT_MAJOR=$(echo "$CURRENT_CMAKE_VERSION" | cut -d'.' -f1)
-        CURRENT_MINOR=$(echo "$CURRENT_CMAKE_VERSION" | cut -d'.' -f2)
-        
-        REQUIRED_MAJOR=$(echo "$REQUIRED_CMAKE_VERSION" | cut -d'.' -f1)
-        REQUIRED_MINOR=$(echo "$REQUIRED_CMAKE_VERSION" | cut -d'.' -f2)
-        
-        # Compare versions
-        if [ "$CURRENT_MAJOR" -gt "$REQUIRED_MAJOR" ] || \
-           ([ "$CURRENT_MAJOR" -eq "$REQUIRED_MAJOR" ] && [ "$CURRENT_MINOR" -ge "$REQUIRED_MINOR" ]); then
+        if version_at_least "$CURRENT_CMAKE_VERSION" "$REQUIRED_CMAKE_VERSION"; then
             print_success "CMake $CURRENT_CMAKE_VERSION is sufficient (>= $REQUIRED_CMAKE_VERSION)"
             return 0
         else
@@ -904,38 +1082,57 @@ upgrade_cmake() {
     # For Ubuntu/Debian - use Kitware's official APT repository
     if check_command apt-get; then
         print_info "Adding Kitware APT repository for latest CMake..."
-        
+        local apt_install_ok=true
+
         # Install prerequisites
-        $SUDO apt-get update -qq
-        $SUDO apt-get install -y ca-certificates gpg wget
-        
-        # Download and add Kitware's GPG key
-        wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | $SUDO tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
-        
-        # Add Kitware repository (Ubuntu 22.04)
-        if [ -f /etc/os-release ]; then
-            . /etc/os-release
-            UBUNTU_CODENAME="${UBUNTU_CODENAME:-jammy}"
-        else
-            UBUNTU_CODENAME="jammy"
+        if ! run_apt_get update -qq; then
+            print_warning "APT update failed while preparing Kitware repository"
+            apt_install_ok=false
         fi
-        
-        echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ $UBUNTU_CODENAME main" | $SUDO tee /etc/apt/sources.list.d/kitware.list >/dev/null
-        
+        if $apt_install_ok && ! run_apt_get install -y ca-certificates gpg wget; then
+            print_warning "Failed to install Kitware repository prerequisites"
+            apt_install_ok=false
+        fi
+
+        # Download and add Kitware's GPG key
+        if $apt_install_ok && ! wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | $SUDO tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null; then
+            print_warning "Failed to add Kitware APT signing key"
+            apt_install_ok=false
+        fi
+
+        # Add Kitware repository (Ubuntu 22.04)
+        if $apt_install_ok; then
+            if [ -f /etc/os-release ]; then
+                . /etc/os-release
+                UBUNTU_CODENAME="${UBUNTU_CODENAME:-jammy}"
+            else
+                UBUNTU_CODENAME="jammy"
+            fi
+
+            if ! echo "deb [signed-by=/usr/share/keyrings/kitware-archive-keyring.gpg] https://apt.kitware.com/ubuntu/ $UBUNTU_CODENAME main" | $SUDO tee /etc/apt/sources.list.d/kitware.list >/dev/null; then
+                print_warning "Failed to configure Kitware APT repository"
+                apt_install_ok=false
+            fi
+        fi
+
         # Update and install CMake
-        $SUDO apt-get update -qq
-        $SUDO apt-get install -y cmake
-        
-        # Verify installation
-        if check_command cmake; then
+        if $apt_install_ok && ! run_apt_get update -qq; then
+            print_warning "APT update failed after adding Kitware repository"
+            apt_install_ok=false
+        fi
+        if $apt_install_ok && ! run_apt_get install -y cmake; then
+            print_warning "APT install of CMake failed; attempting fallback installer"
+            apt_install_ok=false
+        fi
+
+        hash -r
+        if $apt_install_ok && check_command cmake; then
             NEW_CMAKE_VERSION=$(cmake --version | head -n1 | grep -oP '\d+\.\d+\.\d+' | head -1)
-            print_success "CMake upgraded to $NEW_CMAKE_VERSION"
-            
-            # Update PATH hash
-            hash -r
-            return 0
-        else
-            print_error "CMake installation via APT failed"
+            if version_at_least "$NEW_CMAKE_VERSION" "$REQUIRED_CMAKE_VERSION"; then
+                print_success "CMake upgraded to $NEW_CMAKE_VERSION"
+                return 0
+            fi
+            print_warning "APT left CMake at $NEW_CMAKE_VERSION; falling back to direct install"
         fi
     fi
     
@@ -945,6 +1142,7 @@ upgrade_cmake() {
     CMAKE_VERSION="3.30.5"
     CMAKE_ARCH="x86_64"
     CMAKE_INSTALL_DIR="/opt/cmake-${CMAKE_VERSION}"
+    CMAKE_EXTRACTED_DIR="/opt/cmake-${CMAKE_VERSION}-linux-${CMAKE_ARCH}"
     CMAKE_URL="https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-${CMAKE_ARCH}.tar.gz"
     
     # Download and extract
@@ -960,11 +1158,22 @@ upgrade_cmake() {
     $SUDO mkdir -p "$CMAKE_INSTALL_DIR"
     $SUDO tar -xzf /tmp/cmake.tar.gz -C /opt/
     rm -f /tmp/cmake.tar.gz
+
+    if [ ! -x "$CMAKE_EXTRACTED_DIR/bin/cmake" ]; then
+        print_error "Extracted CMake binary not found at $CMAKE_EXTRACTED_DIR/bin/cmake"
+        return 1
+    fi
+
+    # Keep a stable symlinked install path for future upgrades.
+    $SUDO rm -rf "$CMAKE_INSTALL_DIR"
+    $SUDO ln -sfn "$CMAKE_EXTRACTED_DIR" "$CMAKE_INSTALL_DIR"
     
     # Create symlinks
-    $SUDO ln -sf "$CMAKE_INSTALL_DIR/bin/cmake" /usr/local/bin/cmake
-    $SUDO ln -sf "$CMAKE_INSTALL_DIR/bin/ctest" /usr/local/bin/ctest
-    $SUDO ln -sf "$CMAKE_INSTALL_DIR/bin/cpack" /usr/local/bin/cpack
+    $SUDO ln -sf "$CMAKE_EXTRACTED_DIR/bin/cmake" /usr/local/bin/cmake
+    $SUDO ln -sf "$CMAKE_EXTRACTED_DIR/bin/ctest" /usr/local/bin/ctest
+    $SUDO ln -sf "$CMAKE_EXTRACTED_DIR/bin/cpack" /usr/local/bin/cpack
+
+    export PATH="$CMAKE_EXTRACTED_DIR/bin:$PATH"
     
     # Update PATH hash
     hash -r
@@ -972,12 +1181,16 @@ upgrade_cmake() {
     # Verify
     if check_command cmake; then
         NEW_CMAKE_VERSION=$(cmake --version | head -n1 | grep -oP '\d+\.\d+\.\d+' | head -1)
-        print_success "CMake $NEW_CMAKE_VERSION installed successfully"
-        return 0
-    else
-        print_error "CMake installation failed"
+        if version_at_least "$NEW_CMAKE_VERSION" "$REQUIRED_CMAKE_VERSION"; then
+            print_success "CMake $NEW_CMAKE_VERSION installed successfully"
+            return 0
+        fi
+        print_error "CMake installation failed to provide the required version (got $NEW_CMAKE_VERSION, need >= $REQUIRED_CMAKE_VERSION)"
         return 1
     fi
+
+    print_error "CMake installation failed"
+    return 1
 }
 
 # =============================================================================
@@ -1389,23 +1602,30 @@ setup_python_backend() {
             print_info "Installing Python 3.12..."
             
             if check_command apt-get; then
+                local python_install_timeout=30
+
                 # Add deadsnakes PPA for Python 3.12
-                $SUDO apt-get update -qq
-                $SUDO apt-get install -y software-properties-common
-                $SUDO add-apt-repository -y ppa:deadsnakes/ppa
-                $SUDO apt-get update -qq
-                $SUDO apt-get install -y python3.12 python3.12-venv python3.12-dev
+                if ! run_apt_get --lock-timeout=$python_install_timeout update -qq || \
+                   ! run_apt_get --lock-timeout=$python_install_timeout install -y software-properties-common || \
+                   ! $SUDO add-apt-repository -y ppa:deadsnakes/ppa || \
+                   ! run_apt_get --lock-timeout=$python_install_timeout update -qq || \
+                   ! run_apt_get --lock-timeout=$python_install_timeout install -y python3.12 python3.12-venv python3.12-dev; then
+                    print_warning "Python 3.12 installation did not complete; package manager is likely busy"
+                    if [ -n "$PYTHON_CMD" ]; then
+                        print_warning "Continuing with $PYTHON_CMD and leaving Python 3.12 for a later retry"
+                    else
+                        return 1
+                    fi
+                fi
                 
                 if command -v python3.12 &> /dev/null; then
                     PYTHON_CMD="python3.12"
                     print_success "Python 3.12 installed successfully"
+                elif [ -n "$PYTHON_CMD" ]; then
+                    print_info "Using existing $PYTHON_CMD for backend setup"
                 else
                     print_error "Failed to install Python 3.12"
-                    if [ -n "$PYTHON_CMD" ]; then
-                        print_warning "Will continue with $PYTHON_CMD"
-                    else
-                        return 1
-                    fi
+                    return 1
                 fi
             else
                 print_error "Automatic Python 3.12 installation only supported on Ubuntu/Debian"
@@ -1769,7 +1989,7 @@ build_sfm_engines() {
                 SUDO=""
             fi
             if check_command apt-get; then
-                $SUDO apt-get install -y qtbase5-dev libqt5opengl5-dev 2>/dev/null || true
+                run_apt_get install -y qtbase5-dev libqt5opengl5-dev 2>/dev/null || true
             fi
         fi
     else

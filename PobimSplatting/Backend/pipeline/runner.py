@@ -249,6 +249,27 @@ def get_cpu_retry_match_limit(max_num_matches):
     return max(8192, min(int(max_num_matches) // 2, 32768))
 
 
+def get_gpu_retry_match_limits(max_num_matches, peak_feature_count=None):
+    base_limit = max(8192, int(max_num_matches))
+    candidates = []
+    seen = {base_limit}
+
+    halved_limit = base_limit
+    while halved_limit > 8192:
+        halved_limit = max(8192, (halved_limit // 2 // 1024) * 1024)
+        if halved_limit not in seen:
+            candidates.append(halved_limit)
+            seen.add(halved_limit)
+
+    if peak_feature_count:
+        feature_scaled_limit = int(peak_feature_count * 0.25)
+        feature_scaled_limit = max(8192, min(base_limit, (feature_scaled_limit // 1024) * 1024))
+        if feature_scaled_limit not in seen:
+            candidates.insert(0, feature_scaled_limit)
+
+    return [limit for limit in candidates if limit < base_limit]
+
+
 def get_vocab_tree_matcher_params():
     matcher_params = {}
     vocab_tree_path = getattr(app_config, 'VOCAB_TREE_PATH', None)
@@ -2906,6 +2927,19 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None):
     def run_matching_command(command):
         run_command_with_logs(project_id, command, line_handler=matching_line_handler)
 
+    def is_gpu_matching_error_text(text):
+        normalized = (text or '').lower()
+        return (
+            'not enough gpu memory' in normalized
+            or 'failed to create feature matcher' in normalized
+            or 'cuda error' in normalized
+            or 'cuda driver version is insufficient' in normalized
+        )
+
+    def reset_matching_health():
+        matching_health['gpu_issue_detected'] = False
+        matching_health['last_gpu_issue'] = None
+
     def build_matching_cmd(max_num_matches, use_gpu):
         rebuilt = [
             colmap_exe,
@@ -2917,6 +2951,59 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None):
         for param, value in colmap_cfg['matcher_params'].items():
             rebuilt.extend([f'--{param}', value])
         return rebuilt
+
+    def retry_matching_on_gpu_with_backoff(reason):
+        if not use_gpu_matching:
+            return False
+
+        initial_limit = int(colmap_cfg['max_num_matches'])
+        retry_limits = get_gpu_retry_match_limits(initial_limit, peak_feature_count=peak_feature_count)
+
+        if not retry_limits:
+            return False
+
+        append_log_line(project_id, f"⚠️ {reason}")
+
+        for retry_matches in retry_limits:
+            append_log_line(
+                project_id,
+                f"🔄 Retrying with GPU-based matching at reduced max_matches={retry_matches}...",
+            )
+            gpu_cmd = build_matching_cmd(retry_matches, True)
+            reset_matching_health()
+
+            try:
+                run_matching_command(gpu_cmd)
+            except subprocess.CalledProcessError as retry_error:
+                if is_gpu_matching_error_text(str(retry_error)) or matching_health['gpu_issue_detected']:
+                    append_log_line(
+                        project_id,
+                        f"⚠️ Reduced GPU matching attempt failed at max_matches={retry_matches}",
+                    )
+                    continue
+                raise
+
+            verified_pairs = count_verified_matching_pairs(paths['database_path'])
+            if verified_pairs > 0:
+                colmap_cfg['max_num_matches'] = retry_matches
+                append_log_line(
+                    project_id,
+                    f"✅ Reduced GPU-based matching completed successfully ({verified_pairs} verified pairs)",
+                )
+                return True
+
+            if matching_health['gpu_issue_detected']:
+                append_log_line(
+                    project_id,
+                    f"⚠️ Reduced GPU matching produced 0 verified pairs at max_matches={retry_matches}",
+                )
+                continue
+
+            colmap_cfg['max_num_matches'] = retry_matches
+            append_log_line(project_id, "✅ Reduced GPU-based matching completed successfully")
+            return True
+
+        return False
 
     def retry_matching_on_cpu(reason):
         retry_matches = get_cpu_retry_match_limit(colmap_cfg['max_num_matches'])
@@ -2930,22 +3017,20 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None):
     try:
         run_matching_command(cmd)
     except subprocess.CalledProcessError as e:
-        error_text = str(e).lower()
-        if use_gpu_matching and (
-            'not enough gpu memory' in error_text
-            or 'failed to create feature matcher' in error_text
-            or 'cuda error' in error_text
-            or 'cuda driver version is insufficient' in error_text
-        ):
-            retry_matching_on_cpu("GPU feature matching failed")
+        if use_gpu_matching and is_gpu_matching_error_text(str(e)):
+            if not retry_matching_on_gpu_with_backoff("GPU feature matching failed"):
+                retry_matching_on_cpu("GPU feature matching failed after reduced-match retries")
         else:
             raise
 
     verified_pairs = count_verified_matching_pairs(paths['database_path'])
     if use_gpu_matching and verified_pairs == 0 and matching_health['gpu_issue_detected']:
-        retry_matching_on_cpu(
+        if not retry_matching_on_gpu_with_backoff(
             "GPU feature matching produced 0 verified pairs after a matcher initialization failure"
-        )
+        ):
+            retry_matching_on_cpu(
+                "GPU feature matching produced 0 verified pairs after reduced-match retries"
+            )
         verified_pairs = count_verified_matching_pairs(paths['database_path'])
 
     if verified_pairs == 0:

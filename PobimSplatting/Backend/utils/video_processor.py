@@ -205,6 +205,7 @@ def check_gpu_decode_available() -> Dict[str, Any]:
 
 # Cache the GPU availability check
 _GPU_DECODE_INFO: Optional[Dict[str, Any]] = None
+_FFMPEG_FPS_MODE_SUPPORTED: Optional[bool] = None
 
 
 def get_gpu_decode_info() -> Dict[str, Any]:
@@ -214,6 +215,39 @@ def get_gpu_decode_info() -> Dict[str, Any]:
         _GPU_DECODE_INFO = check_gpu_decode_available()
         logger.info(f"GPU decode check: {_GPU_DECODE_INFO}")
     return _GPU_DECODE_INFO
+
+
+def ffmpeg_supports_fps_mode() -> bool:
+    """Return whether the installed ffmpeg supports the -fps_mode option."""
+    global _FFMPEG_FPS_MODE_SUPPORTED
+    if _FFMPEG_FPS_MODE_SUPPORTED is not None:
+        return _FFMPEG_FPS_MODE_SUPPORTED
+
+    ffmpeg_path = shutil.which('ffmpeg')
+    if not ffmpeg_path:
+        _FFMPEG_FPS_MODE_SUPPORTED = False
+        return _FFMPEG_FPS_MODE_SUPPORTED
+
+    try:
+        result = subprocess.run(
+            [ffmpeg_path, '-h', 'full'],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        output = f"{result.stdout}\n{result.stderr}"
+        _FFMPEG_FPS_MODE_SUPPORTED = '-fps_mode' in output
+    except Exception:
+        _FFMPEG_FPS_MODE_SUPPORTED = False
+
+    return _FFMPEG_FPS_MODE_SUPPORTED
+
+
+def get_ffmpeg_vfr_args() -> List[str]:
+    """Return frame sync args supported by the installed ffmpeg."""
+    if ffmpeg_supports_fps_mode():
+        return ['-fps_mode', 'vfr']
+    return ['-vsync', 'vfr']
 
 class VideoProcessor:
     def __init__(self):
@@ -508,11 +542,11 @@ class VideoProcessor:
             '-an',
             '-sn',
             '-dn',
-            '-fps_mode', 'vfr',
             '-qscale:v', str(ffmpeg_quality),
             '-start_number', '0',
             output_pattern,
         ])
+        cmd.extend(get_ffmpeg_vfr_args())
 
         logger.info(f"FFmpeg CPU command: {' '.join(cmd)}")
 
@@ -626,11 +660,11 @@ class VideoProcessor:
                 '-an',
                 '-sn',
                 '-dn',
-                '-fps_mode', 'vfr',
                 '-qscale:v', str(ffmpeg_quality),
                 '-start_number', '0',
                 str(chunk_dir / "frame_%06d.jpg"),
             ]
+            cmd.extend(get_ffmpeg_vfr_args())
 
             subprocess.run(
                 cmd,
@@ -680,6 +714,130 @@ class VideoProcessor:
         }
 
         logger.info(f"✅ Parallel ffmpeg CPU extraction complete: {len(extracted_frames)} frames")
+        return extracted_frames
+
+    def _extract_frames_ffmpeg_gpu_parallel(
+        self,
+        video_path,
+        output_dir,
+        extraction_config,
+        progress_callback,
+        duration,
+        width,
+        height,
+        target_width,
+        target_height,
+        jpeg_quality,
+        gpu_info,
+    ):
+        target_fps = float(extraction_config.get('target_fps', 1.0) or 1.0)
+        expected_frames = max(1, int(duration * target_fps))
+        requested_workers = int(extraction_config.get('ffmpeg_cpu_workers') or 0)
+        cpu_count = os.cpu_count() or 4
+        if requested_workers <= 0:
+            requested_workers = min(4, max(1, cpu_count // 6))
+
+        chunk_count = min(requested_workers, max(1, int(duration // 20)))
+        if chunk_count <= 1:
+            raise ValueError("parallel extraction requested without enough chunks")
+
+        ffmpeg_quality = max(2, min(5, int(6 - (jpeg_quality / 100) * 4)))
+        filters = [f"fps={target_fps}"]
+        if target_width != width or target_height != height:
+            filters.append(f"scale={target_width}:{target_height}")
+
+        gpu_env = get_gpu_environment()
+        env = gpu_env['env']
+
+        logger.info(
+            f"Launching {chunk_count} parallel ffmpeg worker(s) for GPU extraction ({gpu_info['method'].upper()})"
+        )
+
+        def run_chunk(chunk_index: int):
+            start_time = (duration * chunk_index) / chunk_count
+            end_time = (duration * (chunk_index + 1)) / chunk_count
+            chunk_duration = max(0.001, end_time - start_time)
+            chunk_dir = output_dir / f".chunk_{chunk_index:02d}"
+            chunk_dir.mkdir(parents=True, exist_ok=True)
+
+            cmd = ['ffmpeg', '-y', '-hide_banner', '-loglevel', 'error']
+
+            if gpu_info['method'] == 'nvdec':
+                cmd.extend(['-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda'])
+            elif gpu_info['method'] == 'vaapi':
+                cmd.extend(['-hwaccel', 'vaapi', '-hwaccel_device', '/dev/dri/renderD128'])
+
+            cmd.extend([
+                '-ss', f"{start_time:.6f}",
+                '-t', f"{chunk_duration:.6f}",
+                '-i', str(video_path),
+            ])
+
+            filter_chain = ','.join(filters)
+            if gpu_info['method'] == 'nvdec':
+                cmd.extend(['-vf', f'hwdownload,format=nv12,{filter_chain}'])
+            else:
+                cmd.extend(['-vf', filter_chain])
+
+            cmd.extend([
+                '-an',
+                '-sn',
+                '-dn',
+                '-qscale:v', str(ffmpeg_quality),
+                '-start_number', '0',
+                str(chunk_dir / 'frame_%06d.jpg'),
+            ])
+            cmd.extend(get_ffmpeg_vfr_args())
+
+            subprocess.run(
+                cmd,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=env,
+            )
+
+            frames = sorted(chunk_dir.glob('frame_*.jpg'))
+            return chunk_index, frames, chunk_dir
+
+        extracted_frames = []
+        chunk_dirs = []
+        merged_count = 0
+
+        with ThreadPoolExecutor(max_workers=chunk_count) as executor:
+            futures = [executor.submit(run_chunk, chunk_index) for chunk_index in range(chunk_count)]
+            results = []
+            for future in as_completed(futures):
+                results.append(future.result())
+
+        for chunk_index, frames, chunk_dir in sorted(results, key=lambda item: item[0]):
+            chunk_dirs.append(chunk_dir)
+            for frame_path in frames:
+                final_path = output_dir / f"frame_{merged_count:06d}.jpg"
+                os.replace(frame_path, final_path)
+                extracted_frames.append(str(final_path))
+                merged_count += 1
+                if progress_callback and (merged_count % 5 == 0 or merged_count == expected_frames):
+                    progress_callback(merged_count, expected_frames, str(final_path))
+
+        for chunk_dir in chunk_dirs:
+            try:
+                chunk_dir.rmdir()
+            except OSError:
+                pass
+
+        self.last_extraction_stats = {
+            'strategy': f"ffmpeg_{gpu_info['method']}_parallel_{chunk_count}x",
+            'mode': 'fps',
+            'requested_targets': expected_frames,
+            'saved_frames': len(extracted_frames),
+            'replaced_targets': 0,
+            'search_radius': 0,
+            'rejected_candidates': 0,
+            'selections': [],
+        }
+
+        logger.info(f"✅ Parallel GPU extraction complete: {len(extracted_frames)} frames")
         return extracted_frames
 
     def _extract_frames_gpu(self, video_path, output_dir, extraction_config, progress_callback=None):
@@ -741,6 +899,30 @@ class VideoProcessor:
         if mode == 'fps':
             target_fps = extraction_config.get('target_fps', 1.0)
             expected_frames = int(duration * target_fps)
+            parallel_workers = int(extraction_config.get('ffmpeg_cpu_workers') or 0)
+            if parallel_workers <= 0:
+                cpu_count = os.cpu_count() or 4
+                auto_workers = max(1, cpu_count // 6)
+                parallel_workers = min(4, auto_workers)
+
+            if parallel_workers > 1 and duration >= 45 and expected_frames >= 60:
+                logger.info(f"GPU parallel extraction enabled: {parallel_workers} workers")
+                try:
+                    return self._extract_frames_ffmpeg_gpu_parallel(
+                        video_path=video_path,
+                        output_dir=output_dir,
+                        extraction_config=extraction_config,
+                        progress_callback=progress_callback,
+                        duration=duration,
+                        width=width,
+                        height=height,
+                        target_width=target_width,
+                        target_height=target_height,
+                        jpeg_quality=jpeg_quality,
+                        gpu_info=gpu_info,
+                    )
+                except Exception as e:
+                    logger.warning(f"Parallel GPU extraction failed, falling back to single-process GPU ffmpeg: {e}")
             fps_filter = f"fps={target_fps}"
         else:
             max_frames = extraction_config.get('max_frames', 100)

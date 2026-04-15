@@ -20,12 +20,32 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 COLMAP_BUILD_DIR="$PROJECT_ROOT/colmap-build"
 NUM_CORES=$(nproc)
 
+require_cmake() {
+    local required_version="3.24.0"
+    local current_version
+
+    if ! command -v cmake &>/dev/null; then
+        echo -e "${RED}✗ CMake is not installed${NC}"
+        echo "Install CMake ${required_version} or newer before rebuilding COLMAP"
+        exit 1
+    fi
+
+    current_version=$(cmake --version | head -n1 | sed -n 's/^cmake version //p')
+    if [[ -z "$current_version" ]] || [[ "$(printf '%s\n' "$required_version" "$current_version" | sort -V | head -n1)" != "$required_version" ]]; then
+        echo -e "${RED}✗ CMake $current_version is too old${NC}"
+        echo "This vendored COLMAP currently needs CMake ${required_version} or newer because faiss is fetched during configure"
+        exit 1
+    fi
+}
+
 echo -e "${BOLD}${BLUE}"
 echo "============================================================================="
 echo "   Rebuild COLMAP with CUDA GPU Support"
 echo "============================================================================="
 echo -e "${NC}"
 echo ""
+
+require_cmake
 
 # Auto-detect CUDA installation
 echo -e "${CYAN}[1/5] Detecting CUDA installation...${NC}"

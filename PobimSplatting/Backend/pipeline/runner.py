@@ -424,7 +424,7 @@ def get_orbit_safe_profile_settings(profile_name, num_images):
             'matcher_params': {
                 'SequentialMatching.overlap': overlap,
                 'SequentialMatching.quadratic_overlap': '1',
-                'SequentialMatching.loop_detection': '1',
+                'SequentialMatching.loop_detection': '0',
             },
             'mapper_params': {
                 'Mapper.structure_less_registration_fallback': '1',
@@ -443,7 +443,7 @@ def get_orbit_safe_profile_settings(profile_name, num_images):
             'matcher_params': {
                 'SequentialMatching.overlap': overlap,
                 'SequentialMatching.quadratic_overlap': '1',
-                'SequentialMatching.loop_detection': '1',
+                'SequentialMatching.loop_detection': '0',
             },
             'mapper_params': {
                 'Mapper.structure_less_registration_fallback': '1',

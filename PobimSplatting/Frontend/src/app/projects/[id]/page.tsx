@@ -82,8 +82,6 @@ const STAGE_WEIGHT_MAP = PIPELINE_STAGES.reduce((acc, stage) => {
   return acc;
 }, {} as Record<string, number>);
 
-const MAX_LOG_LINES = 10000; // Keep all logs for full visibility
-
 const isErrorStatus = (status?: string | null): boolean =>
   status === 'failed' || status === 'cancelled';
 
@@ -105,7 +103,7 @@ const calculateWeightedProgress = (states: any[] = []) => {
 };
 
 const formatLogTail = (logTail: any[] = []) =>
-  logTail.slice(-MAX_LOG_LINES).map(entry => {
+  logTail.map(entry => {
     if (!entry) {
       return '';
     }
@@ -122,6 +120,55 @@ const formatPercent = (value?: number | null) => {
     return '--';
   }
   return `${Math.round(value * 100)}%`;
+};
+
+const extractLogTimestamp = (line: string): number | null => {
+  const match = line.match(/^\[([^\]]+)\]/);
+  if (!match) {
+    return null;
+  }
+  const parsed = Date.parse(match[1]);
+  return Number.isNaN(parsed) ? null : parsed;
+};
+
+const groupLogsByStage = (logs: string[], states: any[] = []) => {
+  const groups = [
+    {
+      key: 'ungrouped',
+      label: 'General',
+      logs: [] as string[],
+    },
+    ...PIPELINE_STAGES.map(stage => ({
+      key: stage.key,
+      label: stage.label,
+      logs: [] as string[],
+    })),
+  ];
+
+  const activeStates = states.filter(state => state.started_at);
+  for (const line of logs) {
+    const timestamp = extractLogTimestamp(line);
+    if (timestamp === null) {
+      groups[0].logs.push(line);
+      continue;
+    }
+
+    const matchedState = activeStates.find(state => {
+      const started = state.started_at ? Date.parse(state.started_at) : Number.NaN;
+      const completed = state.completed_at ? Date.parse(state.completed_at) : Number.POSITIVE_INFINITY;
+      return !Number.isNaN(started) && timestamp >= started && timestamp <= completed;
+    });
+
+    const targetKey = matchedState?.key || 'ungrouped';
+    const targetGroup = groups.find(group => group.key === targetKey);
+    if (targetGroup) {
+      targetGroup.logs.push(line);
+    } else {
+      groups[0].logs.push(line);
+    }
+  }
+
+  return groups.filter(group => group.logs.length > 0);
 };
 
 export default function ProjectDetailPage() {
@@ -147,6 +194,17 @@ export default function ProjectDetailPage() {
   const [selectedRetryStage, setSelectedRetryStage] = useState<string>('ingest');
   const [showLogSidebar, setShowLogSidebar] = useState(true);
   const [autoScroll, setAutoScroll] = useState(true);
+  const [expandedLogGroups, setExpandedLogGroups] = useState<Record<string, boolean>>({
+    ungrouped: true,
+    ingest: true,
+    video_extraction: true,
+    feature_extraction: true,
+    feature_matching: true,
+    sparse_reconstruction: true,
+    model_conversion: true,
+    gaussian_splatting: true,
+    finalizing: true,
+  });
   const logEndRef = useRef<HTMLDivElement>(null);
   const [retryParams, setRetryParams] = useState({
     // Gaussian Splatting params
@@ -167,6 +225,7 @@ export default function ProjectDetailPage() {
     training_resolution: '',
     use_separate_training_images: false,
     replacement_search_radius: '',
+    ffmpeg_cpu_workers: '',
   });
   const [expandedStage, setExpandedStage] = useState<string | null>(null);
   const [showImagePreview, setShowImagePreview] = useState(false);
@@ -178,6 +237,10 @@ export default function ProjectDetailPage() {
   const [loadingPlyFiles, setLoadingPlyFiles] = useState(false);
   const framework = project?.reconstruction_framework;
   const videoDiagnostics = project?.video_extraction_diagnostics;
+  const videoExtractionDetail = stageDetails['video_extraction'];
+  const videoExtractionFramesDone = videoExtractionDetail?.current_item ?? videoDiagnostics?.saved_frames ?? null;
+  const videoExtractionFramesTotal = videoExtractionDetail?.total_items ?? videoDiagnostics?.requested_targets ?? null;
+  const logGroups = groupLogsByStage(logs, stages);
 
   // Auto-expand the running stage
   useEffect(() => {
@@ -233,7 +296,7 @@ export default function ProjectDetailPage() {
       const progressValue = typeof data.progress === 'number'
         ? data.progress
         : calculateWeightedProgress(normalizedStages);
-      const logLines = (data.recent_logs || []).slice(-MAX_LOG_LINES);
+      const logLines = data.recent_logs || [];
 
       if (data.start_time) {
         projectStartTimeRef.current = data.start_time;
@@ -307,7 +370,7 @@ export default function ProjectDetailPage() {
     const normalizedStages = normalizeProgressStates(payload.progress_states);
     const details = payload.stage_details || {};
     const logLines = Array.isArray(payload.recent_logs)
-      ? payload.recent_logs.slice(-MAX_LOG_LINES)
+      ? payload.recent_logs
       : formatLogTail(payload.log_tail || []);
     const progressValue = typeof payload.progress === 'number'
       ? payload.progress
@@ -401,13 +464,7 @@ export default function ProjectDetailPage() {
     }
 
     const line = payload.timestamp ? `[${payload.timestamp}] ${payload.message}` : payload.message;
-    setLogs(prev => {
-      const next = [...prev, line];
-      if (next.length > MAX_LOG_LINES) {
-        return next.slice(-MAX_LOG_LINES);
-      }
-      return next;
-    });
+    setLogs(prev => [...prev, line]);
   }, []);
 
   useEffect(() => {
@@ -494,6 +551,9 @@ export default function ProjectDetailPage() {
         if (retryParams.replacement_search_radius) {
           params.replacement_search_radius = parseInt(retryParams.replacement_search_radius);
         }
+        if (retryParams.ffmpeg_cpu_workers) {
+          params.ffmpeg_cpu_workers = parseInt(retryParams.ffmpeg_cpu_workers);
+        }
         if (retryParams.use_separate_training_images) {
           params.use_separate_training_images = true;
           if (retryParams.training_resolution) {
@@ -566,6 +626,7 @@ export default function ProjectDetailPage() {
         training_resolution: '',
         use_separate_training_images: false,
         replacement_search_radius: '',
+        ffmpeg_cpu_workers: '',
       });
       await loadProject();
     } catch (err) {
@@ -622,6 +683,7 @@ export default function ProjectDetailPage() {
         training_resolution: '',
         use_separate_training_images: false,
         replacement_search_radius: project?.config?.replacement_search_radius?.toString() || '',
+        ffmpeg_cpu_workers: project?.config?.ffmpeg_cpu_workers?.toString() || '',
       });
     }
 
@@ -1021,6 +1083,56 @@ export default function ProjectDetailPage() {
                       )}
                     </div>
                   </div>
+                </div>
+              )}
+
+              {(project?.input_type === 'video' || project?.input_type === 'mixed') && (
+                <div className="border border-gray-200 rounded-2xl p-6 bg-sky-50/40">
+                  <div className="flex items-start justify-between gap-4 mb-5">
+                    <div>
+                      <h3 className="text-sm font-medium text-black">Live Frame Extraction</h3>
+                      <p className="text-sm text-gray-500 mt-1">
+                        ติดตามจำนวนภาพที่ถูกถอดจากวิดีโอแบบ realtime ระหว่าง stage extract
+                      </p>
+                    </div>
+                    <span className="inline-flex items-center rounded-full border border-sky-200 px-3 py-1 text-xs font-medium text-sky-900 bg-white">
+                      workers {project?.config?.ffmpeg_cpu_workers ?? '--'}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-5">
+                    <div className="rounded-xl border border-gray-200 bg-white p-4">
+                      <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Extracted</p>
+                      <p className="text-sm font-medium text-black">{videoExtractionFramesDone ?? '--'}</p>
+                    </div>
+                    <div className="rounded-xl border border-gray-200 bg-white p-4">
+                      <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Target</p>
+                      <p className="text-sm font-medium text-black">{videoExtractionFramesTotal ?? '--'}</p>
+                    </div>
+                    <div className="rounded-xl border border-gray-200 bg-white p-4">
+                      <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Resolution</p>
+                      <p className="text-sm font-medium text-black">{project?.config?.colmap_resolution || '--'}</p>
+                    </div>
+                    <div className="rounded-xl border border-gray-200 bg-white p-4">
+                      <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Sampling</p>
+                      <p className="text-sm font-medium text-black">
+                        {project?.config?.extraction_mode === 'fps'
+                          ? `${project?.config?.target_fps ?? '--'} FPS`
+                          : `${project?.config?.max_frames ?? '--'} max`}
+                      </p>
+                    </div>
+                  </div>
+
+                  {(videoExtractionDetail?.text || videoExtractionDetail?.subtext) && (
+                    <div className="rounded-xl border border-gray-200 bg-white p-4">
+                      {videoExtractionDetail?.text && (
+                        <p className="text-sm text-gray-700">{videoExtractionDetail.text}</p>
+                      )}
+                      {videoExtractionDetail?.subtext && (
+                        <p className="text-xs text-gray-500 mt-1">{videoExtractionDetail.subtext}</p>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1433,15 +1545,42 @@ export default function ProjectDetailPage() {
         <div className="flex-1 overflow-y-auto overflow-x-auto bg-gray-950 font-mono text-sm leading-relaxed">
           {logs.length > 0 ? (
             <div className="p-4 min-w-max">
-              {logs.map((log, index) => (
-                <div 
-                  key={index} 
-                  className="whitespace-pre text-gray-300 hover:text-white hover:bg-gray-900/70 transition-colors py-1 px-3 rounded border-l-2 border-transparent hover:border-gray-600"
-                >
-                  <span className="text-gray-600 select-none mr-4 inline-block w-16 text-right">{index + 1}</span>
-                  {log}
-                </div>
-              ))}
+              <div className="space-y-3">
+                {logGroups.map((group) => {
+                  const isExpanded = expandedLogGroups[group.key] ?? true;
+                  return (
+                    <div key={group.key} className="rounded-xl border border-gray-800 bg-gray-900/70 overflow-hidden">
+                      <button
+                        onClick={() => setExpandedLogGroups(prev => ({ ...prev, [group.key]: !isExpanded }))}
+                        className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-gray-800/80 transition-colors"
+                      >
+                        <div className="flex items-center gap-3">
+                          <ChevronRight className={`h-4 w-4 text-gray-400 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
+                          <span className="text-sm font-semibold text-gray-100">{group.label}</span>
+                          <span className="text-xs text-gray-500 bg-gray-800 px-2 py-0.5 rounded-full">
+                            {group.logs.length.toLocaleString()} lines
+                          </span>
+                        </div>
+                      </button>
+
+                      {isExpanded && (
+                        <div className="border-t border-gray-800">
+                          {group.logs.map((log, index) => (
+                            <div
+                              key={`${group.key}-${index}`}
+                              className="whitespace-pre text-gray-300 hover:text-white hover:bg-gray-900/70 transition-colors py-1 px-3 rounded border-l-2 border-transparent hover:border-gray-600"
+                            >
+                              <span className="text-gray-600 select-none mr-4 inline-block w-16 text-right">{index + 1}</span>
+                              {group.key === 'ungrouped' ? '├─ ' : '│  '}
+                              {log}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
               <div ref={logEndRef} className="h-4" />
             </div>
           ) : (
@@ -1455,13 +1594,6 @@ export default function ProjectDetailPage() {
           )}
         </div>
 
-        {/* Footer */}
-        {logs.length >= MAX_LOG_LINES && (
-          <div className="px-6 py-2 border-t border-gray-800 bg-amber-900/20 text-xs text-amber-400 flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4" />
-            Buffer limit reached ({MAX_LOG_LINES.toLocaleString()} lines). Older logs were removed.
-          </div>
-        )}
       </div>
 
       {!showLogSidebar && (
@@ -1588,6 +1720,23 @@ export default function ProjectDetailPage() {
                       <option value="12">±12 frames</option>
                     </select>
                     <p className="text-xs text-gray-400 mt-1">ขยายช่วงค้นหาเฟรมรอบ target เพื่อแทนเฟรมเบลอด้วยเฟรมที่คมกว่า</p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                      CPU Chunk Workers
+                    </label>
+                    <select
+                      value={retryParams.ffmpeg_cpu_workers}
+                      onChange={(e) => setRetryParams({...retryParams, ffmpeg_cpu_workers: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                    >
+                      <option value="">ใช้ค่าเดิม</option>
+                      <option value="2">2 workers</option>
+                      <option value="4">4 workers</option>
+                      <option value="8">8 workers</option>
+                    </select>
+                    <p className="text-xs text-gray-400 mt-1">เพิ่มหรือลดจำนวน chunk extraction workers เวลา rerun ขั้น extract</p>
                   </div>
 
                   <div className="flex items-center">

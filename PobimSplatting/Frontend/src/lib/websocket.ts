@@ -46,14 +46,14 @@ class WebSocketClient {
 
   joinRoom(projectId: string) {
     if (this.socket) {
-      this.socket.emit('join', projectId);
+      this.socket.emit('join_project', { project_id: projectId });
       console.log(`Joined room: ${projectId}`);
     }
   }
 
   leaveRoom(projectId: string) {
     if (this.socket) {
-      this.socket.emit('leave', projectId);
+      this.socket.emit('leave_project', { project_id: projectId });
       console.log(`Left room: ${projectId}`);
     }
   }

@@ -33,6 +33,7 @@ export default function UploadPage() {
     quality: 100,  // Legacy - kept for backward compatibility
     preview_count: 10,
     replacement_search_radius: 4,
+    ffmpeg_cpu_workers: 4,
     sfm_engine: 'glomap',  // Legacy alias kept for backend compatibility; UI shows COLMAP Global SfM
     sfm_backend: 'cli' as SfmBackendMode,
     feature_method: 'sift',  // 'sift' (COLMAP), 'aliked' (hloc), 'superpoint' (hloc) - neural features are 10-20x faster
@@ -821,6 +822,11 @@ export default function UploadPage() {
                         hi-res training: {config.use_separate_training_images ? 'enabled' : 'off'}
                       </span>
                     )}
+                    {hasVideo && (
+                      <span className="rounded-full border border-gray-200 bg-white px-3 py-1">
+                        chunk workers: {config.ffmpeg_cpu_workers}
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="mt-4 grid gap-2 md:grid-cols-3">
@@ -1306,6 +1312,21 @@ export default function UploadPage() {
                             <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:bg-purple-500 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
                           </div>
                         </label>
+                      </div>
+                      <div className="mt-3">
+                        <label className="block text-sm font-medium text-gray-700 mb-2">CPU Chunk Workers</label>
+                        <select
+                          value={config.ffmpeg_cpu_workers}
+                          onChange={(e) => setConfig({ ...config, ffmpeg_cpu_workers: parseInt(e.target.value, 10) })}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        >
+                          <option value={2}>2 workers</option>
+                          <option value={4}>4 workers - Recommended</option>
+                          <option value={8}>8 workers</option>
+                        </select>
+                        <p className="mt-1 text-xs text-gray-500">
+                          กำหนดจำนวน process ที่ใช้แบ่งวิดีโอเป็น chunk แล้วถอดภาพพร้อมกัน ค่าเยอะขึ้นจะใช้ CPU และ RAM มากขึ้น
+                        </p>
                       </div>
                       <div className="mt-3">
                         <label className="block text-sm font-medium text-gray-700 mb-2">Smart Replacement Radius</label>

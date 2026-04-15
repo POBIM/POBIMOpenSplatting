@@ -48,6 +48,7 @@ export interface Project {
     sfm_backend?: 'cli' | 'pycolmap' | string;
     feature_method?: 'sift' | 'aliked' | 'superpoint';
     replacement_search_radius?: number;
+    ffmpeg_cpu_workers?: number;
     [key: string]: any;
   };
   reconstruction_framework?: ReconstructionFramework;
@@ -158,6 +159,7 @@ export interface UploadConfig {
   quality?: number;
   preview_count?: number;
   replacement_search_radius?: number;
+  ffmpeg_cpu_workers?: number;
   custom_params?: any;
 }
 
@@ -305,6 +307,7 @@ export const api = {
     if (config.quality !== undefined) formData.append('quality', config.quality.toString());
     if (config.preview_count) formData.append('preview_count', config.preview_count.toString());
     if (config.replacement_search_radius !== undefined) formData.append('replacement_search_radius', config.replacement_search_radius.toString());
+    if (config.ffmpeg_cpu_workers !== undefined) formData.append('ffmpeg_cpu_workers', config.ffmpeg_cpu_workers.toString());
     if (config.vram_size !== undefined) formData.append('vram_size', config.vram_size.toString());
     // GPU acceleration for video frame extraction (5-10x faster with NVDEC)
     if (config.use_gpu_extraction !== undefined) formData.append('use_gpu_extraction', config.use_gpu_extraction.toString());

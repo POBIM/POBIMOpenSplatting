@@ -173,6 +173,82 @@ def get_colmap_feature_extraction_max_image_size_flag(colmap_exe):
     return '--FeatureExtraction.max_image_size'
 
 
+@lru_cache(maxsize=1)
+def get_gpu_total_vram_mb():
+    try:
+        result = subprocess.run(
+            ['nvidia-smi', '--query-gpu=memory.total', '--format=csv,noheader,nounits'],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:
+        return None
+
+    if result.returncode != 0:
+        return None
+
+    for raw_line in (result.stdout or '').splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            return int(float(line))
+        except ValueError:
+            continue
+
+    return None
+
+
+def get_peak_feature_count(database_path):
+    if not Path(database_path).exists():
+        return 0
+
+    try:
+        with sqlite3.connect(str(database_path)) as conn:
+            row = conn.execute('SELECT MAX(rows) FROM keypoints').fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+    except sqlite3.Error:
+        return 0
+
+
+def count_verified_matching_pairs(database_path):
+    if not Path(database_path).exists():
+        return 0
+
+    try:
+        with sqlite3.connect(str(database_path)) as conn:
+            row = conn.execute(
+                'SELECT COUNT(*) FROM two_view_geometries WHERE rows > 0 AND config > 0'
+            ).fetchone()
+            return int(row[0]) if row else 0
+    except sqlite3.Error:
+        return 0
+
+
+def estimate_gpu_safe_match_limit(total_vram_mb=None, peak_feature_count=None):
+    limits = []
+
+    if total_vram_mb:
+        vram_scaled_limit = int((max(total_vram_mb, 1024) / 1024.0) * 4096)
+        vram_scaled_limit = max(16384, min(65536, (vram_scaled_limit // 1024) * 1024))
+        limits.append(vram_scaled_limit)
+
+    if peak_feature_count:
+        feature_scaled_limit = int(peak_feature_count * 0.5)
+        feature_scaled_limit = max(16384, min(65536, (feature_scaled_limit // 1024) * 1024))
+        limits.append(feature_scaled_limit)
+
+    if not limits:
+        return None
+
+    return min(limits)
+
+
+def get_cpu_retry_match_limit(max_num_matches):
+    return max(8192, min(int(max_num_matches) // 2, 32768))
+
+
 def get_vocab_tree_matcher_params():
     matcher_params = {}
     vocab_tree_path = getattr(app_config, 'VOCAB_TREE_PATH', None)
@@ -1313,8 +1389,16 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
                             append_log_line(project_id, f"      → {detail}")
 
                 # Calculate expected total frames for all videos
-                expected_frames_per_video = config.get('max_frames', 100)
-                total_expected_frames = expected_frames_per_video * total_videos
+                base_estimate_config = {
+                    'mode': config.get('extraction_mode', 'frames'),
+                    'max_frames': config.get('max_frames', 100),
+                    'target_fps': config.get('target_fps', 1.0),
+                }
+                expected_frames_by_video = [
+                    video_processor.estimate_frame_count(video_path, base_estimate_config)
+                    for video_path in video_files
+                ]
+                total_expected_frames = max(1, sum(expected_frames_by_video))
                 
                 for i, video_path in enumerate(video_files):
                     append_log_line(project_id, f"Extracting frames from: {Path(video_path).name}")
@@ -1330,6 +1414,7 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
                         'preview_count': config.get('preview_count', 10),
                         'use_gpu': config.get('use_gpu_extraction', True),
                         'replacement_search_radius': config.get('replacement_search_radius', 4),
+                        'ffmpeg_cpu_workers': config.get('ffmpeg_cpu_workers', 4),
                     }
                     
                     if config.get('extraction_mode') == 'fps':
@@ -1350,7 +1435,7 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
                     def frame_progress_callback(current_frame, expected_total, frame_path):
                         nonlocal total_extracted_frames
                         # Calculate overall progress across all videos
-                        frames_from_prev_videos = i * expected_frames_per_video
+                        frames_from_prev_videos = sum(expected_frames_by_video[:i])
                         overall_frames = frames_from_prev_videos + current_frame
                         overall_progress = int((overall_frames / total_expected_frames) * 100)
                         
@@ -1835,9 +1920,7 @@ def get_colmap_config(num_images, project_id=None, quality_mode='balanced', cust
             if project_id:
                 append_log_line(project_id, f"🔧 Custom max_num_matches: {max_num_matches}")
     
-    # CRITICAL: Prevent GPU OOM by capping max_num_matches based on expected feature count
-    # For images with 70K-80K features, max_num_matches should be <= 40K to avoid GPU memory issues
-    # This is especially important for CUDA-based feature matching
+    # CRITICAL: Prevent GPU OOM by capping max_num_matches using conservative defaults first.
     max_match_limit = 65536 if quality_mode == 'hard' else 45960
     if max_num_matches > max_match_limit:
         if project_id:
@@ -1846,6 +1929,18 @@ def get_colmap_config(num_images, project_id=None, quality_mode='balanced', cust
                 f"⚠️ Reducing max_num_matches from {max_num_matches} to {max_match_limit} to prevent GPU memory overflow",
             )
         max_num_matches = max_match_limit
+
+    gpu_total_vram_mb = get_gpu_total_vram_mb()
+    gpu_safe_match_limit = estimate_gpu_safe_match_limit(total_vram_mb=gpu_total_vram_mb)
+    if gpu_safe_match_limit and gpu_safe_match_limit < max_num_matches:
+        if project_id:
+            append_log_line(
+                project_id,
+                "🧠 VRAM-aware config tuning: "
+                f"reducing max_num_matches from {max_num_matches} to {gpu_safe_match_limit} "
+                f"based on GPU VRAM ({gpu_total_vram_mb} MiB)",
+            )
+        max_num_matches = gpu_safe_match_limit
 
     explicit_matcher_type = normalize_matcher_type(preferred_matcher_type)
     orbit_safe_forced_matcher = False
@@ -2712,6 +2807,22 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None):
 
     loop_detection_enabled = colmap_cfg['matcher_params'].get('SequentialMatching.loop_detection') == '1'
     use_gpu_matching = has_cuda and not loop_detection_enabled
+    peak_feature_count = get_peak_feature_count(paths['database_path'])
+    gpu_total_vram_mb = get_gpu_total_vram_mb() if use_gpu_matching else None
+
+    if use_gpu_matching:
+        gpu_safe_match_limit = estimate_gpu_safe_match_limit(
+            total_vram_mb=gpu_total_vram_mb,
+            peak_feature_count=peak_feature_count,
+        )
+        if gpu_safe_match_limit and gpu_safe_match_limit < int(colmap_cfg['max_num_matches']):
+            append_log_line(
+                project_id,
+                "🧠 VRAM-aware COLMAP tuning: "
+                f"capping max_num_matches from {colmap_cfg['max_num_matches']} to {gpu_safe_match_limit} "
+                f"(VRAM={gpu_total_vram_mb or 'unknown'} MiB, peak_features={peak_feature_count or 'unknown'})",
+            )
+            colmap_cfg['max_num_matches'] = gpu_safe_match_limit
     
     update_state(project_id, 'feature_matching', status='running')
     update_stage_detail(project_id, 'feature_matching', text='Matching pairs: 0/0', subtext=None)
@@ -2727,6 +2838,10 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None):
     append_log_line(project_id, f"🔗 Using {colmap_cfg['matcher_type']} matcher")
     
     matching_progress = {'current': 0, 'total': 0}
+    matching_health = {
+        'gpu_issue_detected': False,
+        'last_gpu_issue': None,
+    }
     
     matcher_cmd = f'{colmap_cfg["matcher_type"]}_matcher'
     append_log_line(project_id, f"🔧 Running {colmap_cfg['matcher_type']} matcher...")
@@ -2751,6 +2866,8 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None):
             or 'cuda error' in line.lower()
             or 'cuda driver version is insufficient' in line.lower()
         ):
+            matching_health['gpu_issue_detected'] = True
+            matching_health['last_gpu_issue'] = line.strip()
             append_log_line(project_id, f"⚠️ GPU feature matching issue detected: {line.strip()}")
             return
         
@@ -2786,8 +2903,32 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None):
                     update_stage_detail(project_id, 'feature_matching', text=f'Matching pairs: {current}/{total}', subtext=None)
                 return
     
+    def run_matching_command(command):
+        run_command_with_logs(project_id, command, line_handler=matching_line_handler)
+
+    def build_matching_cmd(max_num_matches, use_gpu):
+        rebuilt = [
+            colmap_exe,
+            matcher_cmd,
+            '--database_path', str(paths['database_path']),
+            '--FeatureMatching.max_num_matches', str(max_num_matches),
+            '--FeatureMatching.use_gpu', '1' if use_gpu else '0',
+        ]
+        for param, value in colmap_cfg['matcher_params'].items():
+            rebuilt.extend([f'--{param}', value])
+        return rebuilt
+
+    def retry_matching_on_cpu(reason):
+        retry_matches = get_cpu_retry_match_limit(colmap_cfg['max_num_matches'])
+        append_log_line(project_id, f"⚠️ {reason}")
+        append_log_line(project_id, f"🔄 Retrying with CPU-based matching (max_matches={retry_matches})...")
+        cpu_cmd = build_matching_cmd(retry_matches, False)
+        run_matching_command(cpu_cmd)
+        colmap_cfg['max_num_matches'] = retry_matches
+        append_log_line(project_id, "✅ CPU-based matching completed successfully")
+
     try:
-        run_command_with_logs(project_id, cmd, line_handler=matching_line_handler)
+        run_matching_command(cmd)
     except subprocess.CalledProcessError as e:
         error_text = str(e).lower()
         if use_gpu_matching and (
@@ -2796,23 +2937,20 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None):
             or 'cuda error' in error_text
             or 'cuda driver version is insufficient' in error_text
         ):
-            append_log_line(project_id, "⚠️ GPU feature matching failed; retrying on CPU")
-            append_log_line(project_id, f"🔄 Retrying with CPU-based matching (reduced max_matches={colmap_cfg['max_num_matches'] // 2})...")
-            
-            cmd_cpu = [
-                colmap_exe, matcher_cmd,
-                '--database_path', str(paths['database_path']),
-                '--FeatureMatching.max_num_matches', str(colmap_cfg['max_num_matches'] // 2),
-                '--FeatureMatching.use_gpu', '0'
-            ]
-            
-            for param, value in colmap_cfg['matcher_params'].items():
-                cmd_cpu.extend([f'--{param}', value])
-            
-            run_command_with_logs(project_id, cmd_cpu, line_handler=matching_line_handler)
-            append_log_line(project_id, "✅ CPU-based matching completed successfully")
+            retry_matching_on_cpu("GPU feature matching failed")
         else:
             raise
+
+    verified_pairs = count_verified_matching_pairs(paths['database_path'])
+    if use_gpu_matching and verified_pairs == 0 and matching_health['gpu_issue_detected']:
+        retry_matching_on_cpu(
+            "GPU feature matching produced 0 verified pairs after a matcher initialization failure"
+        )
+        verified_pairs = count_verified_matching_pairs(paths['database_path'])
+
+    if verified_pairs == 0:
+        append_log_line(project_id, "❌ COLMAP Feature Matching produced 0 verified pairs")
+        raise RuntimeError("COLMAP feature matching produced 0 verified pairs")
     
     update_state(project_id, 'feature_matching', status='completed', progress=100)
     current = matching_progress['current'] or matching_progress['total']
@@ -2828,10 +2966,20 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None):
     )
     sync_reconstruction_framework(project_id, config, colmap_cfg, phase='matching_complete')
     if total_pairs:
-        update_stage_detail(project_id, 'feature_matching', text=f'Matching pairs: {min(current, total_pairs)}/{total_pairs}', subtext='Feature matching complete')
+        update_stage_detail(
+            project_id,
+            'feature_matching',
+            text=f'Matching pairs: {min(current, total_pairs)}/{total_pairs}',
+            subtext=f'Feature matching complete ({verified_pairs} verified pairs)',
+        )
     else:
-        update_stage_detail(project_id, 'feature_matching', text='Feature matching complete', subtext=None)
-    append_log_line(project_id, "✅ COLMAP Feature Matching completed")
+        update_stage_detail(
+            project_id,
+            'feature_matching',
+            text='Feature matching complete',
+            subtext=f'{verified_pairs} verified pairs',
+        )
+    append_log_line(project_id, f"✅ COLMAP Feature Matching completed ({verified_pairs} verified pairs)")
     
     return colmap_cfg
 
@@ -3601,6 +3749,7 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
                             'resolution': training_resolution,
                             'quality': 100,  # Always max quality for training images
                             'use_gpu': config.get('use_gpu_extraction', True),
+                            'ffmpeg_cpu_workers': config.get('ffmpeg_cpu_workers', 4),
                             'replacement_search_radius': config.get('replacement_search_radius', 4),
                             'motion_threshold': config.get('motion_threshold', 0.15),
                             'blur_threshold': config.get('blur_threshold', 100)

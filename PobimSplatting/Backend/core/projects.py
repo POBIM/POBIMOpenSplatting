@@ -198,6 +198,25 @@ def append_log_line(project_id: str, message: str) -> None:
         _emit_log_message(project_id, message, timestamp)
 
 
+def get_full_log_lines(project_id: str) -> list[str]:
+    """Read the full persisted processing log for a project."""
+    with status_lock:
+        status = processing_status.get(project_id)
+        if not status:
+            return []
+        log_path = Path(status["log_file"])
+
+    if not log_path.exists():
+        return []
+
+    try:
+        with log_path.open("r", encoding="utf-8") as log_file:
+            return [line.rstrip("\n") for line in log_file]
+    except Exception as exc:
+        logger.error("Failed reading log for %s: %s", project_id, exc)
+        return []
+
+
 def initialize_project_entry(
     project_id: str,
     *,

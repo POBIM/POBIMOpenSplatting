@@ -411,6 +411,277 @@ class VideoProcessor:
         logger.info(f"✅ Extracted {len(extracted_frames)} matching frames at {resolution}")
         return extracted_frames
 
+    def _extract_frames_ffmpeg_cpu(self, video_path, output_dir, extraction_config, progress_callback=None):
+        """
+        CPU extraction with ffmpeg.
+
+        This is substantially faster than OpenCV for the common uniform sampling path
+        because ffmpeg can decode and JPEG-encode with its own threaded pipeline.
+        """
+        video_path = Path(video_path)
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        video_info = self._get_video_info_ffprobe(video_path)
+        if not video_info:
+            logger.warning("Could not get video info via ffprobe, falling back to OpenCV CPU extraction")
+            return self._extract_frames_cpu(video_path, output_dir, extraction_config, progress_callback)
+
+        total_frames = video_info['total_frames']
+        fps = video_info['fps']
+        width = video_info['width']
+        height = video_info['height']
+        duration = video_info['duration']
+
+        logger.info(f"FFmpeg CPU extraction: {total_frames} frames, {fps:.2f} fps, {duration:.2f}s, {width}x{height}")
+
+        mode = extraction_config.get('mode', 'frames')
+
+        resolution = extraction_config.get('resolution')
+        if not resolution:
+            quality_percent = extraction_config.get('quality', 100)
+            resolution = convert_legacy_quality_to_resolution(quality_percent)
+            logger.info(f"Using legacy quality {quality_percent}% → resolution preset: {resolution}")
+
+        target_width, target_height, jpeg_quality = get_target_dimensions(resolution, width, height)
+        logger.info(f"Target resolution: {target_width}x{target_height} ({resolution})")
+
+        if mode == 'fps':
+            target_fps = extraction_config.get('target_fps', 1.0)
+            expected_frames = max(1, int(duration * target_fps))
+            parallel_workers = int(extraction_config.get('ffmpeg_cpu_workers') or 0)
+            if parallel_workers <= 0:
+                cpu_count = os.cpu_count() or 4
+                auto_workers = max(1, cpu_count // 6)
+                parallel_workers = min(4, auto_workers)
+
+            # Parallel chunk extraction helps long HEVC videos use more CPU cores.
+            if parallel_workers > 1 and duration >= 45 and expected_frames >= 60:
+                logger.info(f"FFmpeg CPU parallel extraction enabled: {parallel_workers} workers")
+                try:
+                    return self._extract_frames_ffmpeg_cpu_parallel(
+                        video_path=video_path,
+                        output_dir=output_dir,
+                        extraction_config=extraction_config,
+                        progress_callback=progress_callback,
+                        duration=duration,
+                        width=width,
+                        height=height,
+                        target_width=target_width,
+                        target_height=target_height,
+                        jpeg_quality=jpeg_quality,
+                    )
+                except Exception as e:
+                    logger.warning(f"Parallel ffmpeg CPU extraction failed, falling back to single-process ffmpeg: {e}")
+            sampling_filter = f"fps={target_fps}"
+        else:
+            max_frames = extraction_config.get('max_frames', 100)
+            expected_frames = min(max_frames, total_frames)
+            if total_frames > max_frames:
+                select_interval = max(1, int(total_frames / max_frames))
+                sampling_filter = f"select='not(mod(n\\,{select_interval}))'"
+            else:
+                sampling_filter = None
+
+        filters = []
+        if sampling_filter:
+            filters.append(sampling_filter)
+        if target_width != width or target_height != height:
+            filters.append(f"scale={target_width}:{target_height}")
+
+        filter_chain = ','.join(filters) if filters else None
+        ffmpeg_quality = max(2, min(5, int(6 - (jpeg_quality / 100) * 4)))
+        output_pattern = str(output_dir / "frame_%06d.jpg")
+
+        cmd = [
+            'ffmpeg', '-y',
+            '-hide_banner',
+            '-loglevel', 'error',
+            '-threads', '0',
+            '-i', str(video_path),
+        ]
+
+        if filter_chain:
+            cmd.extend(['-vf', filter_chain])
+
+        cmd.extend([
+            '-an',
+            '-sn',
+            '-dn',
+            '-fps_mode', 'vfr',
+            '-qscale:v', str(ffmpeg_quality),
+            '-start_number', '0',
+            output_pattern,
+        ])
+
+        logger.info(f"FFmpeg CPU command: {' '.join(cmd)}")
+
+        try:
+            subprocess.run(
+                cmd,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception as e:
+            logger.error(f"FFmpeg CPU extraction failed: {e}")
+            logger.warning("Falling back to OpenCV CPU extraction")
+            return self._extract_frames_cpu(video_path, output_dir, extraction_config, progress_callback)
+
+        extracted_frames = sorted(str(f) for f in output_dir.glob("frame_*.jpg"))
+
+        if mode == 'frames':
+            max_frames = extraction_config.get('max_frames', 100)
+            if len(extracted_frames) > max_frames:
+                step = len(extracted_frames) / max_frames
+                indices = [int(i * step) for i in range(max_frames)]
+                frames_to_keep = [extracted_frames[i] for i in indices]
+
+                for frame_path in extracted_frames:
+                    if frame_path not in frames_to_keep:
+                        try:
+                            os.remove(frame_path)
+                        except Exception:
+                            pass
+
+                extracted_frames = frames_to_keep
+
+                for i, old_path in enumerate(extracted_frames):
+                    new_path = output_dir / f"frame_{i:06d}.jpg"
+                    if old_path != str(new_path):
+                        try:
+                            os.rename(old_path, new_path)
+                            extracted_frames[i] = str(new_path)
+                        except Exception:
+                            pass
+
+        self.last_extraction_stats = {
+            'strategy': 'ffmpeg_cpu',
+            'mode': mode,
+            'requested_targets': expected_frames,
+            'saved_frames': len(extracted_frames),
+            'replaced_targets': 0,
+            'search_radius': 0,
+            'rejected_candidates': 0,
+            'selections': [],
+        }
+
+        if progress_callback and extracted_frames:
+            progress_callback(len(extracted_frames), expected_frames, extracted_frames[-1])
+
+        logger.info(f"✅ FFmpeg CPU extraction complete: {len(extracted_frames)} frames")
+        return extracted_frames
+
+    def _extract_frames_ffmpeg_cpu_parallel(
+        self,
+        video_path,
+        output_dir,
+        extraction_config,
+        progress_callback,
+        duration,
+        width,
+        height,
+        target_width,
+        target_height,
+        jpeg_quality,
+    ):
+        target_fps = float(extraction_config.get('target_fps', 1.0) or 1.0)
+        expected_frames = max(1, int(duration * target_fps))
+        requested_workers = int(extraction_config.get('ffmpeg_cpu_workers') or 0)
+        cpu_count = os.cpu_count() or 4
+        if requested_workers <= 0:
+            requested_workers = min(4, max(1, cpu_count // 6))
+
+        chunk_count = min(requested_workers, max(1, int(duration // 20)))
+        if chunk_count <= 1:
+            raise ValueError("parallel extraction requested without enough chunks")
+
+        ffmpeg_quality = max(2, min(5, int(6 - (jpeg_quality / 100) * 4)))
+        scale_filter = None
+        if target_width != width or target_height != height:
+            scale_filter = f"scale={target_width}:{target_height}"
+
+        logger.info(f"Launching {chunk_count} parallel ffmpeg worker(s) for CPU extraction")
+
+        def run_chunk(chunk_index: int):
+            start_time = (duration * chunk_index) / chunk_count
+            end_time = (duration * (chunk_index + 1)) / chunk_count
+            chunk_duration = max(0.001, end_time - start_time)
+            chunk_dir = output_dir / f".chunk_{chunk_index:02d}"
+            chunk_dir.mkdir(parents=True, exist_ok=True)
+
+            filters = [f"fps={target_fps}"]
+            if scale_filter:
+                filters.append(scale_filter)
+
+            cmd = [
+                'ffmpeg', '-y',
+                '-hide_banner',
+                '-loglevel', 'error',
+                '-threads', '0',
+                '-ss', f"{start_time:.6f}",
+                '-t', f"{chunk_duration:.6f}",
+                '-i', str(video_path),
+                '-vf', ','.join(filters),
+                '-an',
+                '-sn',
+                '-dn',
+                '-fps_mode', 'vfr',
+                '-qscale:v', str(ffmpeg_quality),
+                '-start_number', '0',
+                str(chunk_dir / "frame_%06d.jpg"),
+            ]
+
+            subprocess.run(
+                cmd,
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+
+            frames = sorted(chunk_dir.glob("frame_*.jpg"))
+            return chunk_index, frames, chunk_dir
+
+        extracted_frames = []
+        chunk_dirs = []
+        merged_count = 0
+
+        with ThreadPoolExecutor(max_workers=chunk_count) as executor:
+            futures = [executor.submit(run_chunk, chunk_index) for chunk_index in range(chunk_count)]
+            results = []
+            for future in as_completed(futures):
+                results.append(future.result())
+
+        for chunk_index, frames, chunk_dir in sorted(results, key=lambda item: item[0]):
+            chunk_dirs.append(chunk_dir)
+            for frame_path in frames:
+                final_path = output_dir / f"frame_{merged_count:06d}.jpg"
+                os.replace(frame_path, final_path)
+                extracted_frames.append(str(final_path))
+                merged_count += 1
+                if progress_callback and (merged_count % 5 == 0 or merged_count == expected_frames):
+                    progress_callback(merged_count, expected_frames, str(final_path))
+
+        for chunk_dir in chunk_dirs:
+            try:
+                chunk_dir.rmdir()
+            except OSError:
+                pass
+
+        self.last_extraction_stats = {
+            'strategy': f'ffmpeg_cpu_parallel_{chunk_count}x',
+            'mode': 'fps',
+            'requested_targets': expected_frames,
+            'saved_frames': len(extracted_frames),
+            'replaced_targets': 0,
+            'search_radius': 0,
+            'rejected_candidates': 0,
+            'selections': [],
+        }
+
+        logger.info(f"✅ Parallel ffmpeg CPU extraction complete: {len(extracted_frames)} frames")
+        return extracted_frames
+
     def _extract_frames_gpu(self, video_path, output_dir, extraction_config, progress_callback=None):
         """
         GPU-accelerated frame extraction using FFmpeg with NVDEC.
@@ -433,16 +704,16 @@ class VideoProcessor:
         
         gpu_info = get_gpu_decode_info()
         if not gpu_info['available']:
-            logger.warning("GPU decode not available, falling back to CPU extraction")
-            return self._extract_frames_cpu(video_path, output_dir, extraction_config, progress_callback)
+            logger.warning("GPU decode not available, falling back to ffmpeg CPU extraction")
+            return self._extract_frames_ffmpeg_cpu(video_path, output_dir, extraction_config, progress_callback)
         
         logger.info(f"🚀 Using GPU-accelerated extraction ({gpu_info['method'].upper()})")
         
         # Get video info using ffprobe
         video_info = self._get_video_info_ffprobe(video_path)
         if not video_info:
-            logger.warning("Could not get video info via ffprobe, falling back to CPU")
-            return self._extract_frames_cpu(video_path, output_dir, extraction_config, progress_callback)
+            logger.warning("Could not get video info via ffprobe, falling back to ffmpeg CPU extraction")
+            return self._extract_frames_ffmpeg_cpu(video_path, output_dir, extraction_config, progress_callback)
         
         total_frames = video_info['total_frames']
         fps = video_info['fps']
@@ -563,13 +834,13 @@ class VideoProcessor:
             
             if process.returncode != 0:
                 logger.error(f"FFmpeg failed with return code {process.returncode}")
-                logger.warning("Falling back to CPU extraction")
-                return self._extract_frames_cpu(video_path, output_dir, extraction_config, progress_callback)
+                logger.warning("Falling back to ffmpeg CPU extraction")
+                return self._extract_frames_ffmpeg_cpu(video_path, output_dir, extraction_config, progress_callback)
             
         except Exception as e:
             logger.error(f"FFmpeg execution failed: {e}")
-            logger.warning("Falling back to CPU extraction")
-            return self._extract_frames_cpu(video_path, output_dir, extraction_config, progress_callback)
+            logger.warning("Falling back to ffmpeg CPU extraction")
+            return self._extract_frames_ffmpeg_cpu(video_path, output_dir, extraction_config, progress_callback)
         
         # Collect extracted frame paths
         extracted_frames = sorted([
@@ -892,12 +1163,16 @@ class VideoProcessor:
                     logger.info(f"   GPU: {gpu_info['gpu_name']}")
                 return self._extract_frames_gpu(video_path, output_dir, extraction_config, progress_callback)
             else:
-                logger.info("⚠️ GPU acceleration not available, using CPU extraction")
+                logger.info("⚠️ GPU acceleration not available, using ffmpeg CPU extraction")
                 for detail in gpu_info['details']:
                     logger.debug(f"   {detail}")
         else:
-            logger.info("🖥️ GPU acceleration disabled by config, using CPU extraction")
-        
+            logger.info("🖥️ GPU acceleration disabled by config, using ffmpeg CPU extraction")
+
+        if shutil.which('ffmpeg'):
+            return self._extract_frames_ffmpeg_cpu(video_path, output_dir, extraction_config, progress_callback)
+
+        logger.warning("FFmpeg not found, falling back to OpenCV CPU extraction")
         return self._extract_frames_cpu(video_path, output_dir, extraction_config, progress_callback)
 
     def get_last_extraction_stats(self) -> Dict[str, Any]:

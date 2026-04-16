@@ -221,9 +221,14 @@ export default function ProjectDetailPage() {
     min_num_matches: '',
     max_num_models: '',
     // Resolution settings
+    extraction_mode: '',
+    max_frames: '',
+    target_fps: '',
     colmap_resolution: '',
     training_resolution: '',
     use_separate_training_images: false,
+    smart_frame_selection: true,
+    oversample_factor: '',
     replacement_search_radius: '',
     ffmpeg_cpu_workers: '',
   });
@@ -237,9 +242,17 @@ export default function ProjectDetailPage() {
   const [loadingPlyFiles, setLoadingPlyFiles] = useState(false);
   const framework = project?.reconstruction_framework;
   const videoDiagnostics = project?.video_extraction_diagnostics;
+  const smartFrameSelectionEnabled = project?.config?.smart_frame_selection !== false;
+  const oversampleFactor = videoDiagnostics?.oversample_factor ?? project?.config?.oversample_factor ?? null;
+  const effectiveSearchWindow = videoDiagnostics?.search_radius ?? project?.config?.replacement_search_radius ?? null;
+  const extractionSummary = project?.config?.extraction_mode === 'fps'
+    ? `${project?.config?.target_fps ?? '--'} FPS`
+    : project?.config?.extraction_mode === 'target_count'
+      ? `${project?.config?.max_frames ?? '--'} target`
+      : `${project?.config?.max_frames ?? '--'} max`;
   const videoExtractionDetail = stageDetails['video_extraction'];
-  const videoExtractionFramesDone = videoExtractionDetail?.current_item ?? videoDiagnostics?.saved_frames ?? null;
-  const videoExtractionFramesTotal = videoExtractionDetail?.total_items ?? videoDiagnostics?.requested_targets ?? null;
+  const videoExtractionFramesDone = videoExtractionDetail?.current_item ?? videoDiagnostics?.candidate_count ?? videoDiagnostics?.saved_frames ?? null;
+  const videoExtractionFramesTotal = videoExtractionDetail?.total_items ?? videoDiagnostics?.candidate_count ?? videoDiagnostics?.requested_targets ?? null;
   const logGroups = groupLogsByStage(logs, stages);
 
   // Auto-expand the running stage
@@ -545,8 +558,21 @@ export default function ProjectDetailPage() {
 
       // Add parameters if retrying from video_extraction stage
       if (fromStage === 'video_extraction') {
+        if (retryParams.extraction_mode) {
+          params.extraction_mode = retryParams.extraction_mode;
+        }
+        if (retryParams.max_frames) {
+          params.max_frames = parseInt(retryParams.max_frames);
+        }
+        if (retryParams.target_fps) {
+          params.target_fps = parseFloat(retryParams.target_fps);
+        }
         if (retryParams.colmap_resolution) {
           params.colmap_resolution = retryParams.colmap_resolution;
+        }
+        params.smart_frame_selection = retryParams.smart_frame_selection;
+        if (retryParams.oversample_factor) {
+          params.oversample_factor = parseInt(retryParams.oversample_factor);
         }
         if (retryParams.replacement_search_radius) {
           params.replacement_search_radius = parseInt(retryParams.replacement_search_radius);
@@ -622,9 +648,14 @@ export default function ProjectDetailPage() {
         sequential_overlap: '',
         min_num_matches: '',
         max_num_models: '',
+        extraction_mode: '',
+        max_frames: '',
+        target_fps: '',
         colmap_resolution: '',
         training_resolution: '',
         use_separate_training_images: false,
+        smart_frame_selection: true,
+        oversample_factor: '',
         replacement_search_radius: '',
         ffmpeg_cpu_workers: '',
       });
@@ -679,9 +710,14 @@ export default function ProjectDetailPage() {
         sequential_overlap: '',
         min_num_matches: '',
         max_num_models: '',
+        extraction_mode: project?.config?.extraction_mode || '',
+        max_frames: project?.config?.max_frames?.toString() || '',
+        target_fps: project?.config?.target_fps?.toString() || '',
         colmap_resolution: '',
         training_resolution: '',
         use_separate_training_images: false,
+        smart_frame_selection: project?.config?.smart_frame_selection !== false,
+        oversample_factor: project?.config?.oversample_factor?.toString() || '',
         replacement_search_radius: project?.config?.replacement_search_radius?.toString() || '',
         ffmpeg_cpu_workers: project?.config?.ffmpeg_cpu_workers?.toString() || '',
       });
@@ -1034,15 +1070,19 @@ export default function ProjectDetailPage() {
                     <div>
                       <h3 className="text-sm font-medium text-black">Video Extraction Diagnostics</h3>
                       <p className="text-sm text-gray-500 mt-1">
-                        Smart neighbor replacement summary stored with the project for later review.
+                        Oversample-and-select summary stored with the project for later review.
                       </p>
                     </div>
                     <span className="inline-flex items-center rounded-full border border-amber-200 px-3 py-1 text-xs font-medium text-amber-900 bg-white">
-                      radius ±{videoDiagnostics.search_radius ?? project?.config?.replacement_search_radius ?? '--'}
+                      effective window ±{effectiveSearchWindow ?? '--'}
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-5">
+                  <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-5">
+                    <div className="rounded-xl border border-gray-200 bg-white p-4">
+                      <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Candidates</p>
+                      <p className="text-sm font-medium text-black">{videoDiagnostics.candidate_count ?? '--'}</p>
+                    </div>
                     <div className="rounded-xl border border-gray-200 bg-white p-4">
                       <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Targets</p>
                       <p className="text-sm font-medium text-black">{videoDiagnostics.requested_targets ?? '--'}</p>
@@ -1096,11 +1136,11 @@ export default function ProjectDetailPage() {
                       </p>
                     </div>
                     <span className="inline-flex items-center rounded-full border border-sky-200 px-3 py-1 text-xs font-medium text-sky-900 bg-white">
-                      workers {project?.config?.ffmpeg_cpu_workers ?? '--'}
+                      {smartFrameSelectionEnabled ? `effective window ±${effectiveSearchWindow ?? '--'}` : 'oversample off'}
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-5">
+                  <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-5">
                     <div className="rounded-xl border border-gray-200 bg-white p-4">
                       <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Extracted</p>
                       <p className="text-sm font-medium text-black">{videoExtractionFramesDone ?? '--'}</p>
@@ -1115,11 +1155,11 @@ export default function ProjectDetailPage() {
                     </div>
                     <div className="rounded-xl border border-gray-200 bg-white p-4">
                       <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Sampling</p>
-                      <p className="text-sm font-medium text-black">
-                        {project?.config?.extraction_mode === 'fps'
-                          ? `${project?.config?.target_fps ?? '--'} FPS`
-                          : `${project?.config?.max_frames ?? '--'} max`}
-                      </p>
+                      <p className="text-sm font-medium text-black">{extractionSummary}</p>
+                    </div>
+                    <div className="rounded-xl border border-gray-200 bg-white p-4">
+                      <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Oversample Factor</p>
+                      <p className="text-sm font-medium text-black">{smartFrameSelectionEnabled ? `${oversampleFactor ?? '--'}x` : 'Disabled'}</p>
                     </div>
                   </div>
 
@@ -1686,6 +1726,56 @@ export default function ProjectDetailPage() {
                 <div className="space-y-3">
                   <div>
                     <label className="block text-xs font-medium text-gray-700 mb-1">
+                      Extraction Mode
+                    </label>
+                    <select
+                      value={retryParams.extraction_mode}
+                      onChange={(e) => setRetryParams({...retryParams, extraction_mode: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                    >
+                      <option value="">ใช้ค่าเดิม</option>
+                      <option value="fps">Target FPS</option>
+                      <option value="target_count">Target Frame Count</option>
+                      <option value="frames">Legacy Max Frame Limit</option>
+                    </select>
+                  </div>
+
+                  {retryParams.extraction_mode === 'fps' && (
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                        Target FPS
+                      </label>
+                      <input
+                        type="number"
+                        min="0.1"
+                        step="0.1"
+                        value={retryParams.target_fps}
+                        onChange={(e) => setRetryParams({...retryParams, target_fps: e.target.value})}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                        placeholder="เช่น 1 / 2 / 5"
+                      />
+                    </div>
+                  )}
+
+                  {(retryParams.extraction_mode === 'target_count' || retryParams.extraction_mode === 'frames') && (
+                    <div>
+                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                        {retryParams.extraction_mode === 'target_count' ? 'Target Frame Count' : 'Maximum Frames'}
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={retryParams.max_frames}
+                        onChange={(e) => setRetryParams({...retryParams, max_frames: e.target.value})}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                        placeholder={retryParams.extraction_mode === 'target_count' ? 'เช่น 150 / 200 / 300' : 'เช่น 100 / 200 / 500'}
+                      />
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">
                       COLMAP Resolution (สำหรับ Pose Estimation)
                     </label>
                     <select
@@ -1705,12 +1795,47 @@ export default function ProjectDetailPage() {
 
                   <div>
                     <label className="block text-xs font-medium text-gray-700 mb-1">
-                      Smart Replacement Radius
+                      Oversample And Select
+                    </label>
+                    <label className="flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700">
+                      <input
+                        type="checkbox"
+                        checked={retryParams.smart_frame_selection}
+                        onChange={(e) => setRetryParams({...retryParams, smart_frame_selection: e.target.checked})}
+                        className="h-4 w-4 rounded border-gray-300 text-black focus:ring-black"
+                      />
+                      <span>ถอด candidate ให้ถี่ขึ้นก่อน แล้วคัดกลับให้เหลือเฉพาะเฟรมที่คมที่สุดตาม FPS เป้าหมาย</span>
+                    </label>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                      Oversample Factor
+                    </label>
+                    <select
+                      value={retryParams.oversample_factor}
+                      onChange={(e) => setRetryParams({...retryParams, oversample_factor: e.target.value})}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                      disabled={!retryParams.smart_frame_selection}
+                    >
+                      <option value="">ใช้ค่าเดิม</option>
+                      <option value="5">5x</option>
+                      <option value="10">10x - Recommended</option>
+                      <option value="15">15x</option>
+                      <option value="20">20x</option>
+                    </select>
+                    <p className="text-xs text-gray-400 mt-1">ยิ่งค่าสูง ระบบจะถอด candidate มากขึ้นก่อนคัดกลับ แต่จะใช้เวลาและพื้นที่ชั่วคราวมากขึ้น</p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                      Minimum Search Radius
                     </label>
                     <select
                       value={retryParams.replacement_search_radius}
                       onChange={(e) => setRetryParams({...retryParams, replacement_search_radius: e.target.value})}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                      disabled={!retryParams.smart_frame_selection}
                     >
                       <option value="">ใช้ค่าเดิม</option>
                       <option value="2">±2 frames</option>
@@ -1719,7 +1844,7 @@ export default function ProjectDetailPage() {
                       <option value="8">±8 frames</option>
                       <option value="12">±12 frames</option>
                     </select>
-                    <p className="text-xs text-gray-400 mt-1">ขยายช่วงค้นหาเฟรมรอบ target เพื่อแทนเฟรมเบลอด้วยเฟรมที่คมกว่า</p>
+                    <p className="text-xs text-gray-400 mt-1">ใช้เป็นค่าขั้นต่ำของช่วงค้นหา และ backend จะขยายเพิ่มตาม spacing จริงเมื่อจำเป็น</p>
                   </div>
 
                   <div>

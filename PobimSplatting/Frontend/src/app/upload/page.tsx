@@ -32,6 +32,8 @@ export default function UploadPage() {
     target_fps: 2.0,
     quality: 100,  // Legacy - kept for backward compatibility
     preview_count: 10,
+    smart_frame_selection: true,
+    oversample_factor: 10,
     replacement_search_radius: 4,
     ffmpeg_cpu_workers: 4,
     sfm_engine: 'glomap',  // Legacy alias kept for backend compatibility; UI shows COLMAP Global SfM
@@ -238,6 +240,14 @@ export default function UploadPage() {
   const hasImages = files.some(file => file.type.startsWith('image/'));
   const totalSize = files.reduce((sum, file) => sum + file.size, 0);
   const inputProfile = hasVideo && hasImages ? 'mixed' : hasVideo ? 'video' : hasImages ? 'images' : 'unknown';
+  const estimatedSearchWindow =
+    config.extraction_mode === 'fps' && config.target_fps > 0
+      ? `up to ±${Math.max(config.replacement_search_radius, Math.round(30 / config.target_fps))} frames`
+      : `at least ±${config.replacement_search_radius} frames`;
+  const estimatedCandidatePool =
+    config.extraction_mode === 'fps'
+      ? `${config.target_fps * config.oversample_factor} FPS candidate pass`
+      : `${config.max_frames * config.oversample_factor} candidates before pruning`;
   const largeImageSet = inputProfile === 'images' && files.length >= 300;
   const matcherRecommendation = hardModeForcesExhaustive
     ? 'Hard mode locks the first pass to Exhaustive so the backend maximizes pair coverage before a later training retry. Global SfM is the default fit for unordered photos, Sequential is better for ordered captures, and Vocabulary Tree is the experimental scale-up path for larger unordered sets.'
@@ -379,7 +389,7 @@ export default function UploadPage() {
       }
     }
 
-    if (hasVideo && config.extraction_mode === 'frames') {
+    if (hasVideo && (config.extraction_mode === 'frames' || config.extraction_mode === 'target_count')) {
       if (config.max_frames >= 400) {
         score -= 7;
         reasons.push(`high frame count: ${config.max_frames}`);
@@ -508,14 +518,14 @@ export default function UploadPage() {
       });
     }
 
-    if (hasVideo && config.extraction_mode === 'frames' && config.max_frames >= 400) {
+    if (hasVideo && (config.extraction_mode === 'frames' || config.extraction_mode === 'target_count') && config.max_frames >= 400) {
       rules.push({
         level: 'warning',
         text: `Maximum frames is ${config.max_frames}. This is dense enough to create redundancy and heavier matching load.`,
       });
     }
 
-    if (hasVideo && config.extraction_mode === 'frames' && config.max_frames < 80) {
+    if (hasVideo && (config.extraction_mode === 'frames' || config.extraction_mode === 'target_count') && config.max_frames < 80) {
       rules.push({
         level: 'warning',
         text: `Maximum frames is only ${config.max_frames}. Sparse frame coverage may make loop closure and bridge recovery harder.`,
@@ -814,6 +824,9 @@ export default function UploadPage() {
                     {hasVideo && config.extraction_mode === 'fps' && (
                       <span className="rounded-full border border-gray-200 bg-white px-3 py-1">target fps: {config.target_fps}</span>
                     )}
+                    {hasVideo && config.extraction_mode === 'target_count' && (
+                      <span className="rounded-full border border-gray-200 bg-white px-3 py-1">target frames: {config.max_frames}</span>
+                    )}
                     {hasVideo && config.extraction_mode === 'frames' && (
                       <span className="rounded-full border border-gray-200 bg-white px-3 py-1">max frames: {config.max_frames}</span>
                     )}
@@ -825,6 +838,11 @@ export default function UploadPage() {
                     {hasVideo && (
                       <span className="rounded-full border border-gray-200 bg-white px-3 py-1">
                         chunk workers: {config.ffmpeg_cpu_workers}
+                      </span>
+                    )}
+                    {hasVideo && (
+                      <span className="rounded-full border border-gray-200 bg-white px-3 py-1">
+                        oversample mode: {config.smart_frame_selection ? `${config.oversample_factor}x` : 'off'}
                       </span>
                     )}
                   </div>
@@ -1255,24 +1273,38 @@ export default function UploadPage() {
                             onChange={(e) => setConfig({ ...config, extraction_mode: e.target.value })}
                             className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                           >
-                            <option value="frames">Fixed Frame Count</option>
                             <option value="fps">Target FPS</option>
+                            <option value="target_count">Target Frame Count</option>
+                            <option value="frames">Legacy Max Frame Limit</option>
                           </select>
                         </div>
                         <div>
                           {config.extraction_mode === 'frames' ? (
                             <div>
                               <label className="block text-sm font-medium text-gray-700 mb-2">Maximum Frames</label>
-                              <select
+                              <input
+                                type="number"
                                 value={config.max_frames}
-                                onChange={(e) => setConfig({ ...config, max_frames: parseInt(e.target.value) })}
+                                onChange={(e) => setConfig({ ...config, max_frames: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+                                min="1"
+                                step="1"
                                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                              >
-                                <option value={50}>50 frames (Quick)</option>
-                                <option value={100}>100 frames (Standard)</option>
-                                <option value={200}>200 frames (Detailed)</option>
-                                <option value={500}>500 frames (High quality)</option>
-                              </select>
+                              />
+                              <p className="mt-1 text-xs text-gray-500">โหมดเดิม: จำกัดจำนวนภาพสูงสุด แล้ว backend อาจตัดทอนเพิ่มเติมภายหลัง</p>
+                            </div>
+                          ) : config.extraction_mode === 'target_count' ? (
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700 mb-2">Target Frame Count</label>
+                              <input
+                                type="number"
+                                value={config.max_frames}
+                                onChange={(e) => setConfig({ ...config, max_frames: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+                                min="1"
+                                step="1"
+                                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                placeholder="เช่น 150 / 200 / 300"
+                              />
+                              <p className="mt-1 text-xs text-gray-500">ระบบจะคำนวณ spacing ตามความยาววิดีโอให้เอง แต่คงจำนวนภาพปลายทางให้ตรงเลขนี้แบบ FPS-style</p>
                             </div>
                           ) : (
                             <div>
@@ -1314,6 +1346,27 @@ export default function UploadPage() {
                         </label>
                       </div>
                       <div className="mt-3">
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Oversample And Select</label>
+                        <label className="flex items-center justify-between cursor-pointer rounded-lg border border-sky-200 bg-gradient-to-r from-sky-50 to-cyan-50 p-3">
+                          <div className="flex items-center">
+                            <Image className="h-5 w-5 text-sky-600 mr-2" />
+                            <div>
+                              <span className="font-medium text-gray-900">Keep sharper frames after dense extraction</span>
+                              <p className="text-xs text-gray-600">Extract a denser candidate pool first, then keep the sharpest frames at the requested FPS/count</p>
+                            </div>
+                          </div>
+                          <div className="relative">
+                            <input
+                              type="checkbox"
+                              checked={config.smart_frame_selection}
+                              onChange={(e) => setConfig({ ...config, smart_frame_selection: e.target.checked })}
+                              className="sr-only peer"
+                            />
+                            <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:bg-sky-500 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+                          </div>
+                        </label>
+                      </div>
+                      <div className="mt-3">
                         <label className="block text-sm font-medium text-gray-700 mb-2">CPU Chunk Workers</label>
                         <select
                           value={config.ffmpeg_cpu_workers}
@@ -1329,11 +1382,29 @@ export default function UploadPage() {
                         </p>
                       </div>
                       <div className="mt-3">
-                        <label className="block text-sm font-medium text-gray-700 mb-2">Smart Replacement Radius</label>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Oversample Factor</label>
+                        <select
+                          value={config.oversample_factor}
+                          onChange={(e) => setConfig({ ...config, oversample_factor: parseInt(e.target.value, 10) || 10 })}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                          disabled={!config.smart_frame_selection}
+                        >
+                          <option value={5}>5x</option>
+                          <option value={10}>10x - Recommended</option>
+                          <option value={15}>15x</option>
+                          <option value={20}>20x</option>
+                        </select>
+                        <p className="mt-1 text-xs text-gray-500">
+                          ถ้าเปิดโหมดนี้ ระบบจะถอด candidate ให้ถี่ขึ้นก่อนประมาณ {estimatedCandidatePool} แล้วค่อยคัดกลับให้เหลือเท่าค่าเป้าหมาย
+                        </p>
+                      </div>
+                      <div className="mt-3">
+                        <label className="block text-sm font-medium text-gray-700 mb-2">Minimum Search Radius</label>
                         <select
                           value={config.replacement_search_radius}
                           onChange={(e) => setConfig({ ...config, replacement_search_radius: parseInt(e.target.value) || 4 })}
                           className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                          disabled={!config.smart_frame_selection}
                         >
                           <option value={2}>±2 frames</option>
                           <option value={4}>±4 frames - Recommended</option>
@@ -1342,7 +1413,7 @@ export default function UploadPage() {
                           <option value={12}>±12 frames</option>
                         </select>
                         <p className="mt-1 text-xs text-gray-500">
-                          ถ้าเฟรมเป้าหมายเบลอ ระบบจะค้นหาเฟรมข้างเคียงในช่วงนี้เพื่อแทนที่ด้วยภาพที่คมกว่า
+                          ใช้เป็นค่าขั้นต่ำของช่วงค้นหา และ backend จะขยายเพิ่มตาม spacing จริงเมื่อจำเป็น ตอนนี้คาดว่าจะค้นหา {estimatedSearchWindow}
                         </p>
                       </div>
                     </div>

@@ -44,6 +44,8 @@ export interface Project {
   camera_model?: string;
   thumbnail_url?: string;
   config?: {
+    smart_frame_selection?: boolean;
+    oversample_factor?: number;
     sfm_engine?: 'glomap' | 'global' | 'global_mapper' | 'colmap' | 'fastmap';
     sfm_backend?: 'cli' | 'pycolmap' | string;
     feature_method?: 'sift' | 'aliked' | 'superpoint';
@@ -110,19 +112,25 @@ export interface VideoExtractionSelection {
 export interface VideoExtractionDiagnostics {
   strategy?: string;
   mode?: string;
+  candidate_count?: number;
   requested_targets?: number;
   saved_frames?: number;
   replaced_targets?: number;
   search_radius?: number;
   rejected_candidates?: number;
+  oversample_factor?: number;
+  scoring_workers?: number;
   selections?: VideoExtractionSelection[];
   videos?: Array<{
     filename?: string;
+    candidate_count?: number;
     requested_targets?: number;
     saved_frames?: number;
     replaced_targets?: number;
     search_radius?: number;
     rejected_candidates?: number;
+    oversample_factor?: number;
+    scoring_workers?: number;
     selections?: VideoExtractionSelection[];
   }>;
 }
@@ -158,6 +166,8 @@ export interface UploadConfig {
   target_fps?: number;
   quality?: number;
   preview_count?: number;
+  smart_frame_selection?: boolean;
+  oversample_factor?: number;
   replacement_search_radius?: number;
   ffmpeg_cpu_workers?: number;
   custom_params?: any;
@@ -306,6 +316,8 @@ export const api = {
     if (config.target_fps) formData.append('target_fps', config.target_fps.toString());
     if (config.quality !== undefined) formData.append('quality', config.quality.toString());
     if (config.preview_count) formData.append('preview_count', config.preview_count.toString());
+    if (config.smart_frame_selection !== undefined) formData.append('smart_frame_selection', config.smart_frame_selection.toString());
+    if (config.oversample_factor !== undefined) formData.append('oversample_factor', config.oversample_factor.toString());
     if (config.replacement_search_radius !== undefined) formData.append('replacement_search_radius', config.replacement_search_radius.toString());
     if (config.ffmpeg_cpu_workers !== undefined) formData.append('ffmpeg_cpu_workers', config.ffmpeg_cpu_workers.toString());
     if (config.vram_size !== undefined) formData.append('vram_size', config.vram_size.toString());

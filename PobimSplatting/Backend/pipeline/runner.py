@@ -644,7 +644,7 @@ def estimate_preview_image_count(config, media_summary):
         return max(image_count, 0)
 
     extraction_mode = str(config.get('extraction_mode', 'fps')).lower()
-    if extraction_mode == 'frames':
+    if extraction_mode in {'frames', 'target_count'}:
         per_video = max(24, int(config.get('max_frames') or 100))
     else:
         try:
@@ -739,7 +739,7 @@ def build_upload_policy_preview(config, media_summary):
         elif 0 < target_fps < 1:
             score -= 6
             add_signal('sparse-fps', 'Sparse sampling', -6, f'{target_fps} fps may weaken bridge geometry across the orbit')
-    elif input_profile in {'video', 'mixed'} and extraction_mode == 'frames':
+    elif input_profile in {'video', 'mixed'} and extraction_mode in {'frames', 'target_count'}:
         max_frames = int(preview_config.get('max_frames') or 100)
         if max_frames >= 400:
             score -= 7
@@ -812,7 +812,7 @@ def build_upload_policy_preview(config, media_summary):
             add_rule('warning', f'Target FPS is set to {target_fps}. Very dense sampling can add near-duplicate frames and reduce policy confidence.')
         elif 0 < target_fps < 1:
             add_rule('warning', f'Target FPS is {target_fps}. Sparse sampling may weaken bridge geometry across the orbit.')
-    if input_profile in {'video', 'mixed'} and extraction_mode == 'frames':
+    if input_profile in {'video', 'mixed'} and extraction_mode in {'frames', 'target_count'}:
         max_frames = int(preview_config.get('max_frames') or 100)
         if max_frames >= 400:
             add_rule('warning', f'Maximum frames is {max_frames}. This is dense enough to create redundancy and heavier matching load.')
@@ -1414,11 +1414,29 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
                     'mode': config.get('extraction_mode', 'frames'),
                     'max_frames': config.get('max_frames', 100),
                     'target_fps': config.get('target_fps', 1.0),
+                    'smart_frame_selection': config.get('smart_frame_selection', True),
+                    'oversample_factor': config.get('oversample_factor', 10),
                 }
-                expected_frames_by_video = [
-                    video_processor.estimate_frame_count(video_path, base_estimate_config)
-                    for video_path in video_files
-                ]
+                expected_frames_by_video = []
+                for video_path in video_files:
+                    video_info = video_processor.get_video_info(video_path)
+                    if video_info:
+                        sampling_plan = video_processor._build_sampling_plan(
+                            video_info['total_frames'],
+                            video_info['fps'],
+                            base_estimate_config,
+                        )
+                        expected_frames_by_video.append(
+                            int(
+                                sampling_plan['candidate_count']
+                                if sampling_plan['smart_selection']
+                                else sampling_plan['target_output_count']
+                            )
+                        )
+                    else:
+                        expected_frames_by_video.append(
+                            video_processor.estimate_frame_count(video_path, base_estimate_config)
+                        )
                 total_expected_frames = max(1, sum(expected_frames_by_video))
                 
                 for i, video_path in enumerate(video_files):
@@ -1434,6 +1452,8 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
                         'mode': config.get('extraction_mode', 'frames'),
                         'preview_count': config.get('preview_count', 10),
                         'use_gpu': config.get('use_gpu_extraction', True),
+                        'smart_frame_selection': config.get('smart_frame_selection', True),
+                        'oversample_factor': config.get('oversample_factor', 10),
                         'replacement_search_radius': config.get('replacement_search_radius', 4),
                         'ffmpeg_cpu_workers': config.get('ffmpeg_cpu_workers', 4),
                     }
@@ -1459,26 +1479,103 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
                         frames_from_prev_videos = sum(expected_frames_by_video[:i])
                         overall_frames = frames_from_prev_videos + current_frame
                         overall_progress = int((overall_frames / total_expected_frames) * 100)
+                        progress_label = (
+                            'Candidate'
+                            if extraction_config.get('smart_frame_selection', False)
+                            else 'Frame'
+                        )
                         
                         # Update progress every 5 frames to avoid excessive updates
                         if current_frame % 5 == 0 or current_frame == expected_total:
                             emit_stage_progress(project_id, 'video_extraction', min(overall_progress, 99), {
-                                'text': f'Video {i + 1}/{total_videos}: Frame {current_frame}/{expected_total}',
+                                'text': f'Video {i + 1}/{total_videos}: {progress_label} {current_frame}/{expected_total}',
                                 'current_item': overall_frames,
                                 'total_items': total_expected_frames,
-                                'item_name': f'Frame {current_frame}'
+                                'item_name': f'{progress_label} {current_frame}'
                             })
                             update_stage_detail(
                                 project_id,
                                 'video_extraction',
-                                text=f'Video {i + 1}/{total_videos}: Frame {current_frame}/{expected_total}',
-                                subtext=f'Total extracted: {frames_from_prev_videos + current_frame}'
+                                text=f'Video {i + 1}/{total_videos}: {progress_label} {current_frame}/{expected_total}',
+                                subtext=(
+                                    f"Total candidates extracted: {frames_from_prev_videos + current_frame}"
+                                    if extraction_config.get('smart_frame_selection', False)
+                                    else f'Total extracted: {frames_from_prev_videos + current_frame}'
+                                )
+                            )
+
+                    def extraction_status_callback(event, payload):
+                        payload = payload or {}
+                        if event == 'candidate_scoring_start':
+                            append_log_line(
+                                project_id,
+                                "🧠 Scoring oversampled frame candidates before pruning to the requested output rate "
+                                f"(radius=±{payload.get('search_radius', 0)})",
+                            )
+                            update_stage_detail(
+                                project_id,
+                                'video_extraction',
+                                text=f'Video {i + 1}/{total_videos}: Scoring oversampled frame candidates',
+                                subtext=(
+                                    f"Scoring {payload.get('total', '--')} candidates "
+                                    f"for {payload.get('target_count', '--')} targets"
+                                ),
+                            )
+                        elif event == 'candidate_scoring_progress':
+                            current = int(payload.get('current', 0) or 0)
+                            total = int(payload.get('total', 0) or 0)
+                            if total > 0:
+                                emit_stage_progress(project_id, 'video_extraction', 99, {
+                                    'text': f'Video {i + 1}/{total_videos}: Scoring oversampled candidates {current}/{total}',
+                                    'current_item': current,
+                                    'total_items': total,
+                                    'item_name': 'Candidate scoring',
+                                })
+                                update_stage_detail(
+                                    project_id,
+                                    'video_extraction',
+                                    text=f'Video {i + 1}/{total_videos}: Scoring oversampled candidates {current}/{total}',
+                                    subtext=(
+                                        f"Effective window ±{payload.get('search_radius', '--')} · "
+                                        f"targets {payload.get('target_count', '--')}"
+                                    ),
+                                )
+                        elif event == 'candidate_selection_start':
+                            append_log_line(project_id, "🧠 Selecting the best frames from each temporal bucket")
+                        elif event == 'candidate_selection_progress':
+                            current = int(payload.get('current', 0) or 0)
+                            total = int(payload.get('total', 0) or 0)
+                            emit_stage_progress(project_id, 'video_extraction', 99, {
+                                'text': f'Video {i + 1}/{total_videos}: Keeping best frames {current}/{total}',
+                                'current_item': current,
+                                'total_items': total,
+                                'item_name': 'Best-frame pruning',
+                            })
+                            update_stage_detail(
+                                project_id,
+                                'video_extraction',
+                                text=f'Video {i + 1}/{total_videos}: Keeping best frames {current}/{total}',
+                                subtext=(
+                                    f"Buckets improved: {payload.get('replaced', 0)} · "
+                                    f"effective window ±{payload.get('search_radius', '--')}"
+                                ),
+                            )
+                        elif event == 'candidate_selection_complete':
+                            append_log_line(
+                                project_id,
+                                "🧠 Oversample-and-select complete: "
+                                f"replaced={payload.get('replaced', 0)} | "
+                                f"radius=±{payload.get('search_radius', '--')} | "
+                                f"rejected={payload.get('rejected_candidates', 0)}",
                             )
 
                     extracted = video_processor.extract_frames(
                         video_path,
                         paths['images_path'],
-                        extraction_config=extraction_config,
+                        extraction_config={
+                            **extraction_config,
+                            'status_callback': extraction_status_callback,
+                        },
                         progress_callback=frame_progress_callback
                     )
 
@@ -1497,11 +1594,14 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
                                     'strategy': extraction_stats.get('strategy'),
                                     'mode': extraction_stats.get('mode'),
                                     'search_radius': extraction_stats.get('search_radius'),
+                                    'oversample_factor': extraction_stats.get('oversample_factor'),
                                     'videos': [],
                                 })
                                 diagnostics['strategy'] = extraction_stats.get('strategy')
                                 diagnostics['mode'] = extraction_stats.get('mode')
                                 diagnostics['search_radius'] = extraction_stats.get('search_radius')
+                                diagnostics['oversample_factor'] = extraction_stats.get('oversample_factor')
+                                diagnostics['candidate_count'] = diagnostics.get('candidate_count', 0) + extraction_stats.get('candidate_count', 0)
                                 diagnostics['requested_targets'] = diagnostics.get('requested_targets', 0) + extraction_stats.get('requested_targets', 0)
                                 diagnostics['saved_frames'] = diagnostics.get('saved_frames', 0) + extraction_stats.get('saved_frames', 0)
                                 diagnostics['replaced_targets'] = diagnostics.get('replaced_targets', 0) + extraction_stats.get('replaced_targets', 0)
@@ -1513,10 +1613,12 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
                         append_log_line(
                             project_id,
                             "🧠 Smart frame selection: "
+                            f"candidates={extraction_stats.get('candidate_count', 0)} | "
                             f"targets={extraction_stats.get('requested_targets', 0)} | "
                             f"saved={extraction_stats.get('saved_frames', 0)} | "
                             f"replaced={extraction_stats.get('replaced_targets', 0)} | "
-                            f"radius=±{extraction_stats.get('search_radius', 0)}",
+                            f"oversample={extraction_stats.get('oversample_factor', '--')}x | "
+                            f"window=±{extraction_stats.get('search_radius', 0)}",
                         )
                         for selection in extraction_stats.get('selections', []):
                             offset = int(selection.get('offset', 0))

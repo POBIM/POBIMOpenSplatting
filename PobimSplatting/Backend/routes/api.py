@@ -567,11 +567,13 @@ def upload_policy_preview():
         "sfm_backend": payload.get("sfm_backend", "cli"),
         "fast_sfm": parse_bool(payload.get("fast_sfm"), False),
         "feature_method": payload.get("feature_method", "sift"),
-        "extraction_mode": payload.get("extraction_mode", "frames"),
+        "extraction_mode": payload.get("extraction_mode", "fps"),
         "max_frames": parse_int(payload.get("max_frames"), 100),
         "target_fps": parse_float(payload.get("target_fps"), 1.0),
         "quality": parse_int(payload.get("quality"), 100),
         "preview_count": parse_int(payload.get("preview_count"), 10),
+        "smart_frame_selection": parse_bool(payload.get("smart_frame_selection"), True),
+        "oversample_factor": parse_int(payload.get("oversample_factor"), 10),
         "replacement_search_radius": parse_int(payload.get("replacement_search_radius"), 4),
         "ffmpeg_cpu_workers": parse_int(payload.get("ffmpeg_cpu_workers"), 4),
         "use_gpu_extraction": parse_bool(payload.get("use_gpu_extraction"), True),
@@ -702,7 +704,7 @@ def upload_files():
         "feature_method": request.form.get("feature_method", "sift"),
         # Frame extraction configuration for videos
         "extraction_mode": request.form.get(
-            "extraction_mode", "frames"
+            "extraction_mode", "fps"
         ),  # 'frames' or 'fps'
         "max_frames": int(request.form.get("max_frames", 100)),
         "target_fps": float(request.form.get("target_fps", 1.0)),
@@ -710,6 +712,9 @@ def upload_files():
             request.form.get("quality", 100)
         ),  # Legacy - kept for backward compatibility
         "preview_count": int(request.form.get("preview_count", 10)),
+        "smart_frame_selection": request.form.get("smart_frame_selection", "true").lower()
+        == "true",
+        "oversample_factor": int(request.form.get("oversample_factor", 10)),
         "replacement_search_radius": int(request.form.get("replacement_search_radius", 4)),
         "ffmpeg_cpu_workers": int(request.form.get("ffmpeg_cpu_workers", 4)),
         # GPU acceleration for video frame extraction (5-10x faster)
@@ -829,12 +834,17 @@ def upload_files():
         if config["extraction_mode"] == "fps":
             append_log_line(
                 project_id,
-                f"Frame extraction: {config['target_fps']} FPS, workers={config['ffmpeg_cpu_workers']}, quality={config['quality']}%",
+                f"Frame extraction: {config['target_fps']} FPS, oversample={config.get('oversample_factor', 10)}x, workers={config['ffmpeg_cpu_workers']}, quality={config['quality']}%",
+            )
+        elif config["extraction_mode"] == "target_count":
+            append_log_line(
+                project_id,
+                f"Frame extraction: exact {config['max_frames']} frames with FPS-style spacing, oversample={config.get('oversample_factor', 10)}x, workers={config['ffmpeg_cpu_workers']}, quality={config['quality']}%",
             )
         else:
             append_log_line(
                 project_id,
-                f"Frame extraction: max {config['max_frames']} frames, workers={config['ffmpeg_cpu_workers']}, quality={config['quality']}%",
+                f"Frame extraction: max {config['max_frames']} frames, oversample={config.get('oversample_factor', 10)}x, workers={config['ffmpeg_cpu_workers']}, quality={config['quality']}%",
             )
 
     # Start background processing
@@ -1357,9 +1367,14 @@ def retry_project(project_id):
 
             # Update resolution settings if provided
             for param_key in [
+                "extraction_mode",
+                "max_frames",
+                "target_fps",
                 "colmap_resolution",
                 "training_resolution",
                 "use_separate_training_images",
+                "smart_frame_selection",
+                "oversample_factor",
                 "replacement_search_radius",
                 "ffmpeg_cpu_workers",
             ]:

@@ -470,6 +470,7 @@ class VideoProcessor:
         logger.info(f"FFmpeg CPU extraction: {total_frames} frames, {fps:.2f} fps, {duration:.2f}s, {width}x{height}")
 
         mode = extraction_config.get('mode', 'frames')
+        sampling_plan = self._build_sampling_plan(total_frames, fps, extraction_config)
 
         resolution = extraction_config.get('resolution')
         if not resolution:
@@ -480,9 +481,8 @@ class VideoProcessor:
         target_width, target_height, jpeg_quality = get_target_dimensions(resolution, width, height)
         logger.info(f"Target resolution: {target_width}x{target_height} ({resolution})")
 
-        if mode == 'fps':
-            target_fps = extraction_config.get('target_fps', 1.0)
-            expected_frames = max(1, int(duration * target_fps))
+        if mode in {'fps', 'target_count'}:
+            expected_frames = sampling_plan['candidate_count'] if sampling_plan['smart_selection'] else sampling_plan['target_output_count']
             parallel_workers = int(extraction_config.get('ffmpeg_cpu_workers') or 0)
             if parallel_workers <= 0:
                 cpu_count = os.cpu_count() or 4
@@ -507,15 +507,10 @@ class VideoProcessor:
                     )
                 except Exception as e:
                     logger.warning(f"Parallel ffmpeg CPU extraction failed, falling back to single-process ffmpeg: {e}")
-            sampling_filter = f"fps={target_fps}"
+            sampling_filter = sampling_plan['sampling_filter']
         else:
-            max_frames = extraction_config.get('max_frames', 100)
-            expected_frames = min(max_frames, total_frames)
-            if total_frames > max_frames:
-                select_interval = max(1, int(total_frames / max_frames))
-                sampling_filter = f"select='not(mod(n\\,{select_interval}))'"
-            else:
-                sampling_filter = None
+            expected_frames = sampling_plan['candidate_count'] if sampling_plan['smart_selection'] else sampling_plan['target_output_count']
+            sampling_filter = sampling_plan['sampling_filter']
 
         filters = []
         if sampling_filter:
@@ -564,7 +559,16 @@ class VideoProcessor:
 
         extracted_frames = sorted(str(f) for f in output_dir.glob("frame_*.jpg"))
 
-        if mode == 'frames':
+        if extraction_config.get('smart_frame_selection', False):
+            extracted_frames = self._score_and_select_extracted_frames(
+                extracted_frames,
+                extraction_config,
+                total_frames=total_frames,
+                fps=fps,
+                progress_callback=progress_callback,
+            )
+            self.last_extraction_stats['strategy'] = 'ffmpeg_cpu_oversample_select'
+        elif mode == 'frames':
             max_frames = extraction_config.get('max_frames', 100)
             if len(extracted_frames) > max_frames:
                 step = len(extracted_frames) / max_frames
@@ -589,19 +593,29 @@ class VideoProcessor:
                         except Exception:
                             pass
 
-        self.last_extraction_stats = {
-            'strategy': 'ffmpeg_cpu',
-            'mode': mode,
-            'requested_targets': expected_frames,
-            'saved_frames': len(extracted_frames),
-            'replaced_targets': 0,
-            'search_radius': 0,
-            'rejected_candidates': 0,
-            'selections': [],
-        }
+        if extraction_config.get('smart_frame_selection', False):
+            self.last_extraction_stats = {
+                **self.last_extraction_stats,
+                'mode': mode,
+                'candidate_count': expected_frames,
+                'oversample_factor': sampling_plan['oversample_factor'],
+            }
+        else:
+            self.last_extraction_stats = {
+                'strategy': 'ffmpeg_cpu',
+                'mode': mode,
+                'requested_targets': expected_frames,
+                'candidate_count': expected_frames,
+                'saved_frames': len(extracted_frames),
+                'replaced_targets': 0,
+                'search_radius': 0,
+                'rejected_candidates': 0,
+                'oversample_factor': sampling_plan['oversample_factor'],
+                'selections': [],
+            }
 
         if progress_callback and extracted_frames:
-            progress_callback(len(extracted_frames), expected_frames, extracted_frames[-1])
+            progress_callback(len(extracted_frames), self._get_target_output_count(total_frames, fps, extraction_config), extracted_frames[-1])
 
         logger.info(f"✅ FFmpeg CPU extraction complete: {len(extracted_frames)} frames")
         return extracted_frames
@@ -619,8 +633,12 @@ class VideoProcessor:
         target_height,
         jpeg_quality,
     ):
-        target_fps = float(extraction_config.get('target_fps', 1.0) or 1.0)
-        expected_frames = max(1, int(duration * target_fps))
+        video_info = self._get_video_info_ffprobe(video_path)
+        fps = video_info['fps'] if video_info else 0.0
+        total_frames = video_info['total_frames'] if video_info else max(1, int(duration * fps)) if fps > 0 else 0
+        sampling_plan = self._build_sampling_plan(total_frames, fps, extraction_config)
+        target_fps = float(sampling_plan['extraction_fps'] or extraction_config.get('target_fps', 1.0) or 1.0)
+        expected_frames = sampling_plan['candidate_count'] if sampling_plan['smart_selection'] else sampling_plan['target_output_count']
         requested_workers = int(extraction_config.get('ffmpeg_cpu_workers') or 0)
         cpu_count = os.cpu_count() or 4
         if requested_workers <= 0:
@@ -706,15 +724,227 @@ class VideoProcessor:
             'strategy': f'ffmpeg_cpu_parallel_{chunk_count}x',
             'mode': 'fps',
             'requested_targets': expected_frames,
+            'candidate_count': expected_frames,
             'saved_frames': len(extracted_frames),
             'replaced_targets': 0,
             'search_radius': 0,
             'rejected_candidates': 0,
+            'oversample_factor': sampling_plan['oversample_factor'],
             'selections': [],
         }
 
+        if extraction_config.get('smart_frame_selection', False):
+            extracted_frames = self._score_and_select_extracted_frames(
+                extracted_frames,
+                extraction_config,
+                total_frames=total_frames,
+                fps=fps,
+                progress_callback=progress_callback,
+            )
+            self.last_extraction_stats['strategy'] = f'ffmpeg_cpu_parallel_{chunk_count}x_oversample_select'
+
         logger.info(f"✅ Parallel ffmpeg CPU extraction complete: {len(extracted_frames)} frames")
         return extracted_frames
+
+    def _score_and_select_extracted_frames(
+        self,
+        extracted_frames,
+        extraction_config,
+        *,
+        total_frames: int,
+        fps: float,
+        progress_callback=None,
+    ):
+        if not extracted_frames:
+            return extracted_frames
+
+        plan = self._build_sampling_plan(total_frames, fps, extraction_config)
+        quality_percent = int(extraction_config.get('quality', 100) or 100)
+        target_output_count = int(plan['target_output_count'])
+        candidate_count = len(extracted_frames)
+        search_radius = self._get_effective_search_radius(total_frames, fps, extraction_config)
+        status_callback = extraction_config.get('status_callback')
+        requested_workers = int(extraction_config.get('ffmpeg_cpu_workers') or 0)
+        if requested_workers <= 0:
+            requested_workers = min(4, max(1, (os.cpu_count() or 4) // 2))
+        scoring_workers = min(max(1, requested_workers), max(1, candidate_count))
+
+        if callable(status_callback):
+            status_callback('candidate_scoring_start', {
+                'current': 0,
+                'total': candidate_count,
+                'target_count': target_output_count,
+                'search_radius': search_radius,
+                'workers': scoring_workers,
+            })
+
+        def score_candidate(candidate_index: int, frame_path: str):
+            frame = cv2.imread(str(frame_path))
+            if frame is None:
+                return None
+            score_info = self._score_frame_candidate(frame, None, quality_percent)
+            return {
+                'path': str(frame_path),
+                'candidate_index': candidate_index,
+                'score': float(score_info['score']),
+                'accepted': bool(score_info['accepted']),
+                'metrics': score_info['metrics'],
+            }
+
+        scored_candidates = []
+        rejected_candidates = 0
+        processed_count = 0
+        if scoring_workers == 1 or candidate_count < 16:
+            for idx, frame_path in enumerate(extracted_frames, start=1):
+                scored = score_candidate(idx - 1, frame_path)
+                if scored is not None:
+                    if not scored['accepted']:
+                        rejected_candidates += 1
+                    scored_candidates.append(scored)
+                processed_count = idx
+                if callable(status_callback) and (processed_count % 20 == 0 or processed_count == candidate_count):
+                    status_callback('candidate_scoring_progress', {
+                        'current': processed_count,
+                        'total': candidate_count,
+                        'target_count': target_output_count,
+                        'search_radius': search_radius,
+                        'workers': scoring_workers,
+                    })
+        else:
+            with ThreadPoolExecutor(max_workers=scoring_workers) as executor:
+                futures = [
+                    executor.submit(score_candidate, idx, frame_path)
+                    for idx, frame_path in enumerate(extracted_frames)
+                ]
+                for future in as_completed(futures):
+                    scored = future.result()
+                    processed_count += 1
+                    if scored is not None:
+                        if not scored['accepted']:
+                            rejected_candidates += 1
+                        scored_candidates.append(scored)
+                    if callable(status_callback) and (processed_count % 20 == 0 or processed_count == candidate_count):
+                        status_callback('candidate_scoring_progress', {
+                            'current': processed_count,
+                            'total': candidate_count,
+                            'target_count': target_output_count,
+                            'search_radius': search_radius,
+                            'workers': scoring_workers,
+                        })
+
+        scored_candidates.sort(key=lambda item: item['candidate_index'])
+        if not scored_candidates:
+            return extracted_frames
+
+        if callable(status_callback):
+            status_callback('candidate_selection_start', {
+                'current': 0,
+                'total': target_output_count,
+                'candidate_total': len(scored_candidates),
+                'search_radius': search_radius,
+            })
+
+        selected_candidates = []
+        selection_records = []
+        bucket_edges = np.linspace(0, len(scored_candidates), num=target_output_count + 1)
+        source_frames_per_candidate = total_frames / max(len(scored_candidates), 1)
+        source_frames_per_target = total_frames / max(target_output_count, 1)
+        candidate_step_per_target = len(scored_candidates) / max(target_output_count, 1)
+        continuity_window = max(1.0, candidate_step_per_target * 0.75)
+        replaced_targets = 0
+
+        for target_idx in range(target_output_count):
+            start = int(np.floor(bucket_edges[target_idx]))
+            end = int(np.floor(bucket_edges[target_idx + 1]))
+            if end <= start:
+                end = min(len(scored_candidates), start + 1)
+            bucket = scored_candidates[start:end]
+            if not bucket:
+                continue
+            bucket_center = (start + max(start, end - 1)) / 2.0
+            if selected_candidates:
+                expected_candidate_index = selected_candidates[-1]['candidate_index'] + candidate_step_per_target
+            else:
+                expected_candidate_index = bucket_center
+
+            def continuity_rank(item):
+                center_distance = abs(item['candidate_index'] - bucket_center)
+                continuity_distance = abs(item['candidate_index'] - expected_candidate_index)
+                center_penalty = center_distance * 4.0
+                continuity_penalty = max(0.0, continuity_distance - continuity_window) * 12.0
+                effective_score = float(item['score']) - center_penalty - continuity_penalty
+                return (
+                    1 if item['accepted'] else 0,
+                    effective_score,
+                    -continuity_distance,
+                    -center_distance,
+                    item['metrics']['sharpness'],
+                )
+
+            best = max(bucket, key=continuity_rank)
+            selected_candidates.append(best)
+            if best['candidate_index'] != bucket[0]['candidate_index']:
+                replaced_targets += 1
+
+            approx_target_source_index = int(round((target_idx + 0.5) * source_frames_per_target))
+            approx_selected_source_index = int(round(best['candidate_index'] * source_frames_per_candidate))
+            selection_records.append({
+                'target_index': approx_target_source_index,
+                'selected_index': approx_selected_source_index,
+                'offset': int(approx_selected_source_index - approx_target_source_index),
+                'sharpness': round(best['metrics']['sharpness'], 2),
+                'accepted': bool(best['accepted']),
+                'fallback_used': not bool(best['accepted']),
+            })
+            if callable(status_callback) and ((target_idx + 1) % 10 == 0 or target_idx + 1 == target_output_count):
+                status_callback('candidate_selection_progress', {
+                    'current': target_idx + 1,
+                    'total': target_output_count,
+                    'replaced': replaced_targets,
+                    'search_radius': search_radius,
+                })
+
+        selected_paths = {item['path'] for item in selected_candidates}
+        final_paths = []
+        for old_path in extracted_frames:
+            if old_path not in selected_paths:
+                try:
+                    os.remove(old_path)
+                except Exception:
+                    pass
+
+        for idx, candidate in enumerate(selected_candidates):
+            current_path = Path(candidate['path'])
+            new_path = current_path.parent / f"frame_{idx:06d}.jpg"
+            if current_path != new_path:
+                try:
+                    os.replace(current_path, new_path)
+                except Exception:
+                    new_path = current_path
+            final_paths.append(str(new_path))
+
+        self.last_extraction_stats = {
+            **self.last_extraction_stats,
+            'requested_targets': target_output_count,
+            'candidate_count': candidate_count,
+            'saved_frames': len(final_paths),
+            'replaced_targets': replaced_targets,
+            'search_radius': search_radius,
+            'rejected_candidates': rejected_candidates,
+            'oversample_factor': plan['oversample_factor'],
+            'scoring_workers': scoring_workers,
+            'selections': selection_records,
+        }
+        if callable(status_callback):
+            status_callback('candidate_selection_complete', {
+                'total': len(final_paths),
+                'replaced': replaced_targets,
+                'search_radius': search_radius,
+                'rejected_candidates': rejected_candidates,
+            })
+        if progress_callback and final_paths:
+            progress_callback(len(final_paths), target_output_count, final_paths[-1])
+        return final_paths
 
     def _extract_frames_ffmpeg_gpu_parallel(
         self,
@@ -730,8 +960,12 @@ class VideoProcessor:
         jpeg_quality,
         gpu_info,
     ):
-        target_fps = float(extraction_config.get('target_fps', 1.0) or 1.0)
-        expected_frames = max(1, int(duration * target_fps))
+        video_info = self._get_video_info_ffprobe(video_path)
+        fps = video_info['fps'] if video_info else 0.0
+        total_frames = video_info['total_frames'] if video_info else max(1, int(duration * fps)) if fps > 0 else 0
+        sampling_plan = self._build_sampling_plan(total_frames, fps, extraction_config)
+        target_fps = float(sampling_plan['extraction_fps'] or extraction_config.get('target_fps', 1.0) or 1.0)
+        expected_frames = sampling_plan['candidate_count'] if sampling_plan['smart_selection'] else sampling_plan['target_output_count']
         requested_workers = int(extraction_config.get('ffmpeg_cpu_workers') or 0)
         cpu_count = os.cpu_count() or 4
         if requested_workers <= 0:
@@ -830,12 +1064,24 @@ class VideoProcessor:
             'strategy': f"ffmpeg_{gpu_info['method']}_parallel_{chunk_count}x",
             'mode': 'fps',
             'requested_targets': expected_frames,
+            'candidate_count': expected_frames,
             'saved_frames': len(extracted_frames),
             'replaced_targets': 0,
             'search_radius': 0,
             'rejected_candidates': 0,
+            'oversample_factor': sampling_plan['oversample_factor'],
             'selections': [],
         }
+
+        if extraction_config.get('smart_frame_selection', False):
+            extracted_frames = self._score_and_select_extracted_frames(
+                extracted_frames,
+                extraction_config,
+                total_frames=total_frames,
+                fps=fps,
+                progress_callback=progress_callback,
+            )
+            self.last_extraction_stats['strategy'] = f"ffmpeg_{gpu_info['method']}_parallel_{chunk_count}x_oversample_select"
 
         logger.info(f"✅ Parallel GPU extraction complete: {len(extracted_frames)} frames")
         return extracted_frames
@@ -896,9 +1142,10 @@ class VideoProcessor:
         target_width, target_height, jpeg_quality = get_target_dimensions(resolution, width, height)
         logger.info(f"Target resolution: {target_width}x{target_height} ({resolution})")
         
-        if mode == 'fps':
-            target_fps = extraction_config.get('target_fps', 1.0)
-            expected_frames = int(duration * target_fps)
+        sampling_plan = self._build_sampling_plan(total_frames, fps, extraction_config)
+
+        if mode in {'fps', 'target_count'}:
+            expected_frames = sampling_plan['candidate_count'] if sampling_plan['smart_selection'] else sampling_plan['target_output_count']
             parallel_workers = int(extraction_config.get('ffmpeg_cpu_workers') or 0)
             if parallel_workers <= 0:
                 cpu_count = os.cpu_count() or 4
@@ -923,16 +1170,10 @@ class VideoProcessor:
                     )
                 except Exception as e:
                     logger.warning(f"Parallel GPU extraction failed, falling back to single-process GPU ffmpeg: {e}")
-            fps_filter = f"fps={target_fps}"
+            fps_filter = sampling_plan['sampling_filter']
         else:
-            max_frames = extraction_config.get('max_frames', 100)
-            expected_frames = min(max_frames, total_frames)
-            # Select frames evenly distributed
-            if total_frames > max_frames:
-                select_interval = total_frames / max_frames
-                fps_filter = f"select='not(mod(n\\,{int(select_interval)}))'"
-            else:
-                fps_filter = None
+            expected_frames = sampling_plan['candidate_count'] if sampling_plan['smart_selection'] else sampling_plan['target_output_count']
+            fps_filter = sampling_plan['sampling_filter']
         
         # Build scale filter if needed (only if target differs from source)
         scale_filter = None
@@ -1030,7 +1271,16 @@ class VideoProcessor:
         ])
         
         # Limit to max_frames if in frames mode
-        if mode == 'frames':
+        if extraction_config.get('smart_frame_selection', False):
+            extracted_frames = self._score_and_select_extracted_frames(
+                extracted_frames,
+                extraction_config,
+                total_frames=total_frames,
+                fps=fps,
+                progress_callback=progress_callback,
+            )
+            self.last_extraction_stats['strategy'] = f'ffmpeg_{gpu_info["method"]}_oversample_select'
+        elif mode == 'frames':
             max_frames = extraction_config.get('max_frames', 100)
             if len(extracted_frames) > max_frames:
                 # Keep evenly distributed frames
@@ -1060,20 +1310,30 @@ class VideoProcessor:
         
         logger.info(f"✅ GPU extraction complete: {len(extracted_frames)} frames")
         
-        self.last_extraction_stats = {
-            'strategy': f'ffmpeg_{gpu_info["method"]}',
-            'mode': mode,
-            'requested_targets': expected_frames,
-            'saved_frames': len(extracted_frames),
-            'replaced_targets': 0,
-            'search_radius': 0,
-            'rejected_candidates': 0,
-            'selections': [],
-        }
+        if extraction_config.get('smart_frame_selection', False):
+            self.last_extraction_stats = {
+                **self.last_extraction_stats,
+                'mode': mode,
+                'candidate_count': expected_frames,
+                'oversample_factor': sampling_plan['oversample_factor'],
+            }
+        else:
+            self.last_extraction_stats = {
+                'strategy': f'ffmpeg_{gpu_info["method"]}',
+                'mode': mode,
+                'requested_targets': expected_frames,
+                'candidate_count': expected_frames,
+                'saved_frames': len(extracted_frames),
+                'replaced_targets': 0,
+                'search_radius': 0,
+                'rejected_candidates': 0,
+                'oversample_factor': sampling_plan['oversample_factor'],
+                'selections': [],
+            }
 
         # Final progress callback
         if progress_callback and extracted_frames:
-            progress_callback(len(extracted_frames), expected_frames, extracted_frames[-1])
+            progress_callback(len(extracted_frames), self._get_target_output_count(total_frames, fps, extraction_config), extracted_frames[-1])
         
         return extracted_frames
     
@@ -1326,6 +1586,7 @@ class VideoProcessor:
                 'preview_count': 10,
                 'use_gpu': True,
                 'smart_frame_selection': False,
+                'oversample_factor': 10,
             }
 
         # Check if GPU should be used
@@ -1333,9 +1594,8 @@ class VideoProcessor:
         smart_selection = extraction_config.get('smart_frame_selection', False)
         self.last_extraction_stats = {}
 
-        if use_gpu and smart_selection:
-            logger.info("🧠 Smart frame selection enabled; using CPU extraction so neighbor replacement can inspect nearby frames")
-            use_gpu = False
+        if smart_selection:
+            logger.info("🧠 Smart frame selection enabled; frames will be oversampled, scored, and pruned back to the requested output count")
 
         if use_gpu:
             gpu_info = get_gpu_decode_info()
@@ -1484,6 +1744,96 @@ class VideoProcessor:
                 seen.add(index)
         return deduped
 
+    def _get_target_output_count(self, total_frames: int, fps: float, extraction_config: Dict[str, Any]) -> int:
+        mode = extraction_config.get('mode', 'frames')
+        if mode == 'fps':
+            target_fps = float(extraction_config.get('target_fps', 1.0) or 1.0)
+            duration = total_frames / fps if fps > 0 else 0
+            return max(1, min(total_frames, int(duration * target_fps)))
+        max_frames = int(extraction_config.get('max_frames', 100) or 100)
+        return max(1, min(total_frames, max_frames))
+
+    def _get_oversample_factor(self, extraction_config: Dict[str, Any]) -> int:
+        requested = int(extraction_config.get('oversample_factor', 10) or 10)
+        return max(2, min(requested, 20))
+
+    def _build_sampling_plan(self, total_frames: int, fps: float, extraction_config: Dict[str, Any]) -> Dict[str, Any]:
+        mode = extraction_config.get('mode', 'frames')
+        smart_selection = extraction_config.get('smart_frame_selection', False)
+        target_output_count = self._get_target_output_count(total_frames, fps, extraction_config)
+        oversample_factor = self._get_oversample_factor(extraction_config) if smart_selection else 1
+
+        if mode in {'fps', 'target_count'}:
+            if mode == 'target_count':
+                duration = total_frames / fps if fps > 0 else 0
+                target_fps = (target_output_count / duration) if duration > 0 else float(extraction_config.get('target_fps', 1.0) or 1.0)
+            else:
+                target_fps = float(extraction_config.get('target_fps', 1.0) or 1.0)
+            extraction_fps = target_fps
+            if smart_selection:
+                extraction_fps = min(fps, target_fps * oversample_factor) if fps > 0 else target_fps
+            candidate_count = max(1, min(total_frames, int((total_frames / fps) * extraction_fps))) if fps > 0 else target_output_count
+            sampling_filter = f"fps={extraction_fps}" if extraction_fps > 0 else None
+            return {
+                'mode': mode,
+                'smart_selection': smart_selection,
+                'target_output_count': target_output_count,
+                'candidate_count': candidate_count,
+                'target_fps': target_fps,
+                'extraction_fps': extraction_fps,
+                'sampling_filter': sampling_filter,
+                'oversample_factor': oversample_factor,
+            }
+
+        max_frames = int(extraction_config.get('max_frames', 100) or 100)
+        candidate_count = target_output_count
+        if smart_selection:
+            candidate_count = min(total_frames, max_frames * oversample_factor)
+        if total_frames > candidate_count:
+            select_interval = max(1, int(total_frames / candidate_count))
+            sampling_filter = f"select='not(mod(n\\,{select_interval}))'"
+        else:
+            sampling_filter = None
+        return {
+            'mode': mode,
+            'smart_selection': smart_selection,
+            'target_output_count': target_output_count,
+            'candidate_count': candidate_count,
+            'target_fps': None,
+            'extraction_fps': None,
+            'sampling_filter': sampling_filter,
+            'oversample_factor': oversample_factor,
+        }
+
+    def _get_effective_search_radius(self, total_frames: int, fps: float, extraction_config: Dict[str, Any]) -> int:
+        requested_radius = max(1, int(extraction_config.get('replacement_search_radius', 4) or 4))
+        if not extraction_config.get('smart_frame_selection', False):
+            return requested_radius
+
+        mode = extraction_config.get('mode', 'frames')
+        if mode in {'fps', 'target_count'}:
+            if mode == 'target_count':
+                duration = total_frames / fps if fps > 0 else 0
+                target_output_count = self._get_target_output_count(total_frames, fps, extraction_config)
+                target_fps = (target_output_count / duration) if duration > 0 else 0
+            else:
+                target_fps = float(extraction_config.get('target_fps', 1.0) or 1.0)
+            frame_interval = max(1, int(round(fps / target_fps))) if fps > 0 and target_fps > 0 else requested_radius
+        else:
+            target_indices = self._build_target_frame_indices(total_frames, fps, extraction_config)
+            if len(target_indices) >= 2:
+                spacings = [
+                    target_indices[i + 1] - target_indices[i]
+                    for i in range(len(target_indices) - 1)
+                    if target_indices[i + 1] > target_indices[i]
+                ]
+                frame_interval = max(1, int(round(sum(spacings) / len(spacings)))) if spacings else requested_radius
+            else:
+                frame_interval = requested_radius
+
+        dynamic_radius = max(requested_radius, frame_interval // 2)
+        return min(dynamic_radius, max(requested_radius, frame_interval))
+
     def _score_frame_candidate(self, frame, prev_frame, quality_percent=100):
         height, width = frame.shape[:2]
         if width > 1920 or height > 1080:
@@ -1620,6 +1970,9 @@ class VideoProcessor:
             target_fps = extraction_config.get('target_fps', 1.0)
             estimated = int(info['duration'] * target_fps)
             return min(estimated, info['total_frames'])
+        if mode == 'target_count':
+            exact_count = extraction_config.get('max_frames', 100)
+            return min(exact_count, info['total_frames'])
         else:
             max_frames = extraction_config.get('max_frames', 100)
             return min(max_frames, info['total_frames'])
@@ -1641,6 +1994,8 @@ class VideoProcessor:
         if mode == 'fps':
             target_fps = extraction_config.get('target_fps', 1.0)
             description = f"Extract at {target_fps} FPS (~{estimated_frames} frames) at {quality}% quality"
+        elif mode == 'target_count':
+            description = f"Extract exactly {estimated_frames} frames with FPS-style spacing at {quality}% quality"
         else:
             description = f"Extract up to {estimated_frames} frames at {quality}% quality"
 

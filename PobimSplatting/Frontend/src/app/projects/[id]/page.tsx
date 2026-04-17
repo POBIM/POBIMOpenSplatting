@@ -1,7 +1,7 @@
 'use client';
 
 import { useParams, useRouter } from 'next/navigation';
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { api, Project, PlyFile } from '@/lib/api';
 import { websocket } from '@/lib/websocket';
 import { getMatcherLabelWithMode, getSfmEngineCompactLabel, getSfmEngineLabel, isGlobalSfmEngine } from '@/lib/sfm-display';
@@ -84,6 +84,8 @@ const STAGE_WEIGHT_MAP = PIPELINE_STAGES.reduce((acc, stage) => {
 
 const isErrorStatus = (status?: string | null): boolean =>
   status === 'failed' || status === 'cancelled';
+
+const MAX_LOG_LINES_IN_UI = 1200;
 
 const normalizeProgressStates = (states: any[] = []) =>
   PIPELINE_STAGES.map(stage => {
@@ -180,6 +182,11 @@ export default function ProjectDetailPage() {
   const [stages, setStages] = useState<any[]>(() => normalizeProgressStates());
   const [stageDetails, setStageDetails] = useState<Record<string, any>>({});
   const [logs, setLogs] = useState<string[]>([]);
+  const [logMeta, setLogMeta] = useState({
+    total: 0,
+    visible: 0,
+    truncated: false,
+  });
   const [framePreview, setFramePreview] = useState<any[]>([]);
   const [trainingFramePreview, setTrainingFramePreview] = useState<any[]>([]);
   const [hasSeparateTraining, setHasSeparateTraining] = useState(false);
@@ -253,7 +260,7 @@ export default function ProjectDetailPage() {
   const videoExtractionDetail = stageDetails['video_extraction'];
   const videoExtractionFramesDone = videoExtractionDetail?.current_item ?? videoDiagnostics?.candidate_count ?? videoDiagnostics?.saved_frames ?? null;
   const videoExtractionFramesTotal = videoExtractionDetail?.total_items ?? videoDiagnostics?.candidate_count ?? videoDiagnostics?.requested_targets ?? null;
-  const logGroups = groupLogsByStage(logs, stages);
+  const logGroups = useMemo(() => groupLogsByStage(logs, stages), [logs, stages]);
 
   // Auto-expand the running stage
   useEffect(() => {
@@ -319,6 +326,11 @@ export default function ProjectDetailPage() {
       setStages(normalizedStages);
       setStageDetails(data.stage_details || {});
       setLogs(logLines);
+      setLogMeta({
+        total: data.log_count || logLines.length,
+        visible: data.log_visible_count || logLines.length,
+        truncated: Boolean(data.log_truncated),
+      });
       updateTimeStats({ ...data, progress: progressValue });
     } catch (err) {
       console.error('Failed to load project:', err);
@@ -398,6 +410,11 @@ export default function ProjectDetailPage() {
     setStages(normalizedStages);
     setStageDetails(details);
     setLogs(logLines);
+    setLogMeta({
+      total: payload.log_count || logLines.length,
+      visible: payload.log_visible_count || logLines.length,
+      truncated: Boolean(payload.log_truncated),
+    });
 
     setProject(prev => ({
       ...(prev ?? { id: projectId }),
@@ -477,7 +494,22 @@ export default function ProjectDetailPage() {
     }
 
     const line = payload.timestamp ? `[${payload.timestamp}] ${payload.message}` : payload.message;
-    setLogs(prev => [...prev, line]);
+    setLogs(prev => {
+      const next = [...prev, line];
+      if (next.length > MAX_LOG_LINES_IN_UI) {
+        return next.slice(-MAX_LOG_LINES_IN_UI);
+      }
+      return next;
+    });
+    setLogMeta(prev => {
+      const nextTotal = (prev.total || 0) + 1;
+      const nextVisible = Math.min(nextTotal, MAX_LOG_LINES_IN_UI);
+      return {
+        total: nextTotal,
+        visible: nextVisible,
+        truncated: nextTotal > nextVisible,
+      };
+    });
   }, []);
 
   useEffect(() => {
@@ -666,17 +698,7 @@ export default function ProjectDetailPage() {
   };
 
   const handleDownloadLogs = () => {
-    if (logs.length === 0) return;
-    const logContent = logs.join('\n');
-    const blob = new Blob([logContent], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${project?.metadata?.name || 'project'}_logs_${new Date().toISOString().slice(0, 10)}.txt`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    window.open(api.getProjectLogsDownloadUrl(projectId), '_blank', 'noopener,noreferrer');
   };
 
   const openRetryModal = () => {
@@ -1547,7 +1569,9 @@ export default function ProjectDetailPage() {
               </span>
             )}
             <span className="text-xs text-gray-500 bg-gray-800 px-2 py-1 rounded">
-              {logs.length.toLocaleString()} lines
+              {logMeta.truncated
+                ? `showing ${logMeta.visible.toLocaleString()} / ${logMeta.total.toLocaleString()} lines`
+                : `${(logMeta.total || logs.length).toLocaleString()} lines`}
             </span>
           </div>
           <div className="flex items-center gap-2">
@@ -1565,7 +1589,7 @@ export default function ProjectDetailPage() {
             </button>
             <button
               onClick={handleDownloadLogs}
-              disabled={logs.length === 0}
+              disabled={(logMeta.total || logs.length) === 0}
               className="px-3 py-1.5 rounded-md text-xs font-medium text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition-colors disabled:opacity-40 disabled:cursor-not-allowed border border-gray-700 flex items-center gap-1.5"
               title="Download logs"
             >
@@ -1585,6 +1609,11 @@ export default function ProjectDetailPage() {
         <div className="flex-1 overflow-y-auto overflow-x-auto bg-gray-950 font-mono text-sm leading-relaxed">
           {logs.length > 0 ? (
             <div className="p-4 min-w-max">
+              {logMeta.truncated && (
+                <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-200">
+                  Showing the latest {logMeta.visible.toLocaleString()} log lines to keep the page responsive. Use Download for the full log.
+                </div>
+              )}
               <div className="space-y-3">
                 {logGroups.map((group) => {
                   const isExpanded = expandedLogGroups[group.key] ?? true;
@@ -1645,7 +1674,7 @@ export default function ProjectDetailPage() {
           <span className="text-sm font-medium">Show Logs</span>
           {logs.length > 0 && (
             <span className="bg-emerald-500 text-white text-xs px-2 py-0.5 rounded-full">
-              {logs.length}
+              {logMeta.total || logs.length}
             </span>
           )}
         </button>

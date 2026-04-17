@@ -55,6 +55,10 @@ export interface Project {
   };
   reconstruction_framework?: ReconstructionFramework;
   video_extraction_diagnostics?: VideoExtractionDiagnostics;
+  recent_logs?: string[];
+  log_count?: number;
+  log_visible_count?: number;
+  log_truncated?: boolean;
 }
 
 export interface ReconstructionFramework {
@@ -418,6 +422,10 @@ export const api = {
   getStatus: async (id: string) => {
     const response = await apiClient.get(`/api/status/${id}`);
     return response.data;
+  },
+
+  getProjectLogsDownloadUrl: (id: string) => {
+    return `${API_BASE_URL}/api/project/${id}/logs`;
   },
 
   // Results

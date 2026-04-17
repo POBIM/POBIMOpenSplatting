@@ -26,7 +26,7 @@ from ..core.files import (
 )
 from ..core.projects import (
     append_log_line,
-    get_full_log_lines,
+    get_recent_log_lines,
     initialize_project_entry,
     save_projects_db,
     update_stage_detail,
@@ -979,10 +979,36 @@ def get_status(project_id):
     with project_store.status_lock:
         data = project_store.processing_status[project_id].copy()
 
-        data["recent_logs"] = get_full_log_lines(project_id)
+        recent_logs, log_count = get_recent_log_lines(project_id)
+        data["recent_logs"] = recent_logs
+        data["log_count"] = log_count
+        data["log_visible_count"] = len(recent_logs)
+        data["log_truncated"] = log_count > len(recent_logs)
         data["stage_details"] = data.get("stage_details", {})
 
     return jsonify(data)
+
+
+@api_bp.route("/project/<project_id>/logs")
+def download_project_logs(project_id):
+    """Download the full persisted processing log."""
+    if project_id not in project_store.processing_status:
+        return jsonify({"error": "Project not found"}), 404
+
+    with project_store.status_lock:
+        log_file = Path(project_store.processing_status[project_id]["log_file"])
+
+    if not log_file.exists():
+        return jsonify({"error": "Log file not found"}), 404
+
+    download_name = f"{project_id}_processing.log"
+    return send_file(
+        log_file,
+        mimetype="text/plain; charset=utf-8",
+        as_attachment=True,
+        download_name=download_name,
+        max_age=0,
+    )
 
 
 @api_bp.route("/ply/<project_id>")

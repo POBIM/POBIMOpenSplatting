@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Optional
@@ -185,6 +186,7 @@ def append_log_line(project_id: str, message: str) -> None:
 
         log_tail = status.setdefault("log_tail", [])
         log_tail.append({"time": timestamp, "message": message})
+        status["log_line_count"] = int(status.get("log_line_count", len(log_tail) - 1)) + 1
         if len(log_tail) > config.MAX_LOG_LINES_IN_RESPONSE:
             del log_tail[:-config.MAX_LOG_LINES_IN_RESPONSE]
 
@@ -196,6 +198,44 @@ def append_log_line(project_id: str, message: str) -> None:
 
     if _emit_log_message:
         _emit_log_message(project_id, message, timestamp)
+
+
+def get_recent_log_lines(
+    project_id: str, *, limit: Optional[int] = None
+) -> tuple[list[str], int]:
+    """Return a bounded tail of persisted logs plus the known total line count."""
+    max_lines = max(1, limit or config.MAX_LOG_LINES_IN_RESPONSE)
+
+    with status_lock:
+        status = processing_status.get(project_id)
+        if not status:
+            return [], 0
+        log_path = Path(status["log_file"])
+        log_tail = list(status.get("log_tail", []))
+        total_count = int(status.get("log_line_count", len(log_tail)))
+
+    if log_tail:
+        visible_tail = log_tail[-max_lines:]
+        lines = []
+        for entry in visible_tail:
+            if isinstance(entry, str):
+                lines.append(entry)
+                continue
+            time = entry.get("time") or entry.get("timestamp") or ""
+            message = entry.get("message") or ""
+            lines.append(f"[{time}] {message}" if time else message)
+        return lines, max(total_count, len(lines))
+
+    if not log_path.exists():
+        return [], total_count
+
+    try:
+        with log_path.open("r", encoding="utf-8") as log_file:
+            lines = [line.rstrip("\n") for line in deque(log_file, maxlen=max_lines)]
+        return lines, max(total_count, len(lines))
+    except Exception as exc:
+        logger.error("Failed reading recent log tail for %s: %s", project_id, exc)
+        return [], total_count
 
 
 def get_full_log_lines(project_id: str) -> list[str]:
@@ -241,6 +281,7 @@ def initialize_project_entry(
         "progress_states": list(make_progress_states()),
         "log_file": str(log_file),
         "log_tail": [],
+        "log_line_count": 0,
         "input_type": input_type,
         "stage_details": {},
         "reconstruction_framework": {},

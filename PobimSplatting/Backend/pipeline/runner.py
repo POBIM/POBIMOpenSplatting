@@ -980,6 +980,8 @@ def refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id=None):
     if not geometry_stats:
         return colmap_cfg
 
+    original_matcher_params = dict(colmap_cfg.get('matcher_params') or {})
+
     profile_rank = {
         'local-conservative': 0,
         'bridge-balanced': 1,
@@ -1024,6 +1026,7 @@ def refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id=None):
     colmap_cfg['matcher_params'] = dict(refined_policy['matcher_params'])
     colmap_cfg['mapper_params'] = dict(refined_policy['mapper_params'])
     colmap_cfg['recovery_matching_pass'] = None
+    colmap_cfg['final_recovery_matching_pass'] = None
     colmap_cfg['min_num_matches'] = min(colmap_cfg['min_num_matches'], refined_policy['min_num_matches_cap'])
     colmap_cfg['init_num_trials'] = max(colmap_cfg['init_num_trials'], refined_policy['init_num_trials_floor'])
 
@@ -1103,10 +1106,46 @@ def refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id=None):
             colmap_cfg['min_num_matches'] = min(colmap_cfg['min_num_matches'], 8)
             colmap_cfg['init_num_trials'] = max(colmap_cfg['init_num_trials'], 320)
 
-    recovery_matching_pass = build_orbit_safe_bridge_recovery_pass(
-        geometry_stats,
-        colmap_cfg.get('matcher_params'),
-    )
+    recovery_matching_pass = None
+    refined_matcher_params = dict(colmap_cfg.get('matcher_params') or {})
+    if (
+        colmap_cfg.get('matcher_type') == 'sequential'
+        and refined_matcher_params
+        and refined_matcher_params != original_matcher_params
+    ):
+        changed_keys = sorted(
+            key
+            for key in set(original_matcher_params) | set(refined_matcher_params)
+            if original_matcher_params.get(key) != refined_matcher_params.get(key)
+        )
+        changed_preview = ", ".join(
+            f"{key}={refined_matcher_params.get(key)}" for key in changed_keys
+        )
+        base_reason = (
+            'pair-geometry refinement changed sequential matcher settings '
+            f'after the initial matching pass ({changed_preview})'
+        )
+        if refined_matcher_params.get('SequentialMatching.loop_detection') == '1':
+            non_loop_matcher_params = dict(refined_matcher_params)
+            non_loop_matcher_params['SequentialMatching.loop_detection'] = '0'
+            recovery_matching_pass = {
+                'matcher_params': non_loop_matcher_params,
+                'reason': f'{base_reason}; widening overlap before loop detection fallback',
+            }
+            colmap_cfg['final_recovery_matching_pass'] = {
+                'matcher_params': refined_matcher_params,
+                'reason': f'{base_reason}; final loop-detection fallback after split sparse reconstruction',
+            }
+        else:
+            recovery_matching_pass = {
+                'matcher_params': refined_matcher_params,
+                'reason': base_reason,
+            }
+    else:
+        recovery_matching_pass = build_orbit_safe_bridge_recovery_pass(
+            geometry_stats,
+            refined_matcher_params,
+        )
     if recovery_matching_pass:
         colmap_cfg['recovery_matching_pass'] = recovery_matching_pass
 
@@ -1145,6 +1184,13 @@ def refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id=None):
                 "🧠 Bridge-recovery matching pass queued: "
                 f"overlap={recovery_matching_pass['matcher_params']['SequentialMatching.overlap']} | "
                 f"reason={recovery_matching_pass['reason']}",
+            )
+        final_recovery_matching_pass = colmap_cfg.get('final_recovery_matching_pass')
+        if final_recovery_matching_pass:
+            append_log_line(
+                project_id,
+                "🧠 Final loop-detection fallback armed for post-reconstruction recovery: "
+                f"overlap={final_recovery_matching_pass['matcher_params']['SequentialMatching.overlap']}",
             )
 
     return colmap_cfg
@@ -1948,7 +1994,7 @@ def report_sparse_model_coverage(project_id, paths, config, colmap_cfg, num_imag
     sparse_models = analyze_sparse_models(paths['sparse_path'], project_id, log_each=True)
     sparse_summary = summarize_sparse_model_coverage(num_images, sparse_models)
     if not sparse_summary:
-        return
+        return None
 
     sync_reconstruction_framework(
         project_id,
@@ -1975,7 +2021,7 @@ def report_sparse_model_coverage(project_id, paths, config, colmap_cfg, num_imag
             "✅ Sparse reconstruction unified into a single model: "
             f"{sparse_summary['best_registered']}/{num_images} images registered",
         )
-        return
+        return sparse_summary
 
     append_log_line(
         project_id,
@@ -1983,6 +2029,41 @@ def report_sparse_model_coverage(project_id, paths, config, colmap_cfg, num_imag
         f"{sparse_summary['model_count']} models, best={sparse_summary['best_registered']}/{num_images}, "
         f"next_best={sparse_summary['alternate_registered']}",
     )
+    return sparse_summary
+
+
+def clear_sparse_reconstruction_outputs(sparse_path):
+    sparse_root = Path(sparse_path)
+    if not sparse_root.exists():
+        return
+
+    for item in sparse_root.iterdir():
+        if item.is_dir():
+            shutil.rmtree(item)
+        else:
+            item.unlink()
+
+
+def should_run_final_loop_detection_recovery(colmap_cfg, sparse_summary, num_images):
+    if not sparse_summary:
+        return False
+
+    if not sparse_summary.get('has_multiple_models'):
+        return False
+
+    if colmap_cfg.get('loop_detection_fallback_attempted'):
+        return False
+
+    if not colmap_cfg.get('final_recovery_matching_pass'):
+        return False
+
+    best_registered = int(sparse_summary.get('best_registered') or 0)
+    alternate_registered = int(sparse_summary.get('alternate_registered') or 0)
+
+    if best_registered >= num_images:
+        return False
+
+    return alternate_registered >= max(5, int(num_images * 0.08))
 
 
 def get_colmap_config(num_images, project_id=None, quality_mode='balanced', custom_params=None, preferred_matcher_type=None, orbit_safe_mode=False, orbit_safe_policy=None):
@@ -3717,7 +3798,28 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
         engine_name = "COLMAP"
     update_stage_detail(project_id, 'sparse_reconstruction', text=f'Images registered: {min(registered, num_images)}/{num_images}', subtext=f'{engine_name} reconstruction complete')
     append_log_line(project_id, f"✅ Sparse Reconstruction completed using {engine_name}")
-    report_sparse_model_coverage(project_id, paths, config, colmap_cfg, num_images)
+    sparse_summary = report_sparse_model_coverage(project_id, paths, config, colmap_cfg, num_images)
+
+    if should_run_final_loop_detection_recovery(colmap_cfg, sparse_summary, num_images):
+        final_recovery_matching_pass = colmap_cfg.get('final_recovery_matching_pass')
+        colmap_cfg['loop_detection_fallback_attempted'] = True
+        colmap_cfg['recovery_matching_pass'] = final_recovery_matching_pass
+        colmap_cfg['final_recovery_matching_pass'] = None
+
+        append_log_line(
+            project_id,
+            "🧠 Sparse reconstruction is still split after overlap-only recovery; "
+            "running final loop-detection fallback and retrying sparse reconstruction once",
+        )
+        clear_sparse_reconstruction_outputs(paths['sparse_path'])
+        colmap_cfg = run_orbit_safe_bridge_recovery_matching_pass(
+            project_id,
+            paths,
+            colmap_exe,
+            colmap_cfg,
+            has_cuda,
+        )
+        return run_sparse_reconstruction_stage(project_id, paths, config, colmap_cfg)
     
     return colmap_cfg
 

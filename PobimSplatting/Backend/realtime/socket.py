@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
 from flask import request
 
 from ..core import projects as project_store
-from ..core.projects import get_full_log_lines
+from ..core.projects import get_recent_log_lines
 from ..core.projects import register_emitters
 
 logger = logging.getLogger(__name__)
@@ -113,7 +113,11 @@ def _register_handlers() -> None:
 
             with project_store.status_lock:
                 project_data = project_store.processing_status[project_id].copy()
-            project_data["recent_logs"] = get_full_log_lines(project_id)
+            recent_logs, log_count = get_recent_log_lines(project_id)
+            project_data["recent_logs"] = recent_logs
+            project_data["log_count"] = log_count
+            project_data["log_visible_count"] = len(recent_logs)
+            project_data["log_truncated"] = log_count > len(recent_logs)
             emit_fn("project_status", project_data)
         else:
             emit_fn("error", {"message": "Invalid project ID"})

@@ -66,6 +66,25 @@ def _clear_directory_contents(path: Path) -> None:
                 pass
 
 
+def _preview_url_with_version(base_url: str, file_path: Path) -> str:
+    try:
+        version = file_path.stat().st_mtime_ns
+    except FileNotFoundError:
+        return base_url
+    return f"{base_url}?v={version}"
+
+
+def _send_uncached_preview(file_path: Path):
+    response = send_file(
+        file_path, mimetype="image/jpeg", as_attachment=False, max_age=0
+    )
+    response.cache_control.no_cache = True
+    response.cache_control.no_store = True
+    response.cache_control.must_revalidate = True
+    response.expires = 0
+    return response
+
+
 def _prepare_retry_artifacts(project_id: str, paths: dict, from_stage: str) -> None:
     cleanup_targets = []
 
@@ -1026,7 +1045,10 @@ def get_frame_previews(project_id):
         for frame_file in frame_files:
             frame_info = {
                 "name": frame_file.name,
-                "url": f"/api/frame_preview/{project_id}/{frame_file.name}",
+                "url": _preview_url_with_version(
+                    f"/api/frame_preview/{project_id}/{frame_file.name}",
+                    frame_file,
+                ),
                 "type": "colmap",
             }
             result["colmap_frames"].append(frame_info)
@@ -1040,7 +1062,10 @@ def get_frame_previews(project_id):
             for frame_file in training_files:
                 frame_info = {
                     "name": frame_file.name,
-                    "url": f"/api/training_frame_preview/{project_id}/{frame_file.name}",
+                    "url": _preview_url_with_version(
+                        f"/api/training_frame_preview/{project_id}/{frame_file.name}",
+                        frame_file,
+                    ),
                     "type": "training",
                 }
                 result["training_frames"].append(frame_info)
@@ -1051,7 +1076,12 @@ def get_frame_previews(project_id):
     if not result["frames"]:
         result["message"] = "No frames extracted yet"
 
-    return jsonify(result)
+    response = jsonify(result)
+    response.cache_control.no_cache = True
+    response.cache_control.no_store = True
+    response.cache_control.must_revalidate = True
+    response.expires = 0
+    return response
 
 
 @api_bp.route("/training_frame_preview/<project_id>/<filename>")
@@ -1065,10 +1095,7 @@ def serve_training_frame_preview(project_id, filename):
     if not frame_path.exists():
         return jsonify({"error": "Training frame not found"}), 404
 
-    # Serve the frame with caching headers
-    return send_file(
-        frame_path, mimetype="image/jpeg", as_attachment=False, max_age=3600
-    )
+    return _send_uncached_preview(frame_path)
 
 
 @api_bp.route("/project/<project_id>/image_preview/<path:filename>")
@@ -1083,9 +1110,7 @@ def serve_project_image_preview(project_id, filename):
 
     for candidate in candidate_paths:
         if candidate.exists():
-            return send_file(
-                candidate, mimetype="image/jpeg", as_attachment=False, max_age=3600
-            )
+            return _send_uncached_preview(candidate)
 
     return jsonify({"error": "Image not found"}), 404
 
@@ -1101,10 +1126,7 @@ def serve_frame_preview(project_id, filename):
     if not frame_path.exists():
         return jsonify({"error": "Frame not found"}), 404
 
-    # Serve the frame with caching headers
-    return send_file(
-        frame_path, mimetype="image/jpeg", as_attachment=False, max_age=3600
-    )
+    return _send_uncached_preview(frame_path)
 
 
 @api_bp.route("/project/<project_id>/thumbnail")
@@ -1129,9 +1151,7 @@ def get_project_thumbnail(project_id):
     # Return the first image
     thumbnail_path = image_files[0]
 
-    return send_file(
-        thumbnail_path, mimetype="image/jpeg", as_attachment=False, max_age=3600
-    )
+    return _send_uncached_preview(thumbnail_path)
 
 
 @api_bp.route("/download/<project_id>")

@@ -981,6 +981,7 @@ def refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id=None):
         return colmap_cfg
 
     original_matcher_params = dict(colmap_cfg.get('matcher_params') or {})
+    existing_final_recovery_matching_pass = colmap_cfg.get('final_recovery_matching_pass')
 
     profile_rank = {
         'local-conservative': 0,
@@ -1026,7 +1027,11 @@ def refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id=None):
     colmap_cfg['matcher_params'] = dict(refined_policy['matcher_params'])
     colmap_cfg['mapper_params'] = dict(refined_policy['mapper_params'])
     colmap_cfg['recovery_matching_pass'] = None
-    colmap_cfg['final_recovery_matching_pass'] = None
+    colmap_cfg['final_recovery_matching_pass'] = (
+        existing_final_recovery_matching_pass
+        if existing_final_recovery_matching_pass and not colmap_cfg.get('loop_detection_fallback_attempted')
+        else None
+    )
     colmap_cfg['min_num_matches'] = min(colmap_cfg['min_num_matches'], refined_policy['min_num_matches_cap'])
     colmap_cfg['init_num_trials'] = max(colmap_cfg['init_num_trials'], refined_policy['init_num_trials_floor'])
 

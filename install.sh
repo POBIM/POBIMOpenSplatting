@@ -35,6 +35,8 @@ PROJECT_ROOT="$SCRIPT_DIR"
 BUILD_DIR="$PROJECT_ROOT/build"
 COLMAP_BUILD_DIR="$PROJECT_ROOT/colmap-build"
 COLMAP_INSTALL_DIR="$COLMAP_BUILD_DIR/install"
+CERES_BUILD_DIR="$PROJECT_ROOT/ceres-build"
+CERES_INSTALL_DIR="$CERES_BUILD_DIR/install"
 POBIM_SPLATTING_DIR="$PROJECT_ROOT/PobimSplatting"
 FRONTEND_DIR="$POBIM_SPLATTING_DIR/Frontend"
 BACKEND_DIR="$POBIM_SPLATTING_DIR/Backend"
@@ -53,6 +55,7 @@ CUDA_ENABLED="OFF"
 GPU_ARCHS="70;75;80;86;89"  # Default architectures
 GPU_COMPUTE_CAP=""
 APT_LOCK_WAIT_TIMEOUT=600
+COLMAP_CERES_VERSION="master"
 
 # Yes to all mode (skip all prompts)
 YES_TO_ALL="false"
@@ -70,6 +73,8 @@ echo "==========================================================================
 echo -e "${NC}"
 echo -e "${CYAN}Installation log: $LOG_FILE${NC}"
 echo ""
+
+source "$PROJECT_ROOT/scripts/colmap-build-common.sh"
 
 # =============================================================================
 # Helper Functions
@@ -711,12 +716,16 @@ install_system_dependencies() {
         libmetis-dev
         libgoogle-glog-dev
         libgflags-dev
+        libabsl-dev
         libsqlite3-dev
         libglew-dev
         qtbase5-dev
         libqt5opengl5-dev
         libcgal-dev
         libceres-dev
+        libsuitesparse-dev
+        libopenblas-dev
+        liblapack-dev
         libopenimageio-dev
         openimageio-tools
 
@@ -739,6 +748,13 @@ install_system_dependencies() {
         htop
         ninja-build
     )
+
+    if [ "$CUDA_ENABLED" = "ON" ]; then
+        PACKAGES+=(
+            libcudss0-cuda-12
+            libcudss0-dev-cuda-12
+        )
+    fi
     
     print_info "Installing required packages..."
     for package in "${PACKAGES[@]}"; do
@@ -934,6 +950,14 @@ setup_libtorch() {
 # =============================================================================
 
 build_colmap_internal() {
+    local gui_enabled
+    local ceres_cmake_dir=""
+    local ceres_lib_dir=""
+    local cudss_cmake_dir=""
+    local cudss_lib_dir=""
+    local colmap_ceres_link=""
+    local colmap_cmake_prefix_path=""
+
     print_info "Building COLMAP..."
 
     if ! upgrade_cmake; then
@@ -963,7 +987,7 @@ build_colmap_internal() {
     fi
     
     # GUI support - default OFF for servers
-    GUI_ENABLED="$COLMAP_GUI_ENABLED"
+    gui_enabled="$COLMAP_GUI_ENABLED"
     
     # Check if COLMAP source exists
     if [ ! -d "$PROJECT_ROOT/colmap" ]; then
@@ -974,7 +998,34 @@ build_colmap_internal() {
     mkdir -p "$COLMAP_BUILD_DIR"
     cd "$COLMAP_BUILD_DIR"
     
-    print_info "Configuring COLMAP with CMake (CUDA: $CUDA_ENABLED, GUI: $GUI_ENABLED)..."
+    if [ "$CUDA_ENABLED" = "ON" ]; then
+        if ! colmap_build_ceres_with_cuda "$PROJECT_ROOT" "$CUDA_HOME" "$GPU_ARCHS" "$NUM_CORES" "$COLMAP_CERES_VERSION"; then
+            print_error "CUDA-enabled Ceres build failed; refusing to build a CPU-only BA COLMAP by mistake"
+            cd "$PROJECT_ROOT"
+            return 1
+        fi
+
+        ceres_cmake_dir="$(colmap_ceres_cmake_dir "$PROJECT_ROOT" || true)"
+        ceres_lib_dir="$(colmap_ceres_lib_dir "$PROJECT_ROOT" || true)"
+        cudss_cmake_dir="$(colmap_prepare_cudss_cmake_shim "$PROJECT_ROOT" || true)"
+        if [ -z "$cudss_cmake_dir" ]; then
+            cudss_cmake_dir="$(colmap_detect_cudss_cmake_dir || true)"
+        fi
+        cudss_lib_dir="$(colmap_detect_cudss_lib_dir || true)"
+        colmap_cmake_prefix_path="$CERES_INSTALL_DIR"
+        if [ -n "$cudss_cmake_dir" ]; then
+            colmap_cmake_prefix_path="$colmap_cmake_prefix_path;$(cd "$cudss_cmake_dir/../.." && pwd)"
+        fi
+        if [ -z "$ceres_cmake_dir" ] || [ -z "$ceres_lib_dir" ]; then
+            print_error "CUDA-enabled Ceres was built, but its install directories could not be resolved"
+            cd "$PROJECT_ROOT"
+            return 1
+        fi
+
+        print_info "Using CUDA-enabled Ceres from $ceres_cmake_dir"
+    fi
+
+    print_info "Configuring COLMAP with CMake (CUDA: $CUDA_ENABLED, GUI: $gui_enabled)..."
     
     # Build CMake command
     CMAKE_ARGS=(
@@ -982,15 +1033,23 @@ build_colmap_internal() {
         "-DCMAKE_BUILD_TYPE=Release"
         "-DCUDA_ENABLED=$CUDA_ENABLED"
         "-DGLOMAP_CUDA_ENABLED=$CUDA_ENABLED"
-        "-DGUI_ENABLED=$GUI_ENABLED"
+        "-DGUI_ENABLED=$gui_enabled"
         "-DCMAKE_INSTALL_PREFIX=$COLMAP_INSTALL_DIR"
+        "-DCMAKE_INSTALL_RPATH_USE_LINK_PATH=ON"
     )
-    
+
     if [ "$CUDA_ENABLED" = "ON" ]; then
         CMAKE_ARGS+=(
+            "-DCMAKE_IGNORE_PREFIX_PATH=/home/linuxbrew/.linuxbrew"
+            "-DCMAKE_PREFIX_PATH=$colmap_cmake_prefix_path"
+            "-DEigen3_DIR=/usr/share/eigen3/cmake"
             "-DCMAKE_CUDA_ARCHITECTURES=$GPU_ARCHS"
             "-DCMAKE_CUDA_COMPILER=$CUDA_HOME/bin/nvcc"
             "-DCUDA_TOOLKIT_ROOT_DIR=$CUDA_HOME"
+            "-DCeres_DIR=$ceres_cmake_dir"
+            "-Dcudss_DIR=$cudss_cmake_dir"
+            "-DCMAKE_BUILD_RPATH=$ceres_lib_dir;$CUDA_HOME/lib64${cudss_lib_dir:+;$cudss_lib_dir}"
+            "-DCMAKE_INSTALL_RPATH=$ceres_lib_dir;$CUDA_HOME/lib64${cudss_lib_dir:+;$cudss_lib_dir}"
         )
     fi
     
@@ -1026,6 +1085,10 @@ build_colmap_internal() {
             sudo ln -sf "$COLMAP_BIN" /usr/local/bin/colmap 2>/dev/null && \
                 print_success "Symlink created: /usr/local/bin/colmap" || \
                 print_warning "Could not create symlink (not critical)"
+        elif [ "$(readlink -f /usr/local/bin/colmap 2>/dev/null)" = "$(readlink -f "$COLMAP_BIN")" ]; then
+            print_success "Symlink already points to the rebuilt COLMAP binary"
+        else
+            print_warning "Skipping symlink update: sudo is required to change /usr/local/bin/colmap"
         fi
         
         # Test COLMAP
@@ -1035,6 +1098,21 @@ build_colmap_internal() {
             # Check CUDA support
             if $COLMAP_BIN -h 2>&1 | grep -q "with CUDA"; then
                 print_success "COLMAP built with CUDA support!"
+            fi
+
+            colmap_ceres_link=$(ldd "$COLMAP_BIN" 2>/dev/null | awk '/libceres/ {print $3; exit}')
+            if [ -n "$colmap_ceres_link" ]; then
+                print_info "COLMAP links libceres from: $colmap_ceres_link"
+            fi
+
+            if [ "$CUDA_ENABLED" = "ON" ] && [ -n "$ceres_lib_dir" ]; then
+                if colmap_verify_custom_ceres_integration "$COLMAP_BUILD_DIR" "$COLMAP_BIN" "$ceres_cmake_dir" "$ceres_lib_dir"; then
+                    print_success "COLMAP is configured against the custom CUDA-enabled Ceres build"
+                else
+                    print_error "COLMAP is still linked against a non-custom Ceres; GPU bundle adjustment would fall back to CPU"
+                    cd "$PROJECT_ROOT"
+                    return 1
+                fi
             fi
         fi
     else

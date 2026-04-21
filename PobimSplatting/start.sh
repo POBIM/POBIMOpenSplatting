@@ -447,10 +447,30 @@ start_backend() {
     # Kill existing process on port 5000
     kill_port 5000
 
+    # Ensure pycolmap (pulled in via lightglue) can load libonnxruntime.so.1
+    # shipped alongside the locally-built COLMAP.
+    local backend_ld_library_path="$LD_LIBRARY_PATH"
+    local onnx_candidates=(
+        "$REPO_ROOT/colmap-build/install/lib"
+        "$REPO_ROOT/colmap-build/_deps/onnxruntime-build/lib"
+        "$REPO_ROOT/colmap-build/_deps/onnxruntime-src/lib"
+    )
+    for _onnx_dir in "${onnx_candidates[@]}"; do
+        if [ -f "$_onnx_dir/libonnxruntime.so.1" ]; then
+            if [ -n "$backend_ld_library_path" ]; then
+                backend_ld_library_path="$_onnx_dir:$backend_ld_library_path"
+            else
+                backend_ld_library_path="$_onnx_dir"
+            fi
+            echo -e "${GREEN}✓ Backend LD_LIBRARY_PATH += $_onnx_dir${NC}"
+            break
+        fi
+    done
+
     if [ "${FLASK_ENV:-development}" = "production" ]; then
-        env PATH="$backend_path" gunicorn --config gunicorn.conf.py "PobimSplatting.Backend.app:app" > "$LOGS_DIR/backend.log" 2>&1 &
+        env PATH="$backend_path" LD_LIBRARY_PATH="$backend_ld_library_path" gunicorn --config gunicorn.conf.py "PobimSplatting.Backend.app:app" > "$LOGS_DIR/backend.log" 2>&1 &
     else
-        env PATH="$backend_path" python app.py > "$LOGS_DIR/backend.log" 2>&1 &
+        env PATH="$backend_path" LD_LIBRARY_PATH="$backend_ld_library_path" python app.py > "$LOGS_DIR/backend.log" 2>&1 &
     fi
     BACKEND_PID=$!
     echo "$BACKEND_PID" > "$BACKEND_PID_FILE"

@@ -1,7 +1,7 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-03-24T01:59:30Z
-**Commit:** e2c95c8
+**Generated:** 2026-04-21T09:46:57Z
+**Commit:** e72ab84
 **Branch:** main
 
 ## OVERVIEW
@@ -10,18 +10,19 @@ Monorepo for a local OpenSplat fork plus a web platform. Core stacks: C++/CMake 
 ## STRUCTURE
 ```text
 ./
-├── apps/                 # native CLI entrypoints
+├── apps/                 # native CLI entrypoints (opensplat, simple_trainer, visualizer)
 ├── src/                  # native engine implementation
 ├── include/opensplat/    # native engine headers
-├── rasterizer/           # GPU/CPU backend sources kept in place
+├── rasterizer/           # backend kernels: gsplat-cpu/, gsplat/ (CUDA/HIP), gsplat-metal/
 ├── PobimSplatting/       # web platform wrapper
 │   ├── Backend/          # Flask API + pipeline orchestration
 │   └── Frontend/         # Next.js app router UI
 ├── scripts/              # operational helpers; call these directly
 ├── docs/                 # canonical operator/install docs
-├── colmap/               # vendored upstream source tree
-├── hloc/                 # bundled localization toolbox
-└── fastmap/              # bundled SfM package with optional CUDA extension
+├── colmap/               # vendored upstream source tree (copied, not submodule)
+├── hloc/                 # bundled localization toolbox (pycolmap-backed)
+├── fastmap/              # bundled SfM package; writes COLMAP-format sparse/0
+└── DesktopApp/           # empty stub (installer-prereqs fragment only)
 ```
 
 ## WHERE TO LOOK

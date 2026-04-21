@@ -2,17 +2,47 @@
 
 import { ReactNode } from 'react';
 
-type BadgeVariant = 'processing' | 'completed' | 'failed' | 'cancelled' | 'pending' | 'live' | 'new' | 'recommended';
+type BadgeVariant =
+  | 'processing'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'pending'
+  | 'live'
+  | 'new'
+  | 'recommended';
 
-const variants: Record<BadgeVariant, string> = {
-  processing: 'bg-blue-100 text-blue-700 border-blue-200',
-  completed: 'bg-green-100 text-green-700 border-green-200',
-  failed: 'bg-red-100 text-red-700 border-red-200',
-  cancelled: 'bg-amber-100 text-amber-700 border-amber-200',
-  pending: 'bg-gray-100 text-gray-600 border-gray-200',
-  live: 'bg-green-100 text-green-700 border-green-200',
-  new: 'bg-purple-100 text-purple-700 border-purple-200',
-  recommended: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+const bgMap: Record<BadgeVariant, string> = {
+  processing: 'var(--processing-bg)',
+  completed: 'var(--success-bg)',
+  failed: 'var(--error-bg)',
+  cancelled: 'var(--warning-bg)',
+  pending: 'var(--paper-muted)',
+  live: 'var(--success-bg)',
+  new: 'var(--processing-bg)',
+  recommended: 'var(--success-bg)',
+};
+
+const fgMap: Record<BadgeVariant, string> = {
+  processing: 'var(--processing-text)',
+  completed: 'var(--success-text)',
+  failed: 'var(--error-text)',
+  cancelled: 'var(--warning-text)',
+  pending: 'var(--text-secondary)',
+  live: 'var(--success-text)',
+  new: 'var(--processing-text)',
+  recommended: 'var(--success-text)',
+};
+
+const dotMap: Record<BadgeVariant, string> = {
+  processing: 'var(--processing-icon)',
+  completed: 'var(--success-icon)',
+  failed: 'var(--error-icon)',
+  cancelled: 'var(--warning-icon)',
+  pending: 'var(--text-muted)',
+  live: 'var(--success-icon)',
+  new: 'var(--processing-icon)',
+  recommended: 'var(--success-icon)',
 };
 
 interface BadgeProps {
@@ -24,15 +54,22 @@ interface BadgeProps {
 
 export function Badge({ variant, children, pulse = false, icon }: BadgeProps) {
   return (
-    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${variants[variant]}`}>
+    <span
+      className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider"
+      style={{
+        background: bgMap[variant],
+        color: fgMap[variant],
+        border: 'var(--border-w) solid var(--ink)',
+        boxShadow: '2px 2px 0 var(--ink)',
+      }}
+    >
       {pulse && (
-        <span className={`w-1.5 h-1.5 rounded-full mr-1.5 animate-pulse ${
-          variant === 'live' ? 'bg-green-500' : 
-          variant === 'processing' ? 'bg-blue-500' : 
-          'bg-current'
-        }`} />
+        <span
+          className="w-1.5 h-1.5 brutal-pulse"
+          style={{ background: dotMap[variant] }}
+        />
       )}
-      {icon && <span className="mr-1">{icon}</span>}
+      {icon && <span className="inline-flex">{icon}</span>}
       {children}
     </span>
   );

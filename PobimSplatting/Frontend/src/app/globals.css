@@ -1,123 +1,372 @@
 @import "tailwindcss";
 
+/* =========================================================================
+   POBIM BRUTALIST — Deep Navy theme (compact variant)
+   Replaces the previous black/zinc palette. All cards, buttons, borders now
+   draw on --ink instead of pure black. Sizing tokens are tuned ~20-30%
+   tighter than a classic brutalist landing so the admin UI reads densely.
+   ========================================================================= */
+
 :root {
-  /* Minimal Black & White Theme */
-  --background: #ffffff;
-  --foreground: #000000;
-  --gray-50: #fafafa;
-  --gray-100: #f5f5f5;
-  --gray-200: #e5e5e5;
-  --gray-300: #d4d4d4;
-  --gray-400: #a3a3a3;
-  --gray-500: #737373;
-  --gray-600: #525252;
-  --gray-700: #404040;
-  --gray-800: #262626;
-  --gray-900: #171717;
+  /* --- Deep Navy ink (replacement for black) --- */
+  --ink: #0A1A3F;          /* primary ink — used like "black" */
+  --ink-800: #0F2350;
+  --ink-700: #142C63;
+  --ink-600: #1B3B82;
+  --ink-500: #2D4FA3;
+  --ink-300: #8394C4;
+  --ink-shadow: #0A1A3F;   /* offset shadow color */
+  --ink-shadow-soft: #d4d4d8; /* zinc-300 for inverted cards */
 
-  /* Accent */
-  --accent: #000000;
-  --accent-hover: #262626;
+  /* --- Paper (page / cards) --- */
+  --paper: #F4F5F8;        /* bg-zinc-50-ish, slightly cool */
+  --paper-card: #FFFFFF;
+  --paper-muted: #ECEEF3;
+  --paper-muted-2: #DDE1EA;
 
-  /* Border */
-  --border: #e5e5e5;
-  --border-hover: #000000;
+  /* --- Text --- */
+  --text-primary: var(--ink);
+  --text-secondary: #4A5578;
+  --text-muted: #6B7494;
+  --text-on-ink: #FFFFFF;
+  --text-on-ink-muted: #B8C1DD;
 
-  /* Pastel Status Colors */
-  --success-bg: #d1fae5;
-  --success-border: #6ee7b7;
-  --success-text: #065f46;
-  --success-icon: #10b981;
+  /* --- Status (brutalist pastel — kept flat, navy borders) --- */
+  --success-bg: #D4F5DE;
+  --success-text: #064D1B;
+  --success-icon: #0F7A3A;
 
-  --error-bg: #fee2e2;
-  --error-border: #fca5a5;
-  --error-text: #991b1b;
-  --error-icon: #ef4444;
+  --error-bg: #FFD9D9;
+  --error-text: #5A0F0F;
+  --error-icon: #C01818;
 
-  --warning-bg: #fef3c7;
-  --warning-border: #fcd34d;
-  --warning-text: #92400e;
+  --warning-bg: #FFE7B0;
+  --warning-text: #5A3D00;
+  --warning-icon: #B5830C;
 
-  --processing-bg: #dbeafe;
-  --processing-border: #93c5fd;
-  --processing-text: #1e3a8a;
+  --processing-bg: #D8E1FA;
+  --processing-text: #0A1A3F;
+  --processing-icon: #1B3B82;
 
-  --navbar-height: 4rem;
+  /* --- Sizing (compact) --- */
+  --navbar-height: 3.25rem;   /* 52px — was 64px */
+  --border-w: 2px;            /* was 3px brutalist default */
+  --border-w-strong: 3px;     /* for hero / CTA */
+  --shadow-sm: 3px 3px 0 var(--ink);
+  --shadow-md: 5px 5px 0 var(--ink);
+  --shadow-lg: 8px 8px 0 var(--ink);
+  --shadow-inv: 5px 5px 0 var(--ink-shadow-soft);
+
+  /* Back-compat tokens still referenced by older components */
+  --background: var(--paper);
+  --foreground: var(--ink);
+  --gray-50: #F4F5F8;
+  --gray-100: #ECEEF3;
+  --gray-200: #DDE1EA;
+  --gray-300: #C4CAD9;
+  --gray-400: #9BA3BC;
+  --gray-500: #6B7494;
+  --gray-600: #4A5578;
+  --gray-700: #2E3858;
+  --gray-800: #1A2544;
+  --gray-900: var(--ink);
+  --accent: var(--ink);
+  --accent-hover: var(--ink-700);
+  --border: var(--paper-muted-2);
+  --border-hover: var(--ink);
+  --success-border: #0F7A3A;
+  --error-border: #C01818;
+  --warning-border: #B5830C;
+  --processing-border: #1B3B82;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: "SF Pro Text", "Helvetica Neue", "Segoe UI", system-ui, sans-serif;
-  --font-mono: "SFMono-Regular", "Cascadia Code", "JetBrains Mono", ui-monospace, monospace;
+  --color-background: var(--paper);
+  --color-foreground: var(--ink);
+  --color-ink: var(--ink);
+  --color-ink-600: var(--ink-600);
+  --color-ink-700: var(--ink-700);
+  --color-ink-800: var(--ink-800);
+  --color-paper: var(--paper);
+  --color-paper-card: var(--paper-card);
+  --color-paper-muted: var(--paper-muted);
+  --color-paper-muted-2: var(--paper-muted-2);
+  --font-sans: "Space Grotesk", "SF Pro Text", "Inter", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", ui-monospace, monospace;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: system-ui, -apple-system, sans-serif;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "ss01", "cv11";
 }
 
+/* =========================================================================
+   Brutalist utility components
+   Use these instead of raw class soups. Everything compact by default.
+   ========================================================================= */
 @layer components {
-  /* Minimal Button Styles */
-  .btn-primary {
-    @apply inline-flex items-center px-4 py-2 text-sm font-medium rounded-xl text-white bg-black hover:bg-gray-800 transition-colors;
+
+  /* ---------- Layout primitives ---------- */
+  .brutal-shell {
+    background: var(--paper);
+    min-height: 100vh;
+  }
+  .brutal-section {
+    @apply px-4 md:px-6;
+    padding-top: 2rem;
+    padding-bottom: 2rem;
+  }
+  .brutal-section-tight {
+    @apply px-4 md:px-6 py-4 md:py-6;
+  }
+  .brutal-container {
+    @apply mx-auto w-full max-w-7xl;
+  }
+  .brutal-divider {
+    border-bottom: var(--border-w) solid var(--ink);
   }
 
-  .btn-secondary {
-    @apply inline-flex items-center px-4 py-2 border border-gray-200 text-sm font-medium rounded-xl text-black hover:bg-gray-50 transition-colors;
+  /* ---------- Cards ---------- */
+  .brutal-card {
+    background: var(--paper-card);
+    border: var(--border-w) solid var(--ink);
+    box-shadow: var(--shadow-sm);
+    transition: transform 120ms ease, box-shadow 120ms ease;
+  }
+  .brutal-card-hover {
+    background: var(--paper-card);
+    border: var(--border-w) solid var(--ink);
+    box-shadow: var(--shadow-sm);
+    transition: transform 120ms ease, box-shadow 120ms ease;
+  }
+  .brutal-card-hover:hover {
+    transform: translate(-2px, -2px);
+    box-shadow: var(--shadow-md);
+  }
+  .brutal-card-dark {
+    background: var(--ink);
+    color: var(--text-on-ink);
+    border: var(--border-w) solid var(--ink);
+    box-shadow: var(--shadow-inv);
+  }
+  .brutal-card-muted {
+    background: var(--paper-muted);
+    border: var(--border-w) solid var(--ink);
+    box-shadow: var(--shadow-sm);
   }
 
-  .btn-ghost {
-    @apply inline-flex items-center px-4 py-2 text-sm font-medium text-gray-600 hover:text-black transition-colors;
+  /* ---------- Buttons (compact) ---------- */
+  .brutal-btn {
+    @apply inline-flex items-center justify-center gap-2 px-3 py-1.5 text-xs font-bold uppercase tracking-wider whitespace-nowrap;
+    background: var(--paper-card);
+    color: var(--ink);
+    border: var(--border-w) solid var(--ink);
+    box-shadow: var(--shadow-sm);
+    transition: transform 100ms ease, box-shadow 100ms ease, background 100ms ease;
+  }
+  .brutal-btn:hover {
+    transform: translate(-2px, -2px);
+    box-shadow: var(--shadow-md);
+  }
+  .brutal-btn:active {
+    transform: translate(0, 0);
+    box-shadow: 1px 1px 0 var(--ink);
+  }
+  .brutal-btn:disabled,
+  .brutal-btn[aria-disabled="true"] {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: var(--shadow-sm);
+  }
+  .brutal-btn-primary {
+    background: var(--ink);
+    color: var(--text-on-ink);
+  }
+  .brutal-btn-primary:hover {
+    background: var(--ink-700);
+  }
+  .brutal-btn-ghost {
+    background: transparent;
+    box-shadow: none;
+    border-color: transparent;
+  }
+  .brutal-btn-ghost:hover {
+    transform: none;
+    box-shadow: none;
+    background: var(--paper-muted);
+    border-color: var(--ink);
+  }
+  .brutal-btn-danger {
+    background: var(--error-icon);
+    color: #fff;
+  }
+  .brutal-btn-danger:hover {
+    background: #8f0f0f;
+  }
+  .brutal-btn-lg {
+    @apply px-4 py-2 text-sm;
+  }
+  .brutal-btn-xs {
+    @apply px-2 py-1 text-[11px];
   }
 
-  /* Card Styles */
-  .card {
-    @apply border border-gray-200 rounded-2xl bg-white transition-all;
+  /* ---------- Inputs ---------- */
+  .brutal-input,
+  .brutal-select,
+  .brutal-textarea {
+    @apply w-full px-3 py-2 text-sm font-medium;
+    background: var(--paper-card);
+    color: var(--ink);
+    border: var(--border-w) solid var(--ink);
+    box-shadow: var(--shadow-sm);
+    transition: box-shadow 100ms ease, transform 100ms ease;
+  }
+  .brutal-input::placeholder,
+  .brutal-textarea::placeholder {
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-size: 0.75rem;
+  }
+  .brutal-input:focus,
+  .brutal-select:focus,
+  .brutal-textarea:focus {
+    outline: none;
+    transform: translate(-1px, -1px);
+    box-shadow: var(--shadow-md);
   }
 
-  .card-hover {
-    @apply border border-gray-200 rounded-2xl bg-white transition-all hover:border-black hover:shadow-lg;
+  /* ---------- Labels / headings ---------- */
+  .brutal-label {
+    @apply text-[11px] font-bold uppercase tracking-[0.15em];
+    color: var(--text-secondary);
+  }
+  .brutal-h1 {
+    @apply text-2xl md:text-4xl font-black uppercase tracking-tight;
+    color: var(--ink);
+    line-height: 1;
+  }
+  .brutal-h2 {
+    @apply text-xl md:text-2xl font-black uppercase tracking-tight;
+    color: var(--ink);
+  }
+  .brutal-h3 {
+    @apply text-base md:text-lg font-black uppercase tracking-tight;
+    color: var(--ink);
+  }
+  .brutal-eyebrow {
+    @apply inline-block text-[11px] font-bold uppercase tracking-[0.2em] px-2 py-0.5;
+    background: var(--ink);
+    color: var(--text-on-ink);
+    border: var(--border-w) solid var(--ink);
   }
 
-  /* Input Styles */
-  .input {
-    @apply w-full px-4 py-3 border border-gray-200 rounded-xl text-black placeholder-gray-400 focus:border-black focus:outline-none focus:ring-1 focus:ring-black transition-colors;
+  /* ---------- Badges ---------- */
+  .brutal-badge {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider;
+    background: var(--paper-card);
+    color: var(--ink);
+    border: var(--border-w) solid var(--ink);
+    box-shadow: 2px 2px 0 var(--ink);
   }
+  .brutal-badge-solid {
+    background: var(--ink);
+    color: var(--text-on-ink);
+  }
+  .brutal-badge-success { background: var(--success-bg); color: var(--success-text); }
+  .brutal-badge-error   { background: var(--error-bg); color: var(--error-text); }
+  .brutal-badge-warning { background: var(--warning-bg); color: var(--warning-text); }
+  .brutal-badge-info    { background: var(--processing-bg); color: var(--processing-text); }
 
-  /* Status Indicators */
+  /* ---------- Status pills (compat with old class names) ---------- */
   .status-badge {
-    @apply px-3 py-1 rounded-full text-xs font-medium;
+    @apply inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider;
+    background: var(--paper-card);
+    color: var(--ink);
+    border: var(--border-w) solid var(--ink);
   }
+  .status-processing { background: var(--processing-bg); color: var(--processing-text); border-color: var(--ink); }
+  .status-completed  { background: var(--success-bg);    color: var(--success-text);    border-color: var(--ink); }
+  .status-failed     { background: var(--error-bg);      color: var(--error-text);      border-color: var(--ink); }
+  .status-cancelled  { background: var(--warning-bg);    color: var(--warning-text);    border-color: var(--ink); }
 
-  .status-processing {
-    @apply px-3 py-1 rounded-full text-xs font-medium;
-    background-color: var(--processing-bg);
-    color: var(--processing-text);
-    border: 1px solid var(--processing-border);
+  /* ---------- Legacy compat (gradual migration) ---------- */
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 px-3 py-1.5 text-xs font-bold uppercase tracking-wider;
+    background: var(--ink);
+    color: var(--text-on-ink);
+    border: var(--border-w) solid var(--ink);
+    box-shadow: var(--shadow-sm);
+    transition: transform 100ms ease, box-shadow 100ms ease;
   }
+  .btn-primary:hover { transform: translate(-2px,-2px); box-shadow: var(--shadow-md); background: var(--ink-700); }
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 px-3 py-1.5 text-xs font-bold uppercase tracking-wider;
+    background: var(--paper-card);
+    color: var(--ink);
+    border: var(--border-w) solid var(--ink);
+    box-shadow: var(--shadow-sm);
+    transition: transform 100ms ease, box-shadow 100ms ease;
+  }
+  .btn-secondary:hover { transform: translate(-2px,-2px); box-shadow: var(--shadow-md); }
+  .btn-ghost {
+    @apply inline-flex items-center gap-2 px-2 py-1 text-xs font-bold uppercase tracking-wider;
+    color: var(--text-secondary);
+    transition: color 100ms ease, background 100ms ease;
+  }
+  .btn-ghost:hover { color: var(--ink); background: var(--paper-muted); }
+  .card {
+    background: var(--paper-card);
+    border: var(--border-w) solid var(--ink);
+    box-shadow: var(--shadow-sm);
+  }
+  .card-hover {
+    background: var(--paper-card);
+    border: var(--border-w) solid var(--ink);
+    box-shadow: var(--shadow-sm);
+    transition: transform 120ms ease, box-shadow 120ms ease;
+  }
+  .card-hover:hover { transform: translate(-2px,-2px); box-shadow: var(--shadow-md); }
+  .input {
+    @apply w-full px-3 py-2 text-sm font-medium;
+    background: var(--paper-card);
+    color: var(--ink);
+    border: var(--border-w) solid var(--ink);
+    box-shadow: var(--shadow-sm);
+  }
+  .input:focus { outline: none; transform: translate(-1px,-1px); box-shadow: var(--shadow-md); }
 
-  .status-completed {
-    @apply px-3 py-1 rounded-full text-xs font-medium;
-    background-color: var(--success-bg);
-    color: var(--success-text);
-    border: 1px solid var(--success-border);
+  /* ---------- Decorative ---------- */
+  .brutal-dot-bg {
+    background-image: radial-gradient(circle at 2px 2px, var(--ink) 1px, transparent 0);
+    background-size: 20px 20px;
+    opacity: 0.06;
   }
+  .brutal-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+  .brutal-scroll::-webkit-scrollbar-track { background: var(--paper-muted); }
+  .brutal-scroll::-webkit-scrollbar-thumb { background: var(--ink); border: 2px solid var(--paper-muted); }
+}
 
-  .status-failed {
-    @apply px-3 py-1 rounded-full text-xs font-medium;
-    background-color: var(--error-bg);
-    color: var(--error-text);
-    border: 1px solid var(--error-border);
-  }
+/* =========================================================================
+   Animations
+   ========================================================================= */
+@keyframes brutalMarquee {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+@keyframes brutalPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.brutal-pulse { animation: brutalPulse 1.6s ease-in-out infinite; }
 
-  .status-cancelled {
-    @apply px-3 py-1 rounded-full text-xs font-medium;
-    background-color: var(--warning-bg);
-    color: var(--warning-text);
-    border: 1px solid var(--warning-border);
-  }
+/* Selection */
+::selection {
+  background: var(--ink);
+  color: #fff;
 }

@@ -12,7 +12,7 @@ export function Crosshair({
   size = 20,
   thickness = 2,
   gap = 6,
-  color = '#ff0000',
+  color = 'var(--ink)',
   opacity = 0.9,
 }: CrosshairProps) {
   return (
@@ -23,6 +23,7 @@ export function Crosshair({
         viewBox={`0 0 ${size * 2 + gap * 2} ${size * 2 + gap * 2}`}
         style={{ opacity }}
       >
+        <title>Crosshair</title>
         {/* Horizontal line - Left */}
         <line
           x1={0}
@@ -31,7 +32,7 @@ export function Crosshair({
           y2={size + gap}
           stroke={color}
           strokeWidth={thickness}
-          strokeLinecap="round"
+          strokeLinecap="square"
         />
         {/* Horizontal line - Right */}
         <line
@@ -41,7 +42,7 @@ export function Crosshair({
           y2={size + gap}
           stroke={color}
           strokeWidth={thickness}
-          strokeLinecap="round"
+          strokeLinecap="square"
         />
         {/* Vertical line - Top */}
         <line
@@ -51,7 +52,7 @@ export function Crosshair({
           y2={size}
           stroke={color}
           strokeWidth={thickness}
-          strokeLinecap="round"
+          strokeLinecap="square"
         />
         {/* Vertical line - Bottom */}
         <line
@@ -61,7 +62,7 @@ export function Crosshair({
           y2={size * 2 + gap * 2}
           stroke={color}
           strokeWidth={thickness}
-          strokeLinecap="round"
+          strokeLinecap="square"
         />
         {/* Center dot */}
         <circle

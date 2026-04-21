@@ -4,22 +4,16 @@ import {
   Camera,
   Grid3x3,
   Info,
-  SquareMousePointer,
   Maximize2,
   Minimize2,
   Move,
   Palette,
   RotateCcw,
   Ruler,
+  SquareMousePointer,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import {
-  ReactNode,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type { BackgroundId } from './useSplatScene';
 
@@ -72,10 +66,11 @@ interface IconButtonProps {
 }
 
 const iconButtonBase =
-  'h-10 w-10 inline-flex items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-600 transition-all hover:bg-black hover:text-white hover:border-black focus:outline-none focus-visible:ring-2 focus-visible:ring-black';
-const iconButtonActive = '!bg-black !text-white !border-black shadow-md';
+  'flex h-9 w-9 items-center justify-center border-2 border-[var(--ink)] bg-[var(--paper-card)] text-[var(--ink)] shadow-[var(--shadow-sm)] transition-all hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[var(--shadow-md)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink)]/20';
+const iconButtonActive =
+  'bg-[var(--ink)] text-[var(--text-on-ink)] shadow-[var(--shadow-inv)]';
 const iconButtonDisabled =
-  'cursor-not-allowed opacity-50 hover:bg-white hover:text-gray-400 hover:border-gray-200';
+  'cursor-not-allowed opacity-45 hover:translate-x-0 hover:translate-y-0 hover:shadow-[var(--shadow-sm)]';
 
 function IconButton({ icon: Icon, label, active, onClick, disabled }: IconButtonProps) {
   return (
@@ -93,6 +88,9 @@ function IconButton({ icon: Icon, label, active, onClick, disabled }: IconButton
     </button>
   );
 }
+
+const sectionLabelClass =
+  'text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--text-on-ink-muted)]';
 
 export function IconSidebar({
   onBack,
@@ -149,18 +147,21 @@ export function IconSidebar({
   );
 
   return (
-    <div className="absolute left-4 top-4 bottom-4 z-40 flex flex-col gap-3 pointer-events-none">
-      <div className="flex flex-col gap-2 pointer-events-auto bg-white border border-gray-200 rounded-2xl p-2 shadow-lg" data-orbit-block="true">
+    <div className="pointer-events-none absolute left-4 top-4 bottom-4 z-40 flex flex-col gap-3">
+      <div
+        className="pointer-events-auto flex w-12 flex-col items-center gap-2 border-[3px] border-[var(--ink)] bg-[var(--ink)] px-[5px] py-3 shadow-[var(--shadow-md)]"
+        data-orbit-block="true"
+      >
         <button
           type="button"
-          className="h-10 px-3 inline-flex items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white text-gray-900 text-sm font-medium transition-all hover:bg-black hover:text-white hover:border-black focus:outline-none"
+          className="brutal-btn brutal-btn-primary brutal-btn-xs flex h-9 w-full gap-1 px-0"
           onClick={onBack}
         >
-          <ArrowLeft className="h-4 w-4" />
-          <span>Back</span>
+          <ArrowLeft className="h-3.5 w-3.5" />
+          <span className="sr-only">Back</span>
         </button>
 
-        <div className="w-full h-px bg-gray-200" />
+        <div className="h-[2px] w-full bg-[var(--paper-muted-2)]" />
 
         <IconButton icon={RotateCcw} label="Reset view" onClick={onReset} />
         <IconButton
@@ -181,7 +182,7 @@ export function IconSidebar({
           onClick={onToggleFullscreen}
         />
 
-        <div className="w-full h-px bg-gray-200" />
+        <div className="h-[2px] w-full bg-[var(--paper-muted-2)]" />
 
         <IconButton
           icon={Axis3D}
@@ -197,50 +198,41 @@ export function IconSidebar({
         />
 
         {measurementControls && (
-          <div className="rounded-xl border border-gray-200 bg-white p-2">
-            <p className="px-1 pb-2 text-[11px] font-medium uppercase tracking-wide text-gray-400">Measurements</p>
-            <div className="flex flex-col gap-2">
-              <IconButton
-                icon={Ruler}
-                label="Distance tool"
-                onClick={measurementControls.onToggleDistance}
-                active={measurementControls.isDistanceMode}
+          <div className="flex w-full flex-col gap-2 border-2 border-[var(--paper-muted-2)] bg-[var(--ink-800)] p-1.5">
+            <p className={sectionLabelClass}>Measure</p>
+            <IconButton
+              icon={Ruler}
+              label="Distance tool"
+              onClick={measurementControls.onToggleDistance}
+              active={measurementControls.isDistanceMode}
+              disabled={measurementControls.disabled}
+            />
+            {(measurementControls.isDistanceMode || measurementControls.hasMeasurements) && (
+              <button
+                type="button"
+                className="brutal-btn brutal-btn-xs w-full px-1.5 text-[10px]"
+                onClick={measurementControls.disabled ? undefined : measurementControls.onClearAll}
                 disabled={measurementControls.disabled}
-              />
-              {(measurementControls.isDistanceMode || measurementControls.hasMeasurements) && (
-                <button
-                  type="button"
-                  className="inline-flex h-10 w-full items-center justify-center rounded-xl border border-gray-200 bg-white px-3 text-xs font-medium text-gray-600 transition-all hover:border-black hover:bg-black hover:text-white disabled:cursor-not-allowed disabled:border-gray-200 disabled:text-gray-400 disabled:hover:bg-white disabled:hover:text-gray-400"
-                  onClick={measurementControls.disabled ? undefined : measurementControls.onClearAll}
-                  disabled={measurementControls.disabled}
-                >
-                  ล้างทั้งหมด
-                </button>
-              )}
-            </div>
+              >
+                Clear
+              </button>
+            )}
           </div>
         )}
 
         {pointEditorControls && (
-          <div className="rounded-xl border border-gray-200 bg-white p-2">
-            <p className="px-1 pb-2 text-[11px] font-medium uppercase tracking-wide text-gray-400">Points</p>
-            <div className="flex flex-col gap-2">
-              <IconButton
-                icon={SquareMousePointer}
-                label="Point editor"
-                onClick={pointEditorControls.onToggle}
-                active={pointEditorControls.active}
-              />
-              <p className="px-1 text-[11px] text-gray-400">
-                {pointEditorControls.selectionCount.toLocaleString('en-US')} selected
-                {pointEditorControls.hiddenCount > 0 ? (
-                  <span>
-                    {' '}
-                    • {pointEditorControls.hiddenCount.toLocaleString('en-US')} hidden
-                  </span>
-                ) : null}
-              </p>
-            </div>
+          <div className="flex w-full flex-col gap-2 border-2 border-[var(--paper-muted-2)] bg-[var(--ink-800)] p-1.5">
+            <p className={sectionLabelClass}>Points</p>
+            <IconButton
+              icon={SquareMousePointer}
+              label="Point editor"
+              onClick={pointEditorControls.onToggle}
+              active={pointEditorControls.active}
+            />
+            <p className="text-center text-[9px] font-bold uppercase tracking-[0.12em] text-[var(--text-on-ink-muted)]">
+              {pointEditorControls.selectionCount.toLocaleString('en-US')} Sel
+              {pointEditorControls.hiddenCount > 0 ? ` • ${pointEditorControls.hiddenCount.toLocaleString('en-US')} Hid` : ''}
+            </p>
           </div>
         )}
 
@@ -259,12 +251,10 @@ export function IconSidebar({
 
           {paletteOpen && (
             <div
-              className="absolute left-full ml-2 top-0 w-40 rounded-2xl border border-gray-200 bg-white p-2 shadow-xl"
+              className="brutal-card absolute left-full top-0 ml-2 w-40 p-2"
               data-orbit-block="true"
             >
-              <p className="px-2 pb-2 text-[11px] font-medium uppercase tracking-wide text-gray-400">
-                Background
-              </p>
+              <p className="brutal-label px-1 pb-2">Background</p>
               <div className="flex flex-col gap-1">
                 {simplifiedOptions.map((option) => {
                   const isActive = option.id === activeBackground;
@@ -272,8 +262,10 @@ export function IconSidebar({
                     <button
                       type="button"
                       key={option.id}
-                      className={`flex items-center gap-2 rounded-xl px-2 py-2 text-left text-sm transition-colors hover:bg-gray-100 ${
-                        isActive ? 'bg-gray-100 text-black font-medium' : 'text-gray-600'
+                      className={`flex items-center gap-2 border-2 px-2 py-1.5 text-left text-[11px] font-bold uppercase tracking-[0.12em] transition-all ${
+                        isActive
+                          ? 'border-[var(--ink)] bg-[var(--ink)] text-[var(--text-on-ink)] shadow-[var(--shadow-sm)]'
+                          : 'border-transparent bg-[var(--paper-card)] text-[var(--ink)] hover:border-[var(--ink)] hover:bg-[var(--paper-muted)]'
                       }`}
                       onClick={() => {
                         onBackgroundSelect(option.id);
@@ -281,7 +273,7 @@ export function IconSidebar({
                       }}
                     >
                       <span
-                        className="h-4 w-4 rounded-full border-2 border-gray-300"
+                        className="h-4 w-4 rounded-full border-2 border-[var(--ink)]"
                         style={{ backgroundColor: option.css }}
                       />
                       {option.label}
@@ -293,18 +285,13 @@ export function IconSidebar({
           )}
         </div>
 
-        <div className="w-full h-px bg-gray-200" />
+        <div className="h-[2px] w-full bg-[var(--paper-muted-2)]" />
 
-        <IconButton
-          icon={Info}
-          label="Toggle info"
-          onClick={onToggleInfo}
-          active={infoOpen}
-        />
+        <IconButton icon={Info} label="Toggle info" onClick={onToggleInfo} active={infoOpen} />
       </div>
 
       {splatCount !== null && (
-        <div className="pointer-events-auto px-3 py-2 inline-flex items-center justify-center rounded-xl bg-white border border-gray-200 text-xs font-medium text-gray-900 shadow-sm">
+        <div className="pointer-events-auto brutal-card-dark px-3 py-2 text-center font-mono text-[11px] font-bold uppercase tracking-[0.14em]">
           {splatCount.toLocaleString()}
         </div>
       )}

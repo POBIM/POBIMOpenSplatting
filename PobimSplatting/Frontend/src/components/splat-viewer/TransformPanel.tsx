@@ -1,6 +1,7 @@
 import { Move, RotateCcw, RotateCw } from 'lucide-react';
-import { Vec3 } from './useSplatScene';
+
 import type { SnapAxis } from './measurement/useMeasurementTools';
+import { Vec3 } from './useSplatScene';
 
 type Axis = 'x' | 'y' | 'z';
 
@@ -23,23 +24,14 @@ const POSITION_RANGE = { min: -10, max: 10, step: 0.1 } as const;
 const ROTATION_RANGE = { min: -180, max: 180, step: 1 } as const;
 
 const AXIS_STYLES: Record<Axis, { accent: string; dot: string }> = {
-  x: {
-    accent: '#f87171',
-    dot: 'bg-rose-400',
-  },
-  y: {
-    accent: '#4ade80',
-    dot: 'bg-emerald-400',
-  },
-  z: {
-    accent: '#60a5fa',
-    dot: 'bg-sky-400',
-  },
+  x: { accent: '#C84B5A', dot: 'bg-rose-500' },
+  y: { accent: '#4A8E66', dot: 'bg-emerald-600' },
+  z: { accent: '#4E70BA', dot: 'bg-blue-600' },
 };
 
-const ALIGN_AXIS_BUTTON_BASE =
-  'flex-1 rounded-lg border px-3 py-2 text-xs font-semibold uppercase tracking-wide transition-colors';
-const ALIGN_AXIS_BUTTON_ACTIVE = '!bg-black !text-white !border-black shadow';
+const sliderClass = 'h-1.5 flex-1 appearance-none border-2 border-[var(--ink)] bg-[var(--paper-muted)]';
+const sectionTitleClass = 'mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-[var(--text-secondary)]';
+const axisButtonBase = 'brutal-btn brutal-btn-xs flex-1 px-2';
 
 export function TransformPanel({
   position,
@@ -54,124 +46,135 @@ export function TransformPanel({
 
   const renderPositionControl = (axis: Axis) => {
     const styles = AXIS_STYLES[axis];
+
     return (
-    <div className="space-y-2">
-      <label className="flex items-center justify-between text-[11px] font-medium uppercase tracking-wide text-gray-600">
-        <span className="flex items-center gap-2">
-          <span className={`h-2.5 w-2.5 rounded-full ${styles.dot}`}></span>
-          {axis.toUpperCase()}
-        </span>
-        <span className="font-mono text-gray-700">{position[axis].toFixed(2)}</span>
-      </label>
-      <div className="flex items-center gap-2">
-        <input
-          type="range"
-          min={POSITION_RANGE.min}
-          max={POSITION_RANGE.max}
-          step={POSITION_RANGE.step}
-          value={position[axis]}
-          onChange={(e) => onPositionChange(axis, parseFloat(e.target.value))}
-          className="flex-1 h-1.5 appearance-none rounded-full bg-gray-200 transition-[background-color]"
-          style={{ accentColor: styles.accent }}
-        />
-        <input
-          type="number"
-          value={position[axis].toFixed(2)}
-          onChange={(e) => onPositionChange(axis, parseFloat(e.target.value) || 0)}
-          className="w-20 rounded-lg border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900 focus:outline-none focus-visible:ring-1 focus-visible:ring-gray-400"
-          step={POSITION_RANGE.step}
-        />
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--text-secondary)]">
+          <span className="flex items-center gap-2">
+            <span className={`h-2.5 w-2.5 rounded-full ${styles.dot}`} />
+            {axis}
+          </span>
+          <span className="font-mono text-[var(--ink)]">{position[axis].toFixed(2)}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <input
+            type="range"
+            min={POSITION_RANGE.min}
+            max={POSITION_RANGE.max}
+            step={POSITION_RANGE.step}
+            value={position[axis]}
+            onChange={(event) => onPositionChange(axis, Number.parseFloat(event.target.value))}
+            className={sliderClass}
+            style={{ accentColor: styles.accent }}
+          />
+          <input
+            type="number"
+            value={position[axis].toFixed(2)}
+            onChange={(event) => onPositionChange(axis, Number.parseFloat(event.target.value) || 0)}
+            className="brutal-input w-20 px-2 py-1 text-xs"
+            step={POSITION_RANGE.step}
+          />
+        </div>
       </div>
-    </div>
     );
   };
 
   const renderRotationControl = (axis: Axis, label: string) => {
     const styles = AXIS_STYLES[axis];
+
     return (
-    <div className="space-y-2">
-      <label className="flex items-center justify-between text-[11px] font-medium uppercase tracking-wide text-gray-600">
-        <span className="flex items-center gap-2">
-          <span className={`h-2.5 w-2.5 rounded-full ${styles.dot}`}></span>
-          {axis.toUpperCase()}
-        </span>
-        <span className="text-gray-500">{label}</span>
-        <span className="font-mono text-gray-700">{Math.round(rotation[axis])}°</span>
-      </label>
-      <div className="flex items-center gap-2">
-        <input
-          type="range"
-          min={ROTATION_RANGE.min}
-          max={ROTATION_RANGE.max}
-          step={ROTATION_RANGE.step}
-          value={rotation[axis]}
-          onChange={(e) => onRotationChange(axis, parseFloat(e.target.value))}
-          className="flex-1 h-1.5 appearance-none rounded-full bg-gray-200"
-          style={{ accentColor: styles.accent }}
-        />
-        <input
-          type="number"
-          value={Math.round(rotation[axis])}
-          onChange={(e) => onRotationChange(axis, parseFloat(e.target.value) || 0)}
-          className="w-20 rounded-lg border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900 focus:outline-none focus-visible:ring-1 focus-visible:ring-gray-400"
-          step={15}
-        />
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between gap-2 text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--text-secondary)]">
+          <span className="flex items-center gap-2">
+            <span className={`h-2.5 w-2.5 rounded-full ${styles.dot}`} />
+            {axis}
+          </span>
+          <span className="text-[var(--text-muted)]">{label}</span>
+          <span className="font-mono text-[var(--ink)]">{Math.round(rotation[axis])}°</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <input
+            type="range"
+            min={ROTATION_RANGE.min}
+            max={ROTATION_RANGE.max}
+            step={ROTATION_RANGE.step}
+            value={rotation[axis]}
+            onChange={(event) => onRotationChange(axis, Number.parseFloat(event.target.value))}
+            className={sliderClass}
+            style={{ accentColor: styles.accent }}
+          />
+          <input
+            type="number"
+            value={Math.round(rotation[axis])}
+            onChange={(event) => onRotationChange(axis, Number.parseFloat(event.target.value) || 0)}
+            className="brutal-input w-20 px-2 py-1 text-xs"
+            step={15}
+          />
+        </div>
       </div>
-    </div>
     );
   };
 
   return (
     <div
-      className={`${containerClass} w-80 max-h-[80vh] overflow-y-auto rounded-2xl border border-gray-200 bg-white p-5 shadow-2xl`}
+      className={`${containerClass} brutal-card brutal-scroll w-80 max-h-[80vh] overflow-y-auto p-4`}
       data-orbit-block="true"
     >
-      <h3 className="mb-5 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-gray-600">
-        <RotateCw className="h-4 w-4 text-gray-500" />
-        Transform
-      </h3>
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div>
+          <p className="brutal-eyebrow mb-2">Model Controls</p>
+          <h3 className="flex items-center gap-2 text-sm font-black uppercase tracking-[0.12em] text-[var(--ink)]">
+            <RotateCw className="h-4 w-4" />
+            Transform
+          </h3>
+        </div>
+      </div>
 
-      <div className="mb-6 space-y-3">
-        <h4 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-gray-600">
+      <div className="mb-4 border-t-[var(--border-w)] border-[var(--ink)] pt-4">
+        <h4 className={sectionTitleClass}>
           <Move className="h-4 w-4" />
           Position
         </h4>
-        {renderPositionControl('x')}
-        {renderPositionControl('y')}
-        {renderPositionControl('z')}
+        <div className="space-y-3">
+          {renderPositionControl('x')}
+          {renderPositionControl('y')}
+          {renderPositionControl('z')}
+        </div>
       </div>
 
-      <div className="mb-6 space-y-3">
-        <h4 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-gray-600">
+      <div className="mb-4 border-t-[var(--border-w)] border-[var(--ink)] pt-4">
+        <h4 className={sectionTitleClass}>
           <RotateCw className="h-4 w-4" />
           Rotation
         </h4>
-        {renderRotationControl('x', 'Pitch')}
-        {renderRotationControl('y', 'Yaw')}
-        {renderRotationControl('z', 'Roll')}
+        <div className="space-y-3">
+          {renderRotationControl('x', 'Pitch')}
+          {renderRotationControl('y', 'Yaw')}
+          {renderRotationControl('z', 'Roll')}
+        </div>
       </div>
 
       {autoAlignControls && (
-        <div className="mb-6 space-y-3">
-          <h4 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-gray-600">
+        <div className="mb-4 border-t-[var(--border-w)] border-[var(--ink)] pt-4">
+          <h4 className={sectionTitleClass}>
             <RotateCw className="h-4 w-4" />
             Auto Align
           </h4>
-          <p className="text-[11px] leading-relaxed text-gray-500">
-            เลือกเส้นวัดที่สร้างไว้ (Distance) แล้วเลือกแกนที่ต้องการให้โมเดลจัดแนว จากนั้นกด Align
-            เพื่อหมุนโมเดลให้สอดคล้องกับเส้นนั้น
+          <p className="mb-3 text-[11px] font-medium uppercase tracking-[0.08em] text-[var(--text-secondary)]">
+            เลือกเส้นวัด Distance แล้วเลือกแกนที่ต้องการให้โมเดลจัดแนว
           </p>
-          <div className="flex gap-2">
+          <div className="mb-3 flex gap-2">
             {(['x', 'y', 'z'] as SnapAxis[]).map((axis) => {
               const active = autoAlignControls.axis === axis;
+
               return (
                 <button
                   key={axis}
                   type="button"
                   onClick={() => autoAlignControls.onAxisChange(axis)}
-                  className={`${ALIGN_AXIS_BUTTON_BASE} ${active ? ALIGN_AXIS_BUTTON_ACTIVE : 'border-gray-200 bg-white text-gray-600 hover:border-black hover:text-black'}`}
+                  className={`${axisButtonBase} ${active ? 'brutal-btn-primary' : ''}`}
                 >
-                  แกน {axis.toUpperCase()}
+                  Axis {axis.toUpperCase()}
                 </button>
               );
             })}
@@ -180,31 +183,30 @@ export function TransformPanel({
             type="button"
             onClick={autoAlignControls.onAlign}
             disabled={!autoAlignControls.canAlign}
-            className={`inline-flex h-10 w-full items-center justify-center rounded-xl border px-3 text-sm font-medium transition-colors ${
-              autoAlignControls.canAlign
-                ? 'border-black bg-black text-white hover:bg-gray-900'
-                : 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
-            }`}
+            className="brutal-btn brutal-btn-primary brutal-btn-xs w-full justify-center py-2"
           >
-            Align ตามแกน {autoAlignControls.axis.toUpperCase()}
+            Align {autoAlignControls.axis.toUpperCase()}
           </button>
           {!autoAlignControls.canAlign && (
-            <p className="text-[11px] text-gray-500">กรุณาเลือกเส้นวัด (Distance) ก่อนใช้งาน</p>
+            <p className="mt-2 text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--text-muted)]">
+              Select a distance segment first
+            </p>
           )}
         </div>
       )}
 
-      <button
-        onClick={onReset}
-        className="w-full inline-flex items-center justify-center gap-2 rounded-full border border-gray-300 bg-gray-100 px-4 py-3 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-200"
-      >
+      <button type="button" onClick={onReset} className="brutal-btn brutal-btn-primary w-full justify-center py-2">
         <RotateCcw className="h-4 w-4" />
         Reset All
       </button>
 
-      <div className="mt-5 space-y-1 border-t border-gray-200 pt-4 text-[11px] text-gray-600">
-        <p><strong className="font-semibold text-gray-800">Mouse</strong> Left drag = orbit • Right drag = pan • Wheel = zoom</p>
-        <p><strong className="font-semibold text-gray-800">Keyboard</strong> ↑↓ rotate X ±1° • ←→ rotate Y ±1° • R reset</p>
+      <div className="mt-4 border-t-[var(--border-w)] border-[var(--ink)] pt-3 text-[10px] font-medium uppercase tracking-[0.1em] text-[var(--text-secondary)]">
+        <p>
+          <strong className="text-[var(--ink)]">Mouse</strong> Left Drag Orbit • Right Drag Pan • Wheel Zoom
+        </p>
+        <p className="mt-1">
+          <strong className="text-[var(--ink)]">Keyboard</strong> ↑↓ Rotate X • ←→ Rotate Y • R Reset
+        </p>
       </div>
     </div>
   );

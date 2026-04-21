@@ -17,39 +17,60 @@ export default function Navbar() {
   const pathname = usePathname();
 
   return (
-    <nav className="sticky top-0 z-50 h-16 bg-white border-b border-gray-200 shadow-sm">
-      <div className="max-w-7xl mx-auto px-8">
-        <div className="flex items-center justify-between h-16">
-          <div className="flex items-center">
-            <div className="flex-shrink-0">
-              <h1 className="text-xl font-bold text-black">
-                PobimSplatting
-              </h1>
-            </div>
-            <div className="ml-12 flex items-baseline space-x-1">
-              {navItems.map((item) => {
-                const Icon = item.icon;
-                const isActive = pathname === item.href;
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    className={`flex items-center px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                      isActive
-                        ? 'bg-black text-white'
-                        : 'text-gray-600 hover:bg-gray-50 hover:text-black'
-                    }`}
-                  >
-                    <Icon className="w-4 h-4 mr-2" />
-                    {item.label}
-                  </Link>
-                );
-              })}
-            </div>
+    <nav
+      className="sticky top-0 z-50 flex items-center"
+      style={{
+        height: 'var(--navbar-height)',
+        background: 'var(--paper-card)',
+        borderBottom: 'var(--border-w) solid var(--ink)',
+      }}
+    >
+      <div className="brutal-container flex items-center justify-between px-4 md:px-6 w-full">
+        <div className="flex items-center gap-6">
+          <Link href="/" className="flex items-center gap-2 group">
+            <span
+              className="inline-flex items-center justify-center w-7 h-7 text-[13px] font-black uppercase"
+              style={{
+                background: 'var(--ink)',
+                color: '#fff',
+                border: 'var(--border-w) solid var(--ink)',
+                boxShadow: '2px 2px 0 var(--ink-shadow-soft)',
+                transform: 'rotate(-3deg)',
+              }}
+            >
+              P
+            </span>
+            <span className="text-sm font-black uppercase tracking-wider text-[color:var(--ink)]">
+              POBIM<span className="text-[color:var(--text-muted)]">/SPLAT</span>
+            </span>
+          </Link>
+
+          <div className="hidden md:flex items-center gap-1">
+            {navItems.map((item) => {
+              const Icon = item.icon;
+              const isActive = pathname === item.href || (item.href !== '/' && pathname?.startsWith(item.href));
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className="group relative inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-bold uppercase tracking-wider transition-colors"
+                  style={{
+                    color: isActive ? '#fff' : 'var(--text-secondary)',
+                    background: isActive ? 'var(--ink)' : 'transparent',
+                    border: `var(--border-w) solid ${isActive ? 'var(--ink)' : 'transparent'}`,
+                    boxShadow: isActive ? '2px 2px 0 var(--ink)' : 'none',
+                  }}
+                >
+                  <Icon className="w-3.5 h-3.5" />
+                  <span>{item.label}</span>
+                </Link>
+              );
+            })}
           </div>
-          <div className="flex items-center space-x-4">
-            <StatusIndicator />
-          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <StatusIndicator />
         </div>
       </div>
     </nav>
@@ -58,12 +79,20 @@ export default function Navbar() {
 
 function StatusIndicator() {
   return (
-    <div className="flex items-center space-x-2 px-3 py-1.5 rounded-full" style={{
-      backgroundColor: 'var(--success-bg)',
-      border: '1px solid var(--success-border)'
-    }}>
-      <div className="w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: 'var(--success-icon)' }}></div>
-      <span className="text-xs font-medium" style={{ color: 'var(--success-text)' }}>Online</span>
-    </div>
+    <span
+      className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider"
+      style={{
+        background: 'var(--success-bg)',
+        color: 'var(--success-text)',
+        border: 'var(--border-w) solid var(--ink)',
+        boxShadow: '2px 2px 0 var(--ink)',
+      }}
+    >
+      <span
+        className="w-1.5 h-1.5 brutal-pulse"
+        style={{ background: 'var(--success-icon)' }}
+      />
+      Online
+    </span>
   );
 }

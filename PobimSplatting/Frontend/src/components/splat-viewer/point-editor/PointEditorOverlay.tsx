@@ -52,18 +52,19 @@ export function PointEditorOverlay({
     <div className="pointer-events-none absolute inset-0 z-40">
       {rectangleSelection && (
         <div
-          className="absolute border border-red-400/80 bg-red-400/10"
+          className="absolute border-[3px] border-[var(--ink)] bg-[color:rgba(10,26,63,0.08)]"
           style={rectangleStyle(rectangleSelection)}
         />
       )}
 
       {polygonOverlay.points.length > 0 && (
         <svg className="absolute inset-0">
+          <title>Point editor overlay</title>
           {polygonPathPoints && (
             <polygon
               points={polygonPathPoints}
-              fill="rgba(248, 113, 113, 0.12)"
-              stroke="rgba(248, 113, 113, 0.6)"
+              fill="rgba(10,26,63,0.08)"
+              stroke="var(--ink)"
               strokeWidth={2}
             />
           )}
@@ -71,7 +72,7 @@ export function PointEditorOverlay({
             <polyline
               points={polygonPreviewPoints}
               fill="none"
-              stroke="rgba(248, 113, 113, 0.45)"
+              stroke="var(--ink)"
               strokeWidth={1.5}
               strokeDasharray="6 6"
             />
@@ -86,7 +87,7 @@ export function PointEditorOverlay({
         return (
           <div
             key={`point-selection-${index}`}
-            className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-red-500 bg-red-500/30"
+            className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full border-[3px] border-[var(--ink)] bg-[color:rgba(10,26,63,0.14)]"
             style={{
               left: `${screen.x}px`,
               top: `${screen.y}px`,
@@ -99,7 +100,7 @@ export function PointEditorOverlay({
 
       {hoveredEntry?.screen && hoveredEntry.screen.visible && (
         <div
-          className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-sky-500 bg-sky-500/30"
+          className="absolute -translate-x-1/2 -translate-y-1/2 rounded-full border-[3px] border-[var(--ink)] bg-[color:rgba(10,26,63,0.22)]"
           style={{
             left: `${hoveredEntry.screen.x}px`,
             top: `${hoveredEntry.screen.y}px`,

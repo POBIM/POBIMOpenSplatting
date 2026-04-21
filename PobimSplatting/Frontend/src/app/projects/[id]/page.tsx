@@ -20,7 +20,6 @@ import {
   Settings,
   Play,
   Pause,
-  Monitor,
   FileVideo,
   Image,
   Info,
@@ -30,7 +29,6 @@ import {
   ChevronRight,
   X,
   FileBox,
-  ArrowDownToLine,
   Upload,
   Film,
   Search,
@@ -199,20 +197,7 @@ export default function ProjectDetailPage() {
   const projectStartTimeRef = useRef<string | null>(null);
   const [showRetryModal, setShowRetryModal] = useState(false);
   const [selectedRetryStage, setSelectedRetryStage] = useState<string>('ingest');
-  const [showLogSidebar, setShowLogSidebar] = useState(true);
-  const [autoScroll, setAutoScroll] = useState(true);
-  const [expandedLogGroups, setExpandedLogGroups] = useState<Record<string, boolean>>({
-    ungrouped: true,
-    ingest: true,
-    video_extraction: true,
-    feature_extraction: true,
-    feature_matching: true,
-    sparse_reconstruction: true,
-    model_conversion: true,
-    gaussian_splatting: true,
-    finalizing: true,
-  });
-  const logEndRef = useRef<HTMLDivElement>(null);
+  const stageLogsRef = useRef<HTMLDivElement>(null);
   const [retryParams, setRetryParams] = useState({
     // Gaussian Splatting params
     quality_mode: '',
@@ -261,6 +246,12 @@ export default function ProjectDetailPage() {
   const videoExtractionFramesDone = videoExtractionDetail?.current_item ?? videoDiagnostics?.candidate_count ?? videoDiagnostics?.saved_frames ?? null;
   const videoExtractionFramesTotal = videoExtractionDetail?.total_items ?? videoDiagnostics?.candidate_count ?? videoDiagnostics?.requested_targets ?? null;
   const logGroups = useMemo(() => groupLogsByStage(logs, stages), [logs, stages]);
+  const stageLogs = useMemo(() => {
+    if (!expandedStage) {
+      return [] as string[];
+    }
+    return logGroups.find(group => group.key === expandedStage)?.logs ?? [];
+  }, [logGroups, expandedStage]);
 
   // Auto-expand the running stage
   useEffect(() => {
@@ -268,7 +259,7 @@ export default function ProjectDetailPage() {
     if (runningStage && expandedStage !== runningStage.key) {
       setExpandedStage(runningStage.key);
     }
-  }, [stages]);
+  }, [stages, expandedStage]);
 
   const formatTime = useCallback((seconds: number): string => {
     if (seconds < 60) return `${seconds}s`;
@@ -571,12 +562,15 @@ export default function ProjectDetailPage() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [showImagePreview, framePreview.length]);
 
-  // Auto-scroll logs to bottom when new logs arrive
   useEffect(() => {
-    if (autoScroll && logEndRef.current) {
-      logEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    if (!expandedStage) {
+      return;
     }
-  }, [logs, autoScroll]);
+    const node = stageLogsRef.current;
+    if (node && stageLogs.length > 0) {
+      node.scrollTop = node.scrollHeight;
+    }
+  }, [stageLogs, expandedStage]);
 
   const handleRetry = async (fromStage?: string) => {
     try {
@@ -801,44 +795,60 @@ export default function ProjectDetailPage() {
 
   const getQualityBadgeColor = (quality: string): string => {
     switch (quality) {
-      case 'fast': return 'bg-gray-100 text-gray-700';
-      case 'balanced': return 'bg-blue-100 text-blue-700';
-      case 'high': return 'bg-green-100 text-green-700';
-      case 'ultra': return 'bg-purple-100 text-purple-700';
-      case 'professional': return 'bg-orange-100 text-orange-700';
-      case 'ultra_professional': return 'bg-red-100 text-red-700';
-      default: return 'bg-gray-100 text-gray-600';
+      case 'fast': return 'brutal-badge brutal-badge-info';
+      case 'balanced': return 'brutal-badge';
+      case 'high': return 'brutal-badge brutal-badge-success';
+      case 'ultra': return 'brutal-badge';
+      case 'professional': return 'brutal-badge brutal-badge-warning';
+      case 'ultra_professional': return 'brutal-badge brutal-badge-error';
+      default: return 'brutal-badge';
+    }
+  };
+
+  const getStatusBadgeClass = (status?: string | null) => {
+    switch (status) {
+      case 'processing':
+      case 'queued':
+        return 'status-badge status-processing';
+      case 'completed':
+        return 'status-badge status-completed';
+      case 'failed':
+        return 'status-badge status-failed';
+      case 'cancelled':
+        return 'status-badge status-cancelled';
+      default:
+        return 'status-badge';
     }
   };
 
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'queued':
-        return <Clock className="h-8 w-8 text-gray-500" />;
+        return <Clock className="h-7 w-7" style={{ color: 'var(--text-secondary)' }} />;
       case 'processing':
-        return <Loader className="h-8 w-8 animate-spin" style={{ color: 'var(--processing-text)' }} />;
+        return <Loader className="h-7 w-7 animate-spin" style={{ color: 'var(--processing-text)' }} />;
       case 'completed':
-        return <CheckCircle className="h-8 w-8" style={{ color: 'var(--success-icon)' }} />;
+        return <CheckCircle className="h-7 w-7" style={{ color: 'var(--success-icon)' }} />;
       case 'failed':
-        return <XCircle className="h-8 w-8" style={{ color: 'var(--error-icon)' }} />;
+        return <XCircle className="h-7 w-7" style={{ color: 'var(--error-icon)' }} />;
       case 'cancelled':
-        return <AlertTriangle className="h-8 w-8" style={{ color: 'var(--warning-text)' }} />;
+        return <AlertTriangle className="h-7 w-7" style={{ color: 'var(--warning-text)' }} />;
       default:
-        return <Clock className="h-8 w-8 text-gray-500" />;
+        return <Clock className="h-7 w-7" style={{ color: 'var(--text-secondary)' }} />;
     }
   };
 
   const getStageIcon = (stage: any) => {
     if (stage.status === 'completed') {
-      return <CheckCircle className="h-5 w-5 text-green-500" />;
+      return <CheckCircle className="h-4 w-4" style={{ color: 'var(--success-icon)' }} />;
     } else if (stage.status === 'running') {
-      return <Loader className="h-5 w-5 text-blue-500 animate-spin" />;
+      return <Loader className="h-4 w-4 animate-spin" style={{ color: 'var(--processing-text)' }} />;
     } else if (stage.status === 'failed') {
-      return <XCircle className="h-5 w-5 text-red-500" />;
+      return <XCircle className="h-4 w-4" style={{ color: 'var(--error-icon)' }} />;
     } else if (stage.status === 'cancelled') {
-      return <AlertTriangle className="h-5 w-5 text-amber-500" />;
+      return <AlertTriangle className="h-4 w-4" style={{ color: 'var(--warning-text)' }} />;
     } else {
-      return <Clock className="h-5 w-5 text-gray-400" />;
+      return <Clock className="h-4 w-4" style={{ color: 'var(--text-muted)' }} />;
     }
   };
 
@@ -855,231 +865,261 @@ export default function ProjectDetailPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
-        <Loader className="h-8 w-8 text-blue-500 animate-spin" />
+      <div className="brutal-shell flex min-h-screen items-center justify-center px-4">
+        <div className="brutal-card-dark flex items-center gap-3 px-5 py-4 text-sm font-bold uppercase tracking-[0.16em]">
+          <Loader className="h-5 w-5 animate-spin" />
+          Loading Project
+        </div>
       </div>
     );
   }
 
   if (!project) {
     return (
-      <div className="max-w-4xl mx-auto p-8">
-        <div className="text-center">
-          <h2 className="text-2xl font-semibold text-gray-900 mb-2">Project Not Found</h2>
-          <button
-            onClick={() => router.push('/projects')}
-            className="inline-flex items-center px-4 py-2 text-sm font-medium text-blue-600 hover:text-blue-500"
-          >
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Projects
-          </button>
+      <div className="brutal-shell">
+        <div className="brutal-container brutal-section">
+          <div className="brutal-card mx-auto max-w-3xl p-6 text-center">
+            <div className="mb-4 inline-flex h-12 w-12 items-center justify-center border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-muted)] shadow-[var(--shadow-sm)]">
+              <FileBox className="h-6 w-6 text-[var(--ink)]" />
+            </div>
+            <h2 className="brutal-h2 mb-2">Project Not Found</h2>
+            <p className="mb-5 text-sm text-[var(--text-secondary)]">This project may have been removed or is no longer available.</p>
+            <div className="flex justify-center">
+              <button type="button" onClick={() => router.push('/projects')}
+              className="brutal-btn brutal-btn-primary"><ArrowLeft className="h-4 w-4" />
+              Back To Projects
+                            </button>
+            </div>
+          </div>
         </div>
       </div>
     );
   }
 
+  const currentStage = getCurrentStage();
+  const fileCount = project.file_count || 0;
+  const activeStageLabel = currentStage
+    ? (getStageLabelForEngine(currentStage.key, project?.config?.sfm_engine, project?.config?.feature_method)
+      || PIPELINE_STAGES.find(s => s.key === currentStage.key)?.label)
+    : 'Initializing';
+  const sparseStage = stages.find(s => s.key === 'sparse_reconstruction');
+  const featureExtractionStage = stages.find(s => s.key === 'feature_extraction');
+  const canInspectSparseModel = featureExtractionStage?.status === 'completed' || sparseStage?.status === 'completed';
+  const projectInfoTiles = [
+    { label: 'Input', value: project.input_type || 'unknown' },
+    { label: 'Files', value: fileCount.toLocaleString() },
+    { label: 'Framework', value: getSfmEngineCompactLabel(project?.config?.sfm_engine) || '--' },
+    { label: 'Feature Method', value: project?.config?.feature_method || '--' },
+  ];
+
   return (
-    <div className="flex flex-col min-h-screen bg-white">
-      <div className={`flex-1 overflow-y-auto transition-all duration-300 ${showLogSidebar ? 'pb-[45vh]' : 'pb-0'}`}>
-        <div className="max-w-7xl mx-auto p-8">
-          <Breadcrumbs items={[
-            { label: 'Projects', href: '/projects' },
-            { label: project?.metadata?.name || 'Project Details' }
-          ]} />
+    <div className="brutal-shell">
+      <div className="flex min-h-screen flex-col">
+        <main className="flex-1">
+          <section className="brutal-section-tight brutal-divider">
+            <div className="brutal-container space-y-4">
+              <Breadcrumbs items={[
+                { label: 'Projects', href: '/projects' },
+                { label: project?.metadata?.name || 'Project Details' }
+              ]} />
 
-          {/* Compact Progress Header */}
-          {project.status === 'processing' && (
-            <div className="border border-gray-200 rounded-2xl p-6 mb-8">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center space-x-6">
-                  <div className="text-4xl font-bold text-black">{overallProgress}%</div>
-                  <div className="flex items-center space-x-4 text-sm text-gray-600">
-                    <span>{timeStats.elapsedTime}</span>
-                    <span className="text-gray-300">·</span>
-                    <span>{timeStats.remainingTime} left</span>
-                    <span className="text-gray-300">·</span>
-                    <span>ETA {timeStats.eta}</span>
-                  </div>
-                </div>
-                
-                {/* Cancel Button */}
-                <button
-                  onClick={handleCancelProcessing}
-                  className="inline-flex items-center px-4 py-2 border border-red-200 text-sm font-medium rounded-lg text-red-600 hover:bg-red-50 hover:border-red-300 transition-colors"
-                >
-                  <XCircle className="h-4 w-4 mr-2" />
-                  ยกเลิก
-                </button>
-              </div>
-
-              <div className="relative mb-3">
-                <div className="w-full bg-gray-100 rounded-full h-1.5">
-                  <div
-                    className="bg-black h-1.5 rounded-full transition-all duration-500"
-                    style={{ width: `${overallProgress}%` }}
-                  />
-                </div>
-              </div>
-
-              <div className="text-sm text-gray-500">
-                {getCurrentStage() ? (getStageLabelForEngine(getCurrentStage()?.key || '', project?.config?.sfm_engine, project?.config?.feature_method) || PIPELINE_STAGES.find(s => s.key === getCurrentStage()?.key)?.label) : 'Initializing...'}
-                {getCurrentStage()?.key === 'sparse_reconstruction' &&
-                 (isGlobalSfmEngine(project?.config?.sfm_engine) || project?.config?.sfm_engine === 'fastmap') &&
-                 stageDetails['sparse_reconstruction']?.text && (
-                  <span className={`ml-2 ${project?.config?.sfm_engine === 'fastmap' ? 'text-purple-600' : 'text-blue-600'}`}>
-                    • {stageDetails['sparse_reconstruction'].text}
-                  </span>
-                )}
-              </div>
-
-              {/* Sparse model inspection button */}
-              {(() => {
-                const sparseStage = stages.find(s => s.key === 'sparse_reconstruction');
-                const featureExtractionStage = stages.find(s => s.key === 'feature_extraction');
-                // Show button if feature extraction is completed (database exists)
-                return (featureExtractionStage?.status === 'completed' || sparseStage?.status === 'completed') && (
-                  <div className="mt-4 pt-4 border-t border-gray-200">
-                    <button
-                      onClick={() => router.push(`/camera-poses/${projectId}`)}
-                      className="inline-flex items-center px-4 py-2 text-sm font-medium rounded-lg text-white bg-blue-600 hover:bg-blue-700 transition-colors"
-                    >
-                      <Eye className="h-4 w-4 mr-2" />
-                      ตรวจสอบ Sparse Model
-                    </button>
-                    <p className="text-xs text-gray-500 mt-2">เปิดหน้า Camera Poses เพื่อตรวจสอบผล {getSfmEngineCompactLabel(project?.config?.sfm_engine)} sparse reconstruction</p>
-                  </div>
-                );
-              })()}
-            </div>
-          )}
-
-          <div className="border border-gray-200 rounded-2xl mb-8">
-            <div className="p-6 border-b border-gray-200">
-              <div className="flex items-start justify-between">
-                <div className="flex items-center space-x-4">
-                  {getStatusIcon(project.status)}
-                  <div>
-                    <h1 className="text-2xl font-semibold text-black mb-2">{project.metadata?.name || 'Untitled Project'}</h1>
-                    <div className="flex items-center space-x-4 text-sm text-gray-500">
-                      <span>{project.file_count || 0} files</span>
-                      <span className="text-gray-300">·</span>
-                      <span>{project.input_type || 'unknown'}</span>
+              <div className="brutal-card-dark relative overflow-hidden px-4 py-4 md:px-5">
+                <div className="brutal-dot-bg pointer-events-none absolute inset-0" />
+                <div className="relative flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="brutal-eyebrow">Project Detail</span>
+                      <span className={getStatusBadgeClass(project.status)}>{project.status || 'unknown'}</span>
+                    </div>
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-11 w-11 shrink-0 items-center justify-center border-[var(--border-w)] border-[var(--paper)] bg-[var(--paper)] text-[var(--ink)] shadow-[3px_3px_0_var(--paper-muted-2)]">
+                        {getStatusIcon(project.status)}
+                      </div>
+                      <div className="space-y-2">
+                        <h1 className="brutal-h1 text-[var(--text-on-ink)]">{project.metadata?.name || 'Untitled Project'}</h1>
+                        <div className="flex flex-wrap gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-[var(--text-on-ink-muted)]">
+                          <span>{fileCount} files</span>
+                          <span>•</span>
+                          <span>{project.input_type || 'unknown'}</span>
+                          <span>•</span>
+                          <span>ID {projectId.slice(0, 8)}</span>
+                        </div>
+                      </div>
                     </div>
                   </div>
-                </div>
-                <div className="flex items-center space-x-2">
-                  {project.status === 'completed' && (
-                    <>
-                      <button
-                        onClick={() => router.push(`/viewer?project=${projectId}`)}
-                        className="inline-flex items-center px-4 py-2 text-sm font-medium rounded-lg text-white bg-black hover:bg-gray-800 transition-colors"
-                      >
-                        <Eye className="h-4 w-4 mr-2" />
-                        View 3D
-                      </button>
-                      <button
-                        onClick={() => router.push(`/camera-poses/${projectId}`)}
-                        className={`inline-flex items-center px-4 py-2 border border-gray-200 text-sm font-medium rounded-lg transition-colors ${
-                          project?.config?.sfm_engine === 'fastmap' ? 'text-purple-600 hover:bg-purple-50' : 'text-blue-600 hover:bg-blue-50'
-                        }`}
-                      >
-                        <Eye className="h-4 w-4 mr-2" />
-                        {getSfmEngineCompactLabel(project?.config?.sfm_engine)}
-                      </button>
-                      <button
-                        onClick={handleDownload}
-                        className="inline-flex items-center px-4 py-2 border border-gray-200 text-sm font-medium rounded-lg text-black hover:bg-gray-50 transition-colors"
-                      >
-                        <Download className="h-4 w-4 mr-2" />
-                        Download
-                      </button>
-                      <button
-                        onClick={openRetryModal}
-                        className="inline-flex items-center px-4 py-2 border border-gray-200 text-sm font-medium rounded-lg text-black hover:bg-gray-50 transition-colors"
-                      >
-                        <RefreshCw className="h-4 w-4 mr-2" />
-                        Retry
-                      </button>
-                    </>
-                  )}
-                  {canRetryProject && (
-                    <button
-                      onClick={openRetryModal}
-                      className="inline-flex items-center px-4 py-2 text-sm font-medium rounded-lg text-white bg-black hover:bg-gray-800 transition-colors"
-                    >
-                      <RefreshCw className="h-4 w-4 mr-2" />
-                      Retry
-                    </button>
-                  )}
-                  <button
-                    onClick={handleDelete}
-                    className="inline-flex items-center px-4 py-2 border border-gray-200 text-sm font-medium rounded-lg text-gray-600 hover:text-red-600 hover:border-red-200 transition-colors"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
+
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:min-w-[440px]">
+                    {projectInfoTiles.map((tile) => (
+                      <div key={tile.label} className="border-[var(--border-w)] border-[var(--paper)] bg-[var(--paper)] px-3 py-3 shadow-[3px_3px_0_var(--paper-muted-2)]">
+                        <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--text-secondary)]">{tile.label}</p>
+                        <p className="text-sm font-bold uppercase tracking-[0.04em] text-[var(--ink)]">{tile.value}</p>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
+          </section>
 
-            <div className="p-6 space-y-8">
-              {framework && (
-                <div className="border border-gray-200 rounded-2xl p-6 bg-gray-50/70">
-                  <div className="flex items-start justify-between gap-4 mb-5">
-                    <div>
-                      <h3 className="text-sm font-medium text-black">Reconstruction Framework</h3>
-                      <p className="text-sm text-gray-500 mt-1">
-                        Dynamic policy state from the backend heuristic engine and pair-geometry refinement.
-                      </p>
-                    </div>
-                    {framework.orbit_safe_profile && (
-                      <span className="inline-flex items-center rounded-full border border-gray-300 px-3 py-1 text-xs font-medium text-black bg-white">
-                        {framework.orbit_safe_profile}
-                      </span>
-                    )}
-                  </div>
+          <section className="brutal-section-tight">
+            <div className="brutal-container space-y-4">
+              {(project.status === 'processing' || canRetryProject || project.status === 'completed') && (
+                <div className="grid gap-4 xl:grid-cols-[1.4fr_1fr]">
+                  <div className={project.status === 'processing' ? 'brutal-card-dark p-4 md:p-5' : 'brutal-card p-4 md:p-5'}>
+                    <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                      <div>
+                        <p className={`mb-2 text-[11px] font-bold uppercase tracking-[0.18em] ${project.status === 'processing' ? 'text-[var(--text-on-ink-muted)]' : 'text-[var(--text-secondary)]'}`}>
+                          Status + Progress
+                        </p>
+                        <div className="flex flex-wrap items-end gap-3">
+                          <span className={`text-4xl font-black uppercase leading-none tracking-tight ${project.status === 'processing' ? 'text-[var(--text-on-ink)]' : 'text-[var(--ink)]'}`}>
+                            {overallProgress}%
+                          </span>
+                          <span className={getStatusBadgeClass(project.status)}>{project.status}</span>
+                        </div>
+                      </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-5">
-                    <div className="rounded-xl border border-gray-200 bg-white p-4">
-                      <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Pipeline</p>
-                      <p className="text-sm font-medium text-black">{getSfmEngineLabel(framework.sfm_engine || project?.config?.sfm_engine) || '--'} / {framework.feature_method || project?.config?.feature_method || '--'}</p>
-                      <p className="text-xs text-gray-500 mt-1">Phase: {framework.phase || '--'}</p>
+                      {project.status === 'processing' && (
+                        <button type="button" onClick={handleCancelProcessing} className="brutal-btn brutal-btn-danger brutal-btn-xs"><XCircle className="h-4 w-4" />
+                        ยกเลิก
+                                                </button>
+                      )}
                     </div>
-                    <div className="rounded-xl border border-gray-200 bg-white p-4">
-                      <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Matching Policy</p>
-                      <p className="text-sm font-medium text-black">{getMatcherLabelWithMode(framework.matcher_type) || '--'}</p>
-                      <p className="text-xs text-gray-500 mt-1">
-                        overlap {framework.matcher_params?.['SequentialMatching.overlap'] || '--'}
-                        {' · '}
-                        quadratic {framework.matcher_params?.['SequentialMatching.quadratic_overlap'] || '--'}
-                      </p>
-                    </div>
-                    <div className="rounded-xl border border-gray-200 bg-white p-4">
-                      <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Bridge Risk</p>
-                      <p className="text-sm font-medium text-black">{framework.bridge_risk_score ?? '--'}</p>
-                      <p className="text-xs text-gray-500 mt-1">
-                        orbit-safe {framework.orbit_safe_mode ? 'enabled' : 'disabled'}
-                      </p>
-                    </div>
-                  </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="rounded-xl border border-gray-200 bg-white p-4">
-                      <p className="text-xs uppercase tracking-wide text-gray-500 mb-3">Mapper Thresholds</p>
-                      <div className="space-y-2 text-sm text-gray-700">
-                        <div className="flex items-center justify-between"><span>Abs pose max error</span><span className="font-medium text-black">{framework.mapper_params?.['Mapper.abs_pose_max_error'] || '--'}</span></div>
-                        <div className="flex items-center justify-between"><span>Min inliers</span><span className="font-medium text-black">{framework.mapper_params?.['Mapper.abs_pose_min_num_inliers'] || '--'}</span></div>
-                        <div className="flex items-center justify-between"><span>Min inlier ratio</span><span className="font-medium text-black">{framework.mapper_params?.['Mapper.abs_pose_min_inlier_ratio'] || '--'}</span></div>
-                        <div className="flex items-center justify-between"><span>Max registration trials</span><span className="font-medium text-black">{framework.mapper_params?.['Mapper.max_reg_trials'] || '--'}</span></div>
+                    <div className={`mb-3 border-[var(--border-w)] ${project.status === 'processing' ? 'border-[var(--paper)] bg-[var(--paper)]' : 'border-[var(--ink)] bg-[var(--paper-muted)]'} p-1`}>
+                      <div
+                        className={`h-4 transition-all duration-500 ${project.status === 'processing' ? 'bg-[var(--ink-600)]' : 'bg-[var(--ink)]'}`}
+                        style={{ width: `${overallProgress}%` }}
+                      />
+                    </div>
+
+                    <div className={`grid gap-2 text-xs font-medium md:grid-cols-4 ${project.status === 'processing' ? 'text-[var(--text-on-ink-muted)]' : 'text-[var(--text-secondary)]'}`}>
+                      <div>
+                        <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em]">Active Stage</p>
+                        <p className={project.status === 'processing' ? 'text-[var(--text-on-ink)]' : 'text-[var(--ink)]'}>{activeStageLabel}</p>
+                      </div>
+                      <div>
+                        <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em]">Elapsed</p>
+                        <p className={project.status === 'processing' ? 'text-[var(--text-on-ink)]' : 'text-[var(--ink)]'}>{timeStats.elapsedTime}</p>
+                      </div>
+                      <div>
+                        <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em]">Remaining</p>
+                        <p className={project.status === 'processing' ? 'text-[var(--text-on-ink)]' : 'text-[var(--ink)]'}>{timeStats.remainingTime}</p>
+                      </div>
+                      <div>
+                        <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em]">ETA</p>
+                        <p className={project.status === 'processing' ? 'text-[var(--text-on-ink)]' : 'text-[var(--ink)]'}>{timeStats.eta}</p>
                       </div>
                     </div>
 
-                    <div className="rounded-xl border border-gray-200 bg-white p-4">
-                      <p className="text-xs uppercase tracking-wide text-gray-500 mb-3">Pair Geometry</p>
-                      <div className="space-y-2 text-sm text-gray-700">
-                        <div className="flex items-center justify-between"><span>Bridge p10</span><span className="font-medium text-black">{framework.pair_geometry_stats?.bridge_p10 ?? '--'}</span></div>
-                        <div className="flex items-center justify-between"><span>Bridge min</span><span className="font-medium text-black">{framework.pair_geometry_stats?.bridge_min ?? '--'}</span></div>
-                        <div className="flex items-center justify-between"><span>Weak boundaries</span><span className="font-medium text-black">{framework.pair_geometry_stats?.weak_boundary_count ?? '--'}</span></div>
-                        <div className="flex items-center justify-between"><span>Weak ratio</span><span className="font-medium text-black">{formatPercent(framework.pair_geometry_stats?.weak_boundary_ratio)}</span></div>
+                    {currentStage?.key === 'sparse_reconstruction' &&
+                      (isGlobalSfmEngine(project?.config?.sfm_engine) || project?.config?.sfm_engine === 'fastmap') &&
+                      stageDetails['sparse_reconstruction']?.text && (
+                      <div className={`mt-3 border-t pt-3 text-xs ${project.status === 'processing' ? 'border-[var(--ink-700)] text-[var(--text-on-ink-muted)]' : 'border-[var(--paper-muted-2)] text-[var(--text-secondary)]'}`}>
+                        {stageDetails['sparse_reconstruction'].text}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="brutal-card p-4 md:p-5">
+                    <div className="mb-3 flex items-center justify-between gap-2">
+                      <div>
+                        <p className="brutal-label mb-1">Action Dock</p>
+                        <h2 className="brutal-h3">Project Controls</h2>
+                      </div>
+                      {project.status === 'processing' && <span className="brutal-badge brutal-badge-info">Live</span>}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {project.status === 'completed' && (
+                        <>
+                          <button type="button" onClick={() => router.push(`/viewer?project=${projectId}`)} className="brutal-btn brutal-btn-primary"><Eye className="h-4 w-4" />
+                          View 3D
+                                                    </button>
+                          <button type="button" onClick={() => router.push(`/camera-poses/${projectId}`)}
+                          className="brutal-btn"><Eye className="h-4 w-4" />
+                          {getSfmEngineCompactLabel(project?.config?.sfm_engine)}</button>
+                          <button type="button" onClick={handleDownload} className="brutal-btn"><Download className="h-4 w-4" />
+                          Download
+                                                    </button>
+                          <button type="button" onClick={openRetryModal} className="brutal-btn brutal-btn-xs"><RefreshCw className="h-4 w-4" />
+                          Retry
+                                                    </button>
+                        </>
+                      )}
+                      {canRetryProject && (
+                        <button type="button" onClick={openRetryModal} className="brutal-btn brutal-btn-primary"><RefreshCw className="h-4 w-4" />
+                        Retry
+                                                </button>
+                      )}
+                      {canInspectSparseModel && (
+                        <button type="button" onClick={() => router.push(`/camera-poses/${projectId}`)} className="brutal-btn brutal-btn-xs"><Eye className="h-4 w-4" />
+                        Inspect Sparse
+                                                </button>
+                      )}
+                      <button type="button" onClick={handleDelete} className="brutal-btn brutal-btn-danger brutal-btn-xs"><Trash2 className="h-4 w-4" />
+                      Delete
+                                            </button>
+                    </div>
+                    {canInspectSparseModel && (
+                      <p className="mt-3 text-xs text-[var(--text-secondary)]">
+                        Open Camera Poses to inspect {getSfmEngineCompactLabel(project?.config?.sfm_engine)} sparse reconstruction.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {framework && (
+                <div className="grid gap-4 xl:grid-cols-12">
+                  <div className="brutal-card xl:col-span-7 p-4 md:p-5">
+                    <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                      <div>
+                        <p className="brutal-label mb-1">Framework</p>
+                        <h2 className="brutal-h3">Reconstruction Policy</h2>
+                        <p className="mt-2 text-sm text-[var(--text-secondary)]">Dynamic heuristic state and pair-geometry refinement from backend policy.</p>
+                      </div>
+                      {framework.orbit_safe_profile && <span className="brutal-badge">{framework.orbit_safe_profile}</span>}
+                    </div>
+
+                    <div className="grid gap-3 md:grid-cols-3">
+                      <div className="brutal-card-muted p-4">
+                        <p className="brutal-label mb-2">Pipeline</p>
+                        <p className="text-sm font-bold uppercase text-[var(--ink)]">{getSfmEngineLabel(framework.sfm_engine || project?.config?.sfm_engine) || '--'} / {framework.feature_method || project?.config?.feature_method || '--'}</p>
+                        <p className="mt-2 text-xs text-[var(--text-secondary)]">Phase {framework.phase || '--'}</p>
+                      </div>
+                      <div className="brutal-card p-4">
+                        <p className="brutal-label mb-2">Matching Policy</p>
+                        <p className="text-sm font-bold uppercase text-[var(--ink)]">{getMatcherLabelWithMode(framework.matcher_type) || '--'}</p>
+                        <p className="mt-2 text-xs text-[var(--text-secondary)]">overlap {framework.matcher_params?.['SequentialMatching.overlap'] || '--'} • quadratic {framework.matcher_params?.['SequentialMatching.quadratic_overlap'] || '--'}</p>
+                      </div>
+                      <div className="brutal-card-muted p-4">
+                        <p className="brutal-label mb-2">Bridge Risk</p>
+                        <p className="text-lg font-black uppercase text-[var(--ink)]">{framework.bridge_risk_score ?? '--'}</p>
+                        <p className="mt-2 text-xs text-[var(--text-secondary)]">orbit-safe {framework.orbit_safe_mode ? 'enabled' : 'disabled'}</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="brutal-card-muted xl:col-span-5 p-4 md:p-5">
+                    <p className="brutal-label mb-3">Thresholds + Geometry</p>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div className="space-y-2 border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-card)] p-4">
+                        <h3 className="text-sm font-black uppercase tracking-tight text-[var(--ink)]">Mapper Thresholds</h3>
+                        <div className="space-y-2 text-sm text-[var(--text-secondary)]">
+                          <div className="flex items-center justify-between gap-3"><span>Abs pose max error</span><span className="font-bold text-[var(--ink)]">{framework.mapper_params?.['Mapper.abs_pose_max_error'] || '--'}</span></div>
+                          <div className="flex items-center justify-between gap-3"><span>Min inliers</span><span className="font-bold text-[var(--ink)]">{framework.mapper_params?.['Mapper.abs_pose_min_num_inliers'] || '--'}</span></div>
+                          <div className="flex items-center justify-between gap-3"><span>Min inlier ratio</span><span className="font-bold text-[var(--ink)]">{framework.mapper_params?.['Mapper.abs_pose_min_inlier_ratio'] || '--'}</span></div>
+                          <div className="flex items-center justify-between gap-3"><span>Max registration trials</span><span className="font-bold text-[var(--ink)]">{framework.mapper_params?.['Mapper.max_reg_trials'] || '--'}</span></div>
+                        </div>
+                      </div>
+                      <div className="space-y-2 border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-card)] p-4">
+                        <h3 className="text-sm font-black uppercase tracking-tight text-[var(--ink)]">Pair Geometry</h3>
+                        <div className="space-y-2 text-sm text-[var(--text-secondary)]">
+                          <div className="flex items-center justify-between gap-3"><span>Bridge p10</span><span className="font-bold text-[var(--ink)]">{framework.pair_geometry_stats?.bridge_p10 ?? '--'}</span></div>
+                          <div className="flex items-center justify-between gap-3"><span>Bridge min</span><span className="font-bold text-[var(--ink)]">{framework.pair_geometry_stats?.bridge_min ?? '--'}</span></div>
+                          <div className="flex items-center justify-between gap-3"><span>Weak boundaries</span><span className="font-bold text-[var(--ink)]">{framework.pair_geometry_stats?.weak_boundary_count ?? '--'}</span></div>
+                          <div className="flex items-center justify-between gap-3"><span>Weak ratio</span><span className="font-bold text-[var(--ink)]">{formatPercent(framework.pair_geometry_stats?.weak_boundary_ratio)}</span></div>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1087,61 +1127,50 @@ export default function ProjectDetailPage() {
               )}
 
               {videoDiagnostics && (
-                <div className="border border-gray-200 rounded-2xl p-6 bg-amber-50/40">
-                  <div className="flex items-start justify-between gap-4 mb-5">
-                    <div>
-                      <h3 className="text-sm font-medium text-black">Video Extraction Diagnostics</h3>
-                      <p className="text-sm text-gray-500 mt-1">
-                        Oversample-and-select summary stored with the project for later review.
-                      </p>
+                <div className="grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
+                  <div className="brutal-card-muted p-4 md:p-5">
+                    <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                      <div>
+                        <p className="brutal-label mb-1">Video Diagnostics</p>
+                        <h2 className="brutal-h3">Extraction Summary</h2>
+                        <p className="mt-2 text-sm text-[var(--text-secondary)]">Oversample-and-select summary stored with the project.</p>
+                      </div>
+                      <span className="brutal-badge brutal-badge-warning">window ±{effectiveSearchWindow ?? '--'}</span>
                     </div>
-                    <span className="inline-flex items-center rounded-full border border-amber-200 px-3 py-1 text-xs font-medium text-amber-900 bg-white">
-                      effective window ±{effectiveSearchWindow ?? '--'}
-                    </span>
-                  </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-5">
-                    <div className="rounded-xl border border-gray-200 bg-white p-4">
-                      <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Candidates</p>
-                      <p className="text-sm font-medium text-black">{videoDiagnostics.candidate_count ?? '--'}</p>
-                    </div>
-                    <div className="rounded-xl border border-gray-200 bg-white p-4">
-                      <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Targets</p>
-                      <p className="text-sm font-medium text-black">{videoDiagnostics.requested_targets ?? '--'}</p>
-                    </div>
-                    <div className="rounded-xl border border-gray-200 bg-white p-4">
-                      <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Saved</p>
-                      <p className="text-sm font-medium text-black">{videoDiagnostics.saved_frames ?? '--'}</p>
-                    </div>
-                    <div className="rounded-xl border border-gray-200 bg-white p-4">
-                      <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Replaced</p>
-                      <p className="text-sm font-medium text-black">{videoDiagnostics.replaced_targets ?? '--'}</p>
-                    </div>
-                    <div className="rounded-xl border border-gray-200 bg-white p-4">
-                      <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Rejected Candidates</p>
-                      <p className="text-sm font-medium text-black">{videoDiagnostics.rejected_candidates ?? '--'}</p>
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                      {[
+                        ['Candidates', videoDiagnostics.candidate_count ?? '--'],
+                        ['Targets', videoDiagnostics.requested_targets ?? '--'],
+                        ['Saved', videoDiagnostics.saved_frames ?? '--'],
+                        ['Replaced', videoDiagnostics.replaced_targets ?? '--'],
+                        ['Rejected', videoDiagnostics.rejected_candidates ?? '--'],
+                      ].map(([label, value]) => (
+                        <div key={label} className="brutal-card p-4">
+                          <p className="brutal-label mb-2">{label}</p>
+                          <p className="text-lg font-black uppercase tracking-tight text-[var(--ink)]">{value}</p>
+                        </div>
+                      ))}
                     </div>
                   </div>
 
-                  <div className="rounded-xl border border-gray-200 bg-white p-4">
-                    <p className="text-xs uppercase tracking-wide text-gray-500 mb-3">Recent Replacements</p>
-                    <div className="space-y-2 text-sm text-gray-700">
+                  <div className="brutal-card p-4 md:p-5">
+                    <p className="brutal-label mb-3">Recent Replacements</p>
+                    <div className="space-y-2 text-sm text-[var(--text-secondary)]">
                       {(videoDiagnostics.videos || [])
                         .flatMap((video) => (video.selections || []).map((selection) => ({ ...selection, filename: video.filename })))
                         .filter((selection) => selection.offset !== 0)
                         .slice(0, 12)
                         .map((selection, index) => (
-                          <div key={`${selection.filename || 'video'}-${selection.target_index}-${index}`} className="flex items-center justify-between gap-4">
+                          <div key={`${selection.filename || 'video'}-${selection.target_index}-${index}`} className="flex items-center justify-between gap-3 border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-muted)] px-3 py-2">
                             <span className="truncate">{selection.filename || 'video'}: target {selection.target_index} {'->'} {selection.selected_index}</span>
-                            <span className="shrink-0 font-medium text-black">
-                              offset {selection.offset > 0 ? `+${selection.offset}` : selection.offset} · sharpness {selection.sharpness}
-                            </span>
+                            <span className="shrink-0 font-bold text-[var(--ink)]">offset {selection.offset > 0 ? `+${selection.offset}` : selection.offset} • sharpness {selection.sharpness}</span>
                           </div>
                         ))}
                       {!(videoDiagnostics.videos || [])
                         .flatMap((video) => video.selections || [])
                         .some((selection) => selection.offset !== 0) && (
-                        <p className="text-sm text-gray-500">No replacements were needed in the stored extraction summary.</p>
+                        <div className="brutal-card-muted p-4 text-sm text-[var(--text-secondary)]">No replacements were needed in the stored extraction summary.</div>
                       )}
                     </div>
                   </div>
@@ -1149,143 +1178,85 @@ export default function ProjectDetailPage() {
               )}
 
               {(project?.input_type === 'video' || project?.input_type === 'mixed') && (
-                <div className="border border-gray-200 rounded-2xl p-6 bg-sky-50/40">
-                  <div className="flex items-start justify-between gap-4 mb-5">
+                <div className="brutal-card p-4 md:p-5">
+                  <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                     <div>
-                      <h3 className="text-sm font-medium text-black">Live Frame Extraction</h3>
-                      <p className="text-sm text-gray-500 mt-1">
-                        ติดตามจำนวนภาพที่ถูกถอดจากวิดีโอแบบ realtime ระหว่าง stage extract
-                      </p>
+                      <p className="brutal-label mb-1">Live Extraction</p>
+                      <h2 className="brutal-h3">Frame Sampling Monitor</h2>
+                      <p className="mt-2 text-sm text-[var(--text-secondary)]">ติดตามจำนวนภาพที่ถูกถอดจากวิดีโอแบบ realtime ระหว่าง stage extract</p>
                     </div>
-                    <span className="inline-flex items-center rounded-full border border-sky-200 px-3 py-1 text-xs font-medium text-sky-900 bg-white">
-                      {smartFrameSelectionEnabled ? `effective window ±${effectiveSearchWindow ?? '--'}` : 'oversample off'}
-                    </span>
+                    <span className="brutal-badge brutal-badge-info">{smartFrameSelectionEnabled ? `window ±${effectiveSearchWindow ?? '--'}` : 'oversample off'}</span>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-5">
-                    <div className="rounded-xl border border-gray-200 bg-white p-4">
-                      <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Extracted</p>
-                      <p className="text-sm font-medium text-black">{videoExtractionFramesDone ?? '--'}</p>
-                    </div>
-                    <div className="rounded-xl border border-gray-200 bg-white p-4">
-                      <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Target</p>
-                      <p className="text-sm font-medium text-black">{videoExtractionFramesTotal ?? '--'}</p>
-                    </div>
-                    <div className="rounded-xl border border-gray-200 bg-white p-4">
-                      <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Resolution</p>
-                      <p className="text-sm font-medium text-black">{project?.config?.colmap_resolution || '--'}</p>
-                    </div>
-                    <div className="rounded-xl border border-gray-200 bg-white p-4">
-                      <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Sampling</p>
-                      <p className="text-sm font-medium text-black">{extractionSummary}</p>
-                    </div>
-                    <div className="rounded-xl border border-gray-200 bg-white p-4">
-                      <p className="text-xs uppercase tracking-wide text-gray-500 mb-2">Oversample Factor</p>
-                      <p className="text-sm font-medium text-black">{smartFrameSelectionEnabled ? `${oversampleFactor ?? '--'}x` : 'Disabled'}</p>
-                    </div>
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                    {[
+                      ['Extracted', videoExtractionFramesDone ?? '--'],
+                      ['Target', videoExtractionFramesTotal ?? '--'],
+                      ['Resolution', project?.config?.colmap_resolution || '--'],
+                      ['Sampling', extractionSummary],
+                      ['Oversample', smartFrameSelectionEnabled ? `${oversampleFactor ?? '--'}x` : 'Disabled'],
+                    ].map(([label, value], index) => (
+                        <div key={label} className={index % 2 === 0 ? 'brutal-card-muted p-4' : 'brutal-card p-4'}>
+                        <p className="brutal-label mb-2">{label}</p>
+                        <p className="text-sm font-bold uppercase text-[var(--ink)]">{value}</p>
+                      </div>
+                    ))}
                   </div>
 
                   {(videoExtractionDetail?.text || videoExtractionDetail?.subtext) && (
-                    <div className="rounded-xl border border-gray-200 bg-white p-4">
-                      {videoExtractionDetail?.text && (
-                        <p className="text-sm text-gray-700">{videoExtractionDetail.text}</p>
-                      )}
-                      {videoExtractionDetail?.subtext && (
-                        <p className="text-xs text-gray-500 mt-1">{videoExtractionDetail.subtext}</p>
-                      )}
+                    <div className="mt-3 border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-muted)] p-4">
+                      {videoExtractionDetail?.text && <p className="text-sm text-[var(--ink)]">{videoExtractionDetail.text}</p>}
+                      {videoExtractionDetail?.subtext && <p className="mt-1 text-xs text-[var(--text-secondary)]">{videoExtractionDetail.subtext}</p>}
                     </div>
                   )}
                 </div>
               )}
 
-              {/* Horizontal Stage Timeline */}
-              <div>
-                <h3 className="text-sm font-medium text-black mb-6">Processing Pipeline</h3>
-                <div className="relative py-8">
-                  {/* Timeline Line */}
-                  <div className="absolute top-1/2 left-0 right-0 h-px bg-gray-200 -translate-y-1/2" />
-
-                  {/* Stage Nodes */}
-                  <div className="relative flex justify-between items-start">
-                    {PIPELINE_STAGES.map((stageConfig) => {
-                      const stage = stages.find(s => s.key === stageConfig.key) || { key: stageConfig.key, status: 'pending', progress: 0 };
-                      const progress = getStageProgress(stage);
-                      const isCompleted = stage.status === 'completed';
-                      const isRunning = stage.status === 'running';
-                      const isFailed = stage.status === 'failed';
-                      const isCancelled = stage.status === 'cancelled';
-                      const isStageError = isFailed || isCancelled;
-                      const errorBorderColor = isCancelled ? 'var(--warning-border)' : 'var(--error-border)';
-                      const errorBgColor = isCancelled ? 'var(--warning-bg)' : 'var(--error-bg)';
-                      const errorIconColor = isCancelled ? 'var(--warning-text)' : 'var(--error-icon)';
-
-                      return (
-                        <div key={stageConfig.key} className="flex flex-col items-center group relative" style={{ width: `${100 / PIPELINE_STAGES.length}%` }}>
-                          {/* Stage Node - Clickable */}
-                          <button
-                            onClick={() => setExpandedStage(expandedStage === stageConfig.key ? null : stageConfig.key)}
-                            className={`relative z-10 w-10 h-10 rounded-full flex items-center justify-center transition-all border-2 hover:scale-110 cursor-pointer ${
-                              expandedStage === stageConfig.key ? 'ring-2 ring-offset-2' : ''
-                            } ${
-                              isCompleted ? '' :
-                              isRunning ? 'bg-white' :
-                              isStageError ? 'bg-white' :
-                              'bg-white border-gray-200'
-                            }`}
-                            style={{
-                              ...(isCompleted ? {
-                                backgroundColor: 'var(--success-icon)',
-                                borderColor: 'var(--success-icon)'
-                              } : {}),
-                              ...(isRunning ? {
-                                borderColor: 'var(--processing-border)',
-                                backgroundColor: 'var(--processing-bg)'
-                              } : {}),
-                              ...(isStageError ? {
-                                borderColor: errorBorderColor,
-                                backgroundColor: errorBgColor
-                              } : {}),
-                              ...(expandedStage === stageConfig.key ? {
-                                ringColor: isCompleted ? 'var(--success-border)' :
-                                          isStageError ? errorBorderColor :
-                                          'var(--processing-border)'
-                              } : {})
-                            }}
-                          >
-                            {isCompleted ? (
-                              <CheckCircle className="h-5 w-5 text-white" />
-                            ) : isRunning ? (
-                              <Loader className="h-5 w-5 animate-spin" style={{ color: 'var(--processing-text)' }} />
-                            ) : isStageError ? (
-                              isCancelled ? (
-                                <AlertTriangle className="h-5 w-5" style={{ color: errorIconColor }} />
-                              ) : (
-                                <XCircle className="h-5 w-5" style={{ color: errorIconColor }} />
-                              )
-                            ) : (
-                              <div className="w-2 h-2 rounded-full bg-gray-300" />
-                            )}
-                          </button>
-
-                          {/* Stage Label */}
-                          <div className="mt-4 text-center px-1 max-w-[120px]">
-                            <p className={`text-xs leading-tight ${
-                              isRunning ? 'font-medium text-black' :
-                              isCompleted ? 'text-gray-600' :
-                              isCancelled ? 'text-amber-600 font-medium' :
-                              isStageError ? 'text-red-500 font-medium' :
-                              'text-gray-400'
-                            }`}>
-                              {getStageLabelForEngine(stageConfig.key, project?.config?.sfm_engine, project?.config?.feature_method) || stageConfig.label}
-                            </p>
-                          </div>
-                        </div>
-                      );
-                    })}
+              <div className="brutal-card p-4 md:p-5">
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <div>
+                    <p className="brutal-label mb-1">Pipeline</p>
+                    <h2 className="brutal-h3">Processing Stages</h2>
                   </div>
+                  <span className="brutal-badge">{stages.filter((stage) => stage.status === 'completed').length}/{PIPELINE_STAGES.length} done</span>
                 </div>
 
-                {/* Stage Detail Panel - Expandable */}
+                <div className="grid gap-3 lg:grid-cols-8">
+                  {PIPELINE_STAGES.map((stageConfig) => {
+                    const stage = stages.find(s => s.key === stageConfig.key) || { key: stageConfig.key, status: 'pending', progress: 0 };
+                    const progress = getStageProgress(stage);
+                    const isRunning = stage.status === 'running';
+                    const isExpanded = expandedStage === stageConfig.key;
+                    const stageBadgeClass = stage.status === 'completed'
+                      ? 'status-badge status-completed'
+                      : stage.status === 'running'
+                        ? 'status-badge status-processing'
+                        : stage.status === 'failed'
+                          ? 'status-badge status-failed'
+                          : stage.status === 'cancelled'
+                            ? 'status-badge status-cancelled'
+                            : 'status-badge';
+
+                    return (
+                      <button type="button" key={stageConfig.key}
+                      onClick={() => setExpandedStage(isExpanded ? null : stageConfig.key)}
+                      className={`text-left ${isRunning || isExpanded ? 'brutal-card-dark' : stage.status === 'pending' ? 'brutal-card-muted' : 'brutal-card'} p-3 transition-transform hover:-translate-x-[2px] hover:-translate-y-[2px]`}><div className="mb-3 flex items-start justify-between gap-2">
+                        <div className={`flex h-9 w-9 items-center justify-center border-[var(--border-w)] ${isRunning || isExpanded ? 'border-[var(--paper)] bg-[var(--paper)] text-[var(--ink)]' : 'border-[var(--ink)] bg-[var(--paper-card)] text-[var(--ink)]'}`}>
+                          {stage.status === 'pending' ? <stageConfig.Icon className="h-4 w-4" /> : getStageIcon(stage)}
+                        </div>
+                        <span className={stageBadgeClass}>{stage.status}</span>
+                      </div>
+                      <p className={`mb-2 text-sm font-black uppercase tracking-tight ${isRunning || isExpanded ? 'text-[var(--text-on-ink)]' : 'text-[var(--ink)]'}`}>
+                        {getStageLabelForEngine(stageConfig.key, project?.config?.sfm_engine, project?.config?.feature_method) || stageConfig.label}
+                      </p>
+                      <div className={`mb-2 border p-1 ${isRunning || isExpanded ? 'border-[var(--paper)] bg-[var(--paper)]' : 'border-[var(--ink)] bg-[var(--paper-muted-2)]'}`}>
+                        <div className={`h-2 ${isRunning || isExpanded ? 'bg-[var(--ink-600)]' : 'bg-[var(--ink)]'}`} style={{ width: `${progress}%` }} />
+                      </div>
+                      <p className={`text-[11px] font-medium uppercase tracking-[0.12em] ${isRunning || isExpanded ? 'text-[var(--text-on-ink-muted)]' : 'text-[var(--text-secondary)]'}`}>{progress}%</p></button>
+                    );
+                  })}
+                </div>
+
                 {expandedStage && (() => {
                   const stageConfig = PIPELINE_STAGES.find(s => s.key === expandedStage);
                   const stage = stages.find(s => s.key === expandedStage) || { key: expandedStage, status: 'pending', progress: 0 };
@@ -1294,161 +1265,161 @@ export default function ProjectDetailPage() {
                   const stageCancelled = stage.status === 'cancelled';
 
                   return (
-                    <div className="mt-6 border border-gray-200 rounded-xl p-6 bg-gray-50 animate-in slide-in-from-top duration-200">
-                      <div className="flex items-start justify-between mb-4">
-                        <div className="flex items-center space-x-3">
-                          <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center">
-                            {stageConfig?.Icon && <stageConfig.Icon className="h-5 w-5 text-gray-700" />}
+                    <div className="mt-4 grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+                      <div className="brutal-card-dark p-4">
+                        <div className="mb-4 flex items-start justify-between gap-3">
+                          <div className="flex items-start gap-3">
+                            <div className="flex h-10 w-10 items-center justify-center border-[var(--border-w)] border-[var(--paper)] bg-[var(--paper)] text-[var(--ink)]">
+                              {stageConfig?.Icon && <stageConfig.Icon className="h-5 w-5" />}
+                            </div>
+                            <div>
+                              <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--text-on-ink-muted)]">Expanded Stage</p>
+                              <h3 className="text-lg font-black uppercase tracking-tight text-[var(--text-on-ink)]">{getStageLabelForEngine(stageConfig?.key || '', project?.config?.sfm_engine, project?.config?.feature_method) || stageConfig?.label}</h3>
+                              <p className="mt-1 text-xs text-[var(--text-on-ink-muted)]">
+                                {stage.status === 'completed' ? 'Completed' :
+                                 stage.status === 'running' ? `In progress (${progress}%)` :
+                                 stageCancelled ? 'Cancelled' :
+                                 stageErrored ? 'Failed' :
+                                 'Pending'}
+                              </p>
+                            </div>
                           </div>
-                          <div>
-                            <h4 className="text-lg font-semibold text-black">{getStageLabelForEngine(stageConfig?.key || '', project?.config?.sfm_engine, project?.config?.feature_method) || stageConfig?.label}</h4>
-                            <p className="text-sm text-gray-500 mt-1">
-                              {stage.status === 'completed' ? '✓ Completed' :
-                               stage.status === 'running' ? `⏳ In progress (${progress}%)` :
-                               stageCancelled ? '⚠️ Cancelled' :
-                               stageErrored ? '✗ Failed' :
-                               '○ Pending'}
+                          <button type="button" onClick={() => setExpandedStage(null)} className="brutal-btn brutal-btn-xs"><XCircle className="h-4 w-4" />
+                          Close
+                                                    </button>
+                        </div>
+
+                        {stage.status === 'running' && (
+                          <div className="mb-4">
+                            <div className="mb-2 flex items-center justify-between text-xs font-bold uppercase tracking-[0.15em] text-[var(--text-on-ink-muted)]">
+                              <span>Progress</span>
+                              <span>{progress}%</span>
+                            </div>
+                            <div className="border-[var(--border-w)] border-[var(--paper)] bg-[var(--paper)] p-1">
+                              <div className="h-3 bg-[var(--ink-600)]" style={{ width: `${progress}%` }} />
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="grid gap-3 md:grid-cols-2">
+                          {stage.started_at && (
+                            <div className="border-[var(--border-w)] border-[var(--ink-700)] bg-[var(--ink-800)] px-3 py-3">
+                              <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--text-on-ink-muted)]">Started</p>
+                              <p className="text-sm font-bold text-[var(--text-on-ink)]">{new Date(stage.started_at).toLocaleTimeString()}</p>
+                            </div>
+                          )}
+                          {stage.completed_at && (
+                            <div className="border-[var(--border-w)] border-[var(--ink-700)] bg-[var(--ink-800)] px-3 py-3">
+                              <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--text-on-ink-muted)]">Completed</p>
+                              <p className="text-sm font-bold text-[var(--text-on-ink)]">{new Date(stage.completed_at).toLocaleTimeString()}</p>
+                            </div>
+                          )}
+                        </div>
+
+                        {stageDetails[expandedStage]?.text && (
+                          <div className="mt-4 border-t border-[var(--ink-700)] pt-4">
+                            <p className="text-sm text-[var(--text-on-ink)]">{stageDetails[expandedStage].text}</p>
+                            {stageDetails[expandedStage]?.subtext && <p className="mt-1 text-xs text-[var(--text-on-ink-muted)]">{stageDetails[expandedStage].subtext}</p>}
+                          </div>
+                        )}
+
+                        {stageErrored && (
+                          <div className={`mt-4 border-[var(--border-w)] p-3 ${stageCancelled ? 'status-cancelled' : 'status-failed'}`}>
+                            <p className="text-sm font-bold uppercase tracking-[0.12em]">{stageCancelled ? 'Processing Cancelled' : 'Error'}</p>
+                            <p className="mt-1 text-sm">
+                              {stageCancelled
+                                ? 'งานถูกยกเลิกแล้ว สามารถกด Retry เพื่อเริ่มจากขั้นนี้ใหม่ได้'
+                                : stage.error || 'ขั้นตอนนี้เกิดข้อผิดพลาด ตรวจสอบ log แล้วลอง Retry อีกครั้ง'}
                             </p>
                           </div>
-                        </div>
-                        <button
-                          onClick={() => setExpandedStage(null)}
-                          className="text-gray-400 hover:text-black transition-colors"
-                        >
-                          <XCircle className="h-5 w-5" />
-                        </button>
+                        )}
                       </div>
 
-                      {/* Stage Details */}
-                      <div className="space-y-4">
-                        {/* Progress for running stage */}
-                        {stage.status === 'running' && (
-                          <div>
-                            <div className="flex items-center justify-between mb-2">
-                              <span className="text-sm font-medium text-black">Progress</span>
-                              <span className="text-sm text-gray-600">{progress}%</span>
-                            </div>
-                            <div className="bg-gray-200 rounded-full h-2">
-                              <div
-                                className="bg-black h-2 rounded-full transition-all duration-300"
-                                style={{ width: `${progress}%` }}
-                              />
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Timestamps */}
-                        {stage.started_at && (
-                          <div className="grid grid-cols-2 gap-4 text-sm">
-                            <div>
-                              <p className="text-gray-500">Started</p>
-                              <p className="text-black font-medium">{new Date(stage.started_at).toLocaleTimeString()}</p>
-                            </div>
-                            {stage.completed_at && (
-                              <div>
-                                <p className="text-gray-500">Completed</p>
-                                <p className="text-black font-medium">{new Date(stage.completed_at).toLocaleTimeString()}</p>
-                              </div>
+                      <div className="brutal-card-muted p-4">
+                        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="brutal-label">Step Breakdown</p>
+                            {stage.status === 'running' && (
+                              <span className="brutal-badge brutal-badge-success brutal-pulse">Live</span>
                             )}
+                            <span className="brutal-badge">{stageLogs.length.toLocaleString()} lines</span>
                           </div>
-                        )}
-
-                        {/* Stage-specific details */}
-                        {stageDetails[expandedStage]?.text && (
-                          <div className="border-t border-gray-200 pt-4">
-                            <p className="text-sm text-gray-600">{stageDetails[expandedStage].text}</p>
-                            {stageDetails[expandedStage]?.subtext && (
-                              <p className="text-xs text-gray-400 mt-1">{stageDetails[expandedStage].subtext}</p>
-                            )}
-                          </div>
-                        )}
-
-                        {/* Global SfM Sub-stages for sparse_reconstruction */}
+                          <button
+                            type="button"
+                            onClick={handleDownloadLogs}
+                            disabled={(logMeta.total || logs.length) === 0}
+                            className="brutal-btn brutal-btn-xs"
+                            title="Download full log"
+                          >
+                            <Download className="h-3.5 w-3.5" />
+                            Download
+                          </button>
+                        </div>
                         {expandedStage === 'sparse_reconstruction' && isGlobalSfmEngine(project?.config?.sfm_engine) && stage.status === 'running' && (
-                          <div className="border-t border-gray-200 pt-4">
-                            <p className="text-xs font-medium text-gray-500 mb-3">Global SfM Pipeline Steps</p>
-                            <div className="space-y-2">
-                              {[
-                                { key: 'preprocessing', icon: '🔧', label: 'Preprocessing', progress: 5 },
-                                { key: 'view_graph_calibration', icon: '📊', label: 'View Graph Calibration', progress: 10 },
-                                { key: 'relative_pose', icon: '📐', label: 'Relative Pose Estimation', progress: 20 },
-                                { key: 'rotation_averaging', icon: '🔄', label: 'Rotation Averaging', progress: 35 },
-                                { key: 'track_establishment', icon: '🔗', label: 'Track Establishment', progress: 50 },
-                                { key: 'global_positioning', icon: '🌍', label: 'Global Positioning', progress: 65 },
-                                { key: 'bundle_adjustment', icon: '⚡', label: 'Bundle Adjustment', progress: 85 },
-                                { key: 'retriangulation', icon: '📐', label: 'Retriangulation', progress: 92 },
-                                { key: 'postprocessing', icon: '🏁', label: 'Postprocessing', progress: 98 },
-                              ].map((subStage) => {
-                                const currentProgress = progress;
-                                const isSubCompleted = currentProgress >= subStage.progress;
-                                const isSubActive = currentProgress >= (subStage.progress - 10) && currentProgress < subStage.progress + 5;
-                                return (
-                                  <div key={subStage.key} className={`flex items-center space-x-2 text-xs ${isSubCompleted ? 'text-green-600' : isSubActive ? 'text-blue-600 font-medium' : 'text-gray-400'}`}>
-                                    <span>{isSubCompleted ? '✓' : isSubActive ? '▶' : '○'}</span>
-                                    <span>{subStage.icon}</span>
-                                    <span>{subStage.label}</span>
-                                  </div>
-                                );
-                              })}
-                            </div>
+                          <div className="mb-3 space-y-2 text-xs text-[var(--text-secondary)]">
+                            {[
+                              { key: 'preprocessing', label: 'Preprocessing', progress: 5 },
+                              { key: 'view_graph_calibration', label: 'View Graph Calibration', progress: 10 },
+                              { key: 'relative_pose', label: 'Relative Pose Estimation', progress: 20 },
+                              { key: 'rotation_averaging', label: 'Rotation Averaging', progress: 35 },
+                              { key: 'track_establishment', label: 'Track Establishment', progress: 50 },
+                              { key: 'global_positioning', label: 'Global Positioning', progress: 65 },
+                              { key: 'bundle_adjustment', label: 'Bundle Adjustment', progress: 85 },
+                              { key: 'retriangulation', label: 'Retriangulation', progress: 92 },
+                              { key: 'postprocessing', label: 'Postprocessing', progress: 98 },
+                            ].map((subStage) => {
+                              const isSubCompleted = progress >= subStage.progress;
+                              const isSubActive = progress >= (subStage.progress - 10) && progress < subStage.progress + 5;
+                              return (
+                                <div key={subStage.key} className={`flex items-center justify-between gap-3 border-[var(--border-w)] border-[var(--ink)] px-3 py-2 ${isSubActive ? 'bg-[var(--paper-card)]' : 'bg-[var(--paper-muted)]'}`}>
+                                  <span className={`font-bold uppercase tracking-[0.12em] ${isSubCompleted ? 'text-[var(--success-icon)]' : isSubActive ? 'text-[var(--ink)]' : 'text-[var(--text-muted)]'}`}>{isSubCompleted ? 'DONE' : isSubActive ? 'LIVE' : 'WAIT'}</span>
+                                  <span className="flex-1">{subStage.label}</span>
+                                  <span className="font-bold text-[var(--ink)]">{subStage.progress}%</span>
+                                </div>
+                              );
+                            })}
                           </div>
                         )}
-
-                        {/* FastMap Sub-stages for sparse_reconstruction */}
                         {expandedStage === 'sparse_reconstruction' && project?.config?.sfm_engine === 'fastmap' && stage.status === 'running' && (
-                          <div className="border-t border-gray-200 pt-4">
-                            <p className="text-xs font-medium text-purple-600 mb-3">⚡ FastMap Pipeline Steps</p>
-                            <div className="space-y-2">
-                              {[
-                                { key: 'focal_estimation', icon: '🔍', label: 'Focal Length Estimation', progress: 5 },
-                                { key: 'fundamental', icon: '📐', label: 'Fundamental Matrix', progress: 15 },
-                                { key: 'decompose', icon: '🧩', label: 'Essential Decomposition', progress: 25 },
-                                { key: 'rotation', icon: '🔄', label: 'Global Rotation', progress: 40 },
-                                { key: 'translation', icon: '📍', label: 'Global Translation', progress: 55 },
-                                { key: 'tracks', icon: '🔗', label: 'Track Building', progress: 65 },
-                                { key: 'epipolar', icon: '⚡', label: 'Epipolar Adjustment', progress: 80 },
-                                { key: 'sparse', icon: '🏗️', label: 'Sparse Reconstruction', progress: 92 },
-                                { key: 'output', icon: '💾', label: 'Writing Results', progress: 98 },
-                              ].map((subStage) => {
-                                const currentProgress = progress;
-                                const isSubCompleted = currentProgress >= subStage.progress;
-                                const isSubActive = currentProgress >= (subStage.progress - 10) && currentProgress < subStage.progress + 5;
-                                return (
-                                  <div key={subStage.key} className={`flex items-center space-x-2 text-xs ${isSubCompleted ? 'text-green-600' : isSubActive ? 'text-purple-600 font-medium' : 'text-gray-400'}`}>
-                                    <span>{isSubCompleted ? '✓' : isSubActive ? '▶' : '○'}</span>
-                                    <span>{subStage.icon}</span>
-                                    <span>{subStage.label}</span>
-                                  </div>
-                                );
-                              })}
-                            </div>
+                          <div className="mb-3 space-y-2 text-xs text-[var(--text-secondary)]">
+                            {[
+                              { key: 'focal_estimation', label: 'Focal Length Estimation', progress: 5 },
+                              { key: 'fundamental', label: 'Fundamental Matrix', progress: 15 },
+                              { key: 'decompose', label: 'Essential Decomposition', progress: 25 },
+                              { key: 'rotation', label: 'Global Rotation', progress: 40 },
+                              { key: 'translation', label: 'Global Translation', progress: 55 },
+                              { key: 'tracks', label: 'Track Building', progress: 65 },
+                              { key: 'epipolar', label: 'Epipolar Adjustment', progress: 80 },
+                              { key: 'sparse', label: 'Sparse Reconstruction', progress: 92 },
+                              { key: 'output', label: 'Writing Results', progress: 98 },
+                            ].map((subStage) => {
+                              const isSubCompleted = progress >= subStage.progress;
+                              const isSubActive = progress >= (subStage.progress - 10) && progress < subStage.progress + 5;
+                              return (
+                                <div key={subStage.key} className={`flex items-center justify-between gap-3 border-[var(--border-w)] border-[var(--ink)] px-3 py-2 ${isSubActive ? 'bg-[var(--paper-card)]' : 'bg-[var(--paper-muted)]'}`}>
+                                  <span className={`font-bold uppercase tracking-[0.12em] ${isSubCompleted ? 'text-[var(--success-icon)]' : isSubActive ? 'text-[var(--ink-600)]' : 'text-[var(--text-muted)]'}`}>{isSubCompleted ? 'DONE' : isSubActive ? 'LIVE' : 'WAIT'}</span>
+                                  <span className="flex-1">{subStage.label}</span>
+                                  <span className="font-bold text-[var(--ink)]">{subStage.progress}%</span>
+                                </div>
+                              );
+                            })}
                           </div>
                         )}
-
-                        {/* Error or cancellation state */}
-                        {stageErrored && (
-                          <div className="border-t border-gray-200 pt-4">
-                            <div
-                              className={`flex items-start space-x-2 p-3 rounded-lg ${
-                                stageCancelled ? 'bg-amber-50 border border-amber-200' : 'bg-red-50 border border-red-200'
-                              }`}
-                            >
-                              <AlertTriangle
-                                className={`h-5 w-5 flex-shrink-0 mt-0.5 ${
-                                  stageCancelled ? 'text-amber-600' : 'text-red-600'
-                                }`}
-                              />
-                              <div>
-                                <p className={`text-sm font-medium ${stageCancelled ? 'text-amber-800' : 'text-red-800'}`}>
-                                  {stageCancelled ? 'Processing cancelled' : 'Error'}
-                                </p>
-                                <p className={`text-sm mt-1 ${stageCancelled ? 'text-amber-700' : 'text-red-600'}`}>
-                                  {stageCancelled
-                                    ? 'งานถูกยกเลิกแล้ว สามารถกด Retry เพื่อเริ่มจากขั้นนี้ใหม่ได้'
-                                    : stage.error || 'ขั้นตอนนี้เกิดข้อผิดพลาด ตรวจสอบ log แล้วลอง Retry อีกครั้ง'}
-                                </p>
+                        {stageLogs.length > 0 ? (
+                          <div
+                            ref={stageLogsRef}
+                            className="brutal-scroll max-h-72 overflow-y-auto overflow-x-hidden border-[var(--border-w)] border-[var(--ink)] bg-[var(--ink)] p-3 font-mono text-xs leading-relaxed text-[var(--paper-muted)]"
+                          >
+                            {stageLogs.map((log, index) => (
+                              <div key={`${expandedStage}-${index}-${log.slice(0, 24)}`} className="flex gap-3 whitespace-pre-wrap break-all hover:text-white">
+                                <span className="w-10 shrink-0 select-none text-right text-[var(--text-on-ink-muted)]">{index + 1}</span>
+                                <span className="min-w-0 flex-1">{log}</span>
                               </div>
-                            </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-card)] p-4 text-sm text-[var(--text-secondary)]">
+                            {stage.status === 'pending' ? 'Stage has not started yet.' : 'No logs captured for this stage yet.'}
                           </div>
                         )}
                       </div>
@@ -1457,241 +1428,88 @@ export default function ProjectDetailPage() {
                 })()}
               </div>
 
-              {/* Mesh Export Panels - Show for completed or failed projects */}
               {(project.status === 'completed' || project.status === 'failed') && (
-                <div className="border-t border-gray-200 pt-6 space-y-6">
-                  {/* List of exported meshes */}
-                  <ExportedMeshesList projectId={projectId} />
-
-                  {/* Mesh export panel */}
-                  <MeshExportPanel projectId={projectId} projectStatus={project.status} />
+                <div className="grid gap-4 xl:grid-cols-2">
+                  <div className="brutal-card p-4 md:p-5">
+                    <p className="brutal-label mb-3">Exports</p>
+                    <ExportedMeshesList projectId={projectId} />
+                  </div>
+                  <div className="brutal-card-muted p-4 md:p-5">
+                    <p className="brutal-label mb-3">Mesh Generation</p>
+                    <MeshExportPanel projectId={projectId} projectStatus={project.status} />
+                  </div>
                 </div>
               )}
 
-              {/* Frame Preview Section - Show All Images */}
               {framePreview.length > 0 && (
-                <div className="border-t border-gray-200 pt-6">
-                  <h3 className="text-sm font-medium text-black mb-4">
-                    {hasSeparateTraining ? 'COLMAP Frames' : 'Frame Preview'} ({framePreview.length} images) 
-                    <span className="text-gray-400 font-normal"> - คลิกเพื่อดูภาพขนาดใหญ่</span>
-                    {hasSeparateTraining && <span className="ml-2 text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">For Pose Estimation</span>}
-                  </h3>
-                  <div className="max-h-96 overflow-y-auto">
-                    <div className="grid grid-cols-5 gap-3">
+                <div className="brutal-card p-4 md:p-5">
+                  <div className="mb-4 flex flex-wrap items-center gap-2">
+                    <h2 className="brutal-h3">{hasSeparateTraining ? 'COLMAP Frames' : 'Frame Preview'} ({framePreview.length})</h2>
+                    <span className="brutal-badge">click to enlarge</span>
+                    {hasSeparateTraining && <span className="brutal-badge brutal-badge-info">For Pose Estimation</span>}
+                  </div>
+                  <div className="brutal-scroll max-h-96 overflow-y-auto pr-1">
+                    <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-5">
                       {framePreview.map((frame, index) => (
-                        <div
-                          key={index}
-                          className="relative group flex-shrink-0 cursor-pointer"
-                          onClick={() => {
-                            setPreviewImageIndex(index);
-                            setShowImagePreview(true);
-                          }}
-                        >
-                          <img
-                            src={frame.url}
-                            alt={frame.name}
-                            className="w-full h-24 object-cover rounded-lg border border-gray-200 hover:border-black hover:shadow-md transition-all"
-                            loading="lazy"
-                          />
-                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 rounded-lg transition-all flex items-center justify-center">
-                            <Eye className="h-6 w-6 text-white opacity-0 group-hover:opacity-100 drop-shadow-lg transition-opacity" />
-                          </div>
-                          <div className="absolute bottom-1 right-1 bg-black/60 text-white text-xs px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity">
-                            {index + 1}
-                          </div>
+                        <button type="button" key={frame.url || frame.name || `frame-${index}`}
+                        className="group brutal-card-hover overflow-hidden text-left"
+                        onClick={() => {
+                          setPreviewImageIndex(index);
+                          setShowImagePreview(true);
+                        }}><div className="aspect-[4/3] overflow-hidden border-b-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-muted)]">
+                          <img src={frame.url} alt={frame.name} className="h-full w-full object-cover" loading="lazy" />
                         </div>
+                        <div className="flex items-center justify-between gap-2 p-3">
+                          <span className="truncate text-xs font-bold uppercase tracking-[0.12em] text-[var(--ink)]">{frame.name || `Frame ${index + 1}`}</span>
+                          <span className="brutal-badge">{index + 1}</span>
+                        </div></button>
                       ))}
                     </div>
                   </div>
                 </div>
               )}
 
-              {/* High-Res Training Frames Preview - Only show if separate training images exist */}
               {hasSeparateTraining && trainingFramePreview.length > 0 && (
-                <div className="border-t border-gray-200 pt-6">
-                  <h3 className="text-sm font-medium text-black mb-4">
-                    Training Frames ({trainingFramePreview.length} images)
-                    <span className="text-gray-400 font-normal"> - High resolution for 3DGS training</span>
-                    <span className="ml-2 text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded">High-Res</span>
-                  </h3>
-                  <div className="max-h-96 overflow-y-auto">
-                    <div className="grid grid-cols-5 gap-3">
+                <div className="brutal-card-muted p-4 md:p-5">
+                  <div className="mb-4 flex flex-wrap items-center gap-2">
+                    <h2 className="brutal-h3">Training Frames ({trainingFramePreview.length})</h2>
+                    <span className="brutal-badge brutal-badge-warning">High-Res</span>
+                  </div>
+                  <div className="brutal-scroll max-h-96 overflow-y-auto pr-1">
+                    <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-5">
                       {trainingFramePreview.map((frame, index) => (
-                        <div
-                          key={index}
-                          className="relative group flex-shrink-0 cursor-pointer"
-                          onClick={() => {
-                            // Open training frame in new tab for full resolution view
-                            window.open(frame.url, '_blank');
-                          }}
-                        >
-                          <img
-                            src={frame.url}
-                            alt={frame.name}
-                            className="w-full h-24 object-cover rounded-lg border border-purple-200 hover:border-purple-500 hover:shadow-md transition-all"
-                            loading="lazy"
-                          />
-                          <div className="absolute inset-0 bg-black/0 group-hover:bg-purple-500/10 rounded-lg transition-all flex items-center justify-center">
-                            <Eye className="h-6 w-6 text-white opacity-0 group-hover:opacity-100 drop-shadow-lg transition-opacity" />
-                          </div>
-                          <div className="absolute bottom-1 right-1 bg-purple-600/80 text-white text-xs px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity">
-                            {index + 1}
-                          </div>
+                        <button type="button" key={frame.url || frame.name || `training-frame-${index}`}
+                        className="group brutal-card overflow-hidden text-left hover:-translate-x-[2px] hover:-translate-y-[2px] hover:shadow-[var(--shadow-md)]"
+                        onClick={() => {
+                          window.open(frame.url, '_blank');
+                        }}><div className="aspect-[4/3] overflow-hidden border-b-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-card)]">
+                          <img src={frame.url} alt={frame.name} className="h-full w-full object-cover" loading="lazy" />
                         </div>
+                        <div className="flex items-center justify-between gap-2 p-3">
+                          <span className="truncate text-xs font-bold uppercase tracking-[0.12em] text-[var(--ink)]">{frame.name || `Frame ${index + 1}`}</span>
+                          <span className="brutal-badge brutal-badge-warning">{index + 1}</span>
+                        </div></button>
                       ))}
                     </div>
                   </div>
                 </div>
               )}
             </div>
-          </div>
-        </div>
-
-        {/* Log Panel - Full Width Bottom */}
-      <div className={`fixed bottom-0 left-0 right-0 bg-gray-950 border-t border-gray-800 transition-transform duration-300 ${
-        showLogSidebar ? 'translate-y-0' : 'translate-y-full'
-      } flex flex-col z-40`}
-      style={{ height: '45vh', minHeight: '300px' }}>
-        {/* Panel Header */}
-        <div className="px-6 py-3 border-b border-gray-800 flex items-center justify-between flex-shrink-0 bg-gray-900">
-          <div className="flex items-center gap-4">
-            <h3 className="text-sm font-semibold text-gray-100 flex items-center gap-2">
-              <Monitor className="h-4 w-4" />
-              Activity Log
-            </h3>
-            {project?.status === 'processing' && (
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                </span>
-                Live Streaming
-              </span>
-            )}
-            <span className="text-xs text-gray-500 bg-gray-800 px-2 py-1 rounded">
-              {logMeta.truncated
-                ? `showing ${logMeta.visible.toLocaleString()} / ${logMeta.total.toLocaleString()} lines`
-                : `${(logMeta.total || logs.length).toLocaleString()} lines`}
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setAutoScroll(!autoScroll)}
-              className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors flex items-center gap-1.5 ${
-                autoScroll 
-                  ? 'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 border border-emerald-500/30' 
-                  : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800 border border-gray-700'
-              }`}
-              title={autoScroll ? 'Auto-scroll enabled' : 'Auto-scroll disabled'}
-            >
-              <ArrowDownToLine className="h-3.5 w-3.5" />
-              {autoScroll ? 'Auto-scroll ON' : 'Auto-scroll OFF'}
-            </button>
-            <button
-              onClick={handleDownloadLogs}
-              disabled={(logMeta.total || logs.length) === 0}
-              className="px-3 py-1.5 rounded-md text-xs font-medium text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition-colors disabled:opacity-40 disabled:cursor-not-allowed border border-gray-700 flex items-center gap-1.5"
-              title="Download logs"
-            >
-              <Download className="h-3.5 w-3.5" />
-              Download
-            </button>
-            <button
-              onClick={() => setShowLogSidebar(false)}
-              className="p-1.5 rounded-md text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition-colors ml-2"
-            >
-              <X className="h-5 w-5" />
-            </button>
-          </div>
-        </div>
-
-        {/* Log Content - Full Width Scrollable */}
-        <div className="flex-1 overflow-y-auto overflow-x-auto bg-gray-950 font-mono text-sm leading-relaxed">
-          {logs.length > 0 ? (
-            <div className="p-4 min-w-max">
-              {logMeta.truncated && (
-                <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-200">
-                  Showing the latest {logMeta.visible.toLocaleString()} log lines to keep the page responsive. Use Download for the full log.
-                </div>
-              )}
-              <div className="space-y-3">
-                {logGroups.map((group) => {
-                  const isExpanded = expandedLogGroups[group.key] ?? true;
-                  return (
-                    <div key={group.key} className="rounded-xl border border-gray-800 bg-gray-900/70 overflow-hidden">
-                      <button
-                        onClick={() => setExpandedLogGroups(prev => ({ ...prev, [group.key]: !isExpanded }))}
-                        className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-gray-800/80 transition-colors"
-                      >
-                        <div className="flex items-center gap-3">
-                          <ChevronRight className={`h-4 w-4 text-gray-400 transition-transform ${isExpanded ? 'rotate-90' : ''}`} />
-                          <span className="text-sm font-semibold text-gray-100">{group.label}</span>
-                          <span className="text-xs text-gray-500 bg-gray-800 px-2 py-0.5 rounded-full">
-                            {group.logs.length.toLocaleString()} lines
-                          </span>
-                        </div>
-                      </button>
-
-                      {isExpanded && (
-                        <div className="border-t border-gray-800">
-                          {group.logs.map((log, index) => (
-                            <div
-                              key={`${group.key}-${index}`}
-                              className="whitespace-pre text-gray-300 hover:text-white hover:bg-gray-900/70 transition-colors py-1 px-3 rounded border-l-2 border-transparent hover:border-gray-600"
-                            >
-                              <span className="text-gray-600 select-none mr-4 inline-block w-16 text-right">{index + 1}</span>
-                              {group.key === 'ungrouped' ? '├─ ' : '│  '}
-                              {log}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-              <div ref={logEndRef} className="h-4" />
-            </div>
-          ) : (
-            <div className="flex items-center justify-center h-full text-gray-600">
-              <div className="text-center">
-                <Monitor className="h-12 w-12 mx-auto mb-3 opacity-50" />
-                <p className="text-lg">Waiting for logs...</p>
-                <p className="text-sm text-gray-500 mt-1">Logs will appear here when processing starts</p>
-              </div>
-            </div>
-          )}
-        </div>
-
-      </div>
-
-      {!showLogSidebar && (
-        <button
-          onClick={() => setShowLogSidebar(true)}
-          className="fixed bottom-6 right-6 bg-gray-900 text-white rounded-xl px-4 py-3 shadow-xl hover:bg-gray-800 transition-all z-30 flex items-center gap-2 border border-gray-700"
-        >
-          <Monitor className="h-5 w-5" />
-          <span className="text-sm font-medium">Show Logs</span>
-          {logs.length > 0 && (
-            <span className="bg-emerald-500 text-white text-xs px-2 py-0.5 rounded-full">
-              {logMeta.total || logs.length}
-            </span>
-          )}
-        </button>
-      )}
+          </section>
+        </main>
 
       {/* Retry Modal */}
       {showRetryModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 backdrop-blur-sm p-4" onClick={() => setShowRetryModal(false)}>
-          <div className="bg-white rounded-2xl max-w-md w-full mx-4 shadow-2xl max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
-            <div className="p-8 pb-4 flex-shrink-0">
-              <h3 className="text-xl font-semibold text-black mb-2">Retry Processing</h3>
-              <p className="text-sm text-gray-500 mb-6">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(10,26,63,0.72)] p-4">
+          <div className="brutal-card flex max-h-[90vh] w-full max-w-2xl flex-col">
+            <div className="brutal-divider px-5 py-4">
+              <h3 className="brutal-h2 mb-2">Retry Processing</h3>
+              <p className="text-sm text-[var(--text-secondary)]">
                 Select which stage to retry from. All subsequent stages will be re-run.
               </p>
             </div>
 
-            <div className="px-8 overflow-y-auto flex-1">
+            <div className="brutal-scroll flex-1 overflow-y-auto px-5 py-4">
               <div className="space-y-2 mb-6">
               {PIPELINE_STAGES.map((stage) => {
                 const stageState = stages.find(s => s.key === stage.key);
@@ -1702,10 +1520,10 @@ export default function ProjectDetailPage() {
                 return (
                   <label
                     key={stage.key}
-                    className={`flex items-center p-4 border rounded-xl cursor-pointer transition-all ${
+                    className={`flex cursor-pointer items-center border-[var(--border-w)] p-4 transition-all ${
                       selectedRetryStage === stage.key
-                        ? 'border-black bg-gray-50'
-                        : 'border-gray-200 hover:border-gray-300'
+                        ? 'border-[var(--ink)] bg-[var(--paper-muted)] shadow-[var(--shadow-sm)]'
+                        : 'border-[var(--ink)] bg-[var(--paper-card)]'
                     }`}
                   >
                     <input
@@ -1714,22 +1532,20 @@ export default function ProjectDetailPage() {
                       value={stage.key}
                       checked={selectedRetryStage === stage.key}
                       onChange={(e) => setSelectedRetryStage(e.target.value)}
-                      className="mr-4 w-4 h-4 text-black border-gray-300 focus:ring-black"
+                      className="mr-4 h-4 w-4 border-[var(--ink)] text-[var(--ink)]"
                     />
                     <div className="flex-1">
                       <div className="flex items-center space-x-3">
-                        <stage.Icon className="h-5 w-5 text-gray-600" />
-                        <span className="text-sm font-medium text-black">{getStageLabelForEngine(stage.key, project?.config?.sfm_engine, project?.config?.feature_method) || stage.label}</span>
+                        <stage.Icon className="h-5 w-5 text-[var(--text-secondary)]" />
+                        <span className="text-sm font-bold uppercase tracking-[0.06em] text-[var(--ink)]">{getStageLabelForEngine(stage.key, project?.config?.sfm_engine, project?.config?.feature_method) || stage.label}</span>
                       </div>
-                      <div className="flex items-center space-x-2 mt-1.5 ml-8">
-                        {isCompleted && (
-                          <span className="text-xs text-gray-500 flex items-center">
+                      <div className="mt-1.5 ml-8 flex items-center space-x-2">
+                        {isCompleted && (<span className="status-badge status-completed">
                             <CheckCircle className="h-3 w-3 mr-1" />
                             Completed
-                          </span>
-                        )}
+                          </span>)}
                         {isErrored && (
-                          <span className={`text-xs flex items-center ${isCancelledStage ? 'text-amber-600' : 'text-red-500'}`}>
+                          <span className={isCancelledStage ? 'status-badge status-cancelled' : 'status-badge status-failed'}>
                             {isCancelledStage ? (
                               <AlertTriangle className="h-3 w-3 mr-1" />
                             ) : (
@@ -1747,20 +1563,20 @@ export default function ProjectDetailPage() {
 
             {/* Video Extraction Parameters Form - Show only for video_extraction stage */}
             {selectedRetryStage === 'video_extraction' && (
-              <div className="mb-6 p-4 bg-orange-50 border border-orange-200 rounded-xl">
-                <h4 className="text-sm font-semibold text-black mb-3 flex items-center">
+              <div className="status-cancelled mb-6 border-[var(--border-w)] p-4">
+                <h4 className="mb-3 flex items-center text-sm font-black uppercase tracking-[0.06em]">
                   <Settings className="h-4 w-4 mr-2" />
                   ปรับค่าการแยกเฟรม (ทิ้งว่างเพื่อใช้ค่าเดิม)
                 </h4>
                 <div className="space-y-3">
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                    <p className="brutal-label mb-1 block">
                       Extraction Mode
-                    </label>
+                    </p>
                     <select
                       value={retryParams.extraction_mode}
                       onChange={(e) => setRetryParams({...retryParams, extraction_mode: e.target.value})}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                      className="brutal-select"
                     >
                       <option value="">ใช้ค่าเดิม</option>
                       <option value="fps">Target FPS</option>
@@ -1771,16 +1587,16 @@ export default function ProjectDetailPage() {
 
                   {retryParams.extraction_mode === 'fps' && (
                     <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                      <p className="brutal-label mb-1 block">
                         Target FPS
-                      </label>
+                      </p>
                       <input
                         type="number"
                         min="0.1"
                         step="0.1"
                         value={retryParams.target_fps}
                         onChange={(e) => setRetryParams({...retryParams, target_fps: e.target.value})}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                        className="brutal-input"
                         placeholder="เช่น 1 / 2 / 5"
                       />
                     </div>
@@ -1788,29 +1604,29 @@ export default function ProjectDetailPage() {
 
                   {(retryParams.extraction_mode === 'target_count' || retryParams.extraction_mode === 'frames') && (
                     <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1">
+                      <p className="brutal-label mb-1 block">
                         {retryParams.extraction_mode === 'target_count' ? 'Target Frame Count' : 'Maximum Frames'}
-                      </label>
+                      </p>
                       <input
                         type="number"
                         min="1"
                         step="1"
                         value={retryParams.max_frames}
                         onChange={(e) => setRetryParams({...retryParams, max_frames: e.target.value})}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                        className="brutal-input"
                         placeholder={retryParams.extraction_mode === 'target_count' ? 'เช่น 150 / 200 / 300' : 'เช่น 100 / 200 / 500'}
                       />
                     </div>
                   )}
 
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                    <p className="brutal-label mb-1 block">
                       COLMAP Resolution (สำหรับ Pose Estimation)
-                    </label>
+                    </p>
                     <select
                       value={retryParams.colmap_resolution}
                       onChange={(e) => setRetryParams({...retryParams, colmap_resolution: e.target.value})}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                      className="brutal-select"
                     >
                       <option value="">ใช้ค่าเดิม</option>
                       <option value="720p">720p (1280×720) - Fast</option>
@@ -1823,28 +1639,28 @@ export default function ProjectDetailPage() {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                    <p className="brutal-label mb-1 block">
                       Oversample And Select
-                    </label>
-                    <label className="flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700">
+                    </p>
+                    <label className="flex items-center gap-2 border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-card)] px-3 py-2 text-sm text-[var(--text-secondary)] shadow-[var(--shadow-sm)]">
                       <input
                         type="checkbox"
                         checked={retryParams.smart_frame_selection}
                         onChange={(e) => setRetryParams({...retryParams, smart_frame_selection: e.target.checked})}
-                        className="h-4 w-4 rounded border-gray-300 text-black focus:ring-black"
+                        className="h-4 w-4 border-[var(--ink)] text-[var(--ink)]"
                       />
                       <span>ถอด candidate ให้ถี่ขึ้นก่อน แล้วคัดกลับให้เหลือเฉพาะเฟรมที่คมที่สุดตาม FPS เป้าหมาย</span>
                     </label>
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                    <p className="brutal-label mb-1 block">
                       Oversample Factor
-                    </label>
+                    </p>
                     <select
                       value={retryParams.oversample_factor}
                       onChange={(e) => setRetryParams({...retryParams, oversample_factor: e.target.value})}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                      className="brutal-select"
                       disabled={!retryParams.smart_frame_selection}
                     >
                       <option value="">ใช้ค่าเดิม</option>
@@ -1853,17 +1669,17 @@ export default function ProjectDetailPage() {
                       <option value="15">15x</option>
                       <option value="20">20x</option>
                     </select>
-                    <p className="text-xs text-gray-400 mt-1">ยิ่งค่าสูง ระบบจะถอด candidate มากขึ้นก่อนคัดกลับ แต่จะใช้เวลาและพื้นที่ชั่วคราวมากขึ้น</p>
+                    <p className="mt-1 text-xs text-[var(--text-secondary)]">ยิ่งค่าสูง ระบบจะถอด candidate มากขึ้นก่อนคัดกลับ แต่จะใช้เวลาและพื้นที่ชั่วคราวมากขึ้น</p>
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                    <p className="brutal-label mb-1 block">
                       Minimum Search Radius
-                    </label>
+                    </p>
                     <select
                       value={retryParams.replacement_search_radius}
                       onChange={(e) => setRetryParams({...retryParams, replacement_search_radius: e.target.value})}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                      className="brutal-select"
                       disabled={!retryParams.smart_frame_selection}
                     >
                       <option value="">ใช้ค่าเดิม</option>
@@ -1873,49 +1689,49 @@ export default function ProjectDetailPage() {
                       <option value="8">±8 frames</option>
                       <option value="12">±12 frames</option>
                     </select>
-                    <p className="text-xs text-gray-400 mt-1">ใช้เป็นค่าขั้นต่ำของช่วงค้นหา และ backend จะขยายเพิ่มตาม spacing จริงเมื่อจำเป็น</p>
+                    <p className="mt-1 text-xs text-[var(--text-secondary)]">ใช้เป็นค่าขั้นต่ำของช่วงค้นหา และ backend จะขยายเพิ่มตาม spacing จริงเมื่อจำเป็น</p>
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                    <p className="brutal-label mb-1 block">
                       CPU Chunk Workers
-                    </label>
+                    </p>
                     <select
                       value={retryParams.ffmpeg_cpu_workers}
                       onChange={(e) => setRetryParams({...retryParams, ffmpeg_cpu_workers: e.target.value})}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                      className="brutal-select"
                     >
                       <option value="">ใช้ค่าเดิม</option>
                       <option value="2">2 workers</option>
                       <option value="4">4 workers</option>
                       <option value="8">8 workers</option>
                     </select>
-                    <p className="text-xs text-gray-400 mt-1">เพิ่มหรือลดจำนวน chunk extraction workers เวลา rerun ขั้น extract</p>
+                    <p className="mt-1 text-xs text-[var(--text-secondary)]">เพิ่มหรือลดจำนวน chunk extraction workers เวลา rerun ขั้น extract</p>
                   </div>
 
                   <div className="flex items-center">
                     <input
                       type="checkbox"
-                      id="use_separate_training"
-                      checked={retryParams.use_separate_training_images}
-                      onChange={(e) => setRetryParams({...retryParams, use_separate_training_images: e.target.checked})}
-                      className="w-4 h-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"
-                    />
-                    <label htmlFor="use_separate_training" className="ml-2 text-xs font-medium text-gray-700">
-                      ใช้ภาพความละเอียดสูงแยกสำหรับ Training
-                    </label>
-                  </div>
-
-                  {retryParams.use_separate_training_images && (
-                    <div>
-                      <label className="block text-xs font-medium text-gray-700 mb-1">
-                        Training Resolution (สำหรับ 3DGS Training)
+                        id="use_separate_training"
+                        checked={retryParams.use_separate_training_images}
+                        onChange={(e) => setRetryParams({...retryParams, use_separate_training_images: e.target.checked})}
+                        className="h-4 w-4 border-[var(--ink)] text-[var(--ink)]"
+                      />
+                      <label htmlFor="use_separate_training" className="ml-2 text-xs font-medium text-[var(--ink)]">
+                        ใช้ภาพความละเอียดสูงแยกสำหรับ Training
                       </label>
-                      <select
-                        value={retryParams.training_resolution}
-                        onChange={(e) => setRetryParams({...retryParams, training_resolution: e.target.value})}
-                        className="w-full px-3 py-2 border border-purple-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
-                      >
+                    </div>
+
+                    {retryParams.use_separate_training_images && (
+                      <div>
+                        <p className="brutal-label mb-1 block">
+                          Training Resolution (สำหรับ 3DGS Training)
+                        </p>
+                        <select
+                          value={retryParams.training_resolution}
+                          onChange={(e) => setRetryParams({...retryParams, training_resolution: e.target.value})}
+                          className="brutal-select"
+                        >
                         <option value="">ใช้ค่าเดิม</option>
                         <option value="1080p">1080p (1920×1080)</option>
                         <option value="2K">2K (2560×1440)</option>
@@ -1926,7 +1742,7 @@ export default function ProjectDetailPage() {
                     </div>
                   )}
                 </div>
-                <p className="text-xs text-gray-500 mt-3">
+                <p className="mt-3 text-xs text-[var(--text-secondary)]">
                   💡 ภาพความละเอียดต่ำช่วยให้ COLMAP ทำงานเร็วขึ้น แล้วใช้ภาพ high-res สำหรับ training
                 </p>
               </div>
@@ -1934,20 +1750,20 @@ export default function ProjectDetailPage() {
 
             {/* Training Parameters Form - Show only for gaussian_splatting stage */}
             {selectedRetryStage === 'gaussian_splatting' && (
-              <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-xl">
-                <h4 className="text-sm font-semibold text-black mb-3 flex items-center">
+              <div className="status-processing mb-6 border-[var(--border-w)] p-4">
+                <h4 className="mb-3 flex items-center text-sm font-black uppercase tracking-[0.06em]">
                   <Settings className="h-4 w-4 mr-2" />
                   ปรับค่าการเทรน (ทิ้งว่างเพื่อใช้ค่าเดิม)
                 </h4>
                 <div className="space-y-3">
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                    <p className="brutal-label mb-1 block">
                       Quality Mode
-                    </label>
+                    </p>
                     <select
                       value={retryParams.quality_mode}
                       onChange={(e) => setRetryParams({...retryParams, quality_mode: e.target.value})}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                      className="brutal-select"
                     >
                       <option value="">ใช้ค่าเดิม</option>
                       <option value="fast">Fast (500 iterations)</option>
@@ -1961,56 +1777,56 @@ export default function ProjectDetailPage() {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                    <p className="brutal-label mb-1 block">
                       Iterations (จำนวนรอบการเทรน)
-                    </label>
+                    </p>
                     <input
                       type="number"
                       placeholder="เช่น 7000"
                       value={retryParams.iterations}
                       onChange={(e) => setRetryParams({...retryParams, iterations: e.target.value})}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                      className="brutal-input"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                    <p className="brutal-label mb-1 block">
                       Learning Rate (ค่าการเรียนรู้)
-                    </label>
+                    </p>
                     <input
                       type="number"
                       step="0.0001"
                       placeholder="เช่น 0.0025"
                       value={retryParams.learning_rate}
                       onChange={(e) => setRetryParams({...retryParams, learning_rate: e.target.value})}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                      className="brutal-input"
                     />
                   </div>
 
                   {/* Training Images Option */}
-                  <div className="pt-2 border-t border-blue-200">
+                  <div className="border-t border-[var(--ink)] pt-2">
                     <div className="flex items-center mb-2">
                       <input
                         type="checkbox"
                         id="gs_use_separate_training"
                         checked={retryParams.use_separate_training_images}
                         onChange={(e) => setRetryParams({...retryParams, use_separate_training_images: e.target.checked})}
-                        className="w-4 h-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500"
+                        className="h-4 w-4 border-[var(--ink)] text-[var(--ink)]"
                       />
-                      <label htmlFor="gs_use_separate_training" className="ml-2 text-xs font-medium text-gray-700">
+                      <label htmlFor="gs_use_separate_training" className="ml-2 text-xs font-medium text-[var(--ink)]">
                         ใช้ภาพความละเอียดสูงแยกสำหรับ Training
                       </label>
                     </div>
 
                     {retryParams.use_separate_training_images && (
                       <div>
-                        <label className="block text-xs font-medium text-gray-700 mb-1">
+                        <p className="brutal-label mb-1 block">
                           Training Resolution
-                        </label>
+                        </p>
                         <select
                           value={retryParams.training_resolution}
                           onChange={(e) => setRetryParams({...retryParams, training_resolution: e.target.value})}
-                          className="w-full px-3 py-2 border border-purple-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+                          className="brutal-select"
                         >
                           <option value="">ใช้ค่าเดิม</option>
                           <option value="1080p">1080p (1920×1080)</option>
@@ -2019,14 +1835,14 @@ export default function ProjectDetailPage() {
                           <option value="8K">8K (7680×4320) - Maximum</option>
                           <option value="original">Original Resolution</option>
                         </select>
-                        <p className="text-xs text-purple-600 mt-1">
+                        <p className="mt-1 text-xs text-[var(--ink-600)]">
                           ⚠️ ถ้าไม่มี training_images จะถอดจาก video ให้อัตโนมัติ
                         </p>
                       </div>
                     )}
                   </div>
                 </div>
-                <p className="text-xs text-gray-500 mt-3">
+                <p className="mt-3 text-xs text-[var(--text-secondary)]">
                   💡 ทิ้งค่าว่างเพื่อใช้ค่าเดิมต่อ หรือกรอกค่าใหม่เพื่อปรับเปลี่ยน
                 </p>
               </div>
@@ -2034,20 +1850,20 @@ export default function ProjectDetailPage() {
 
             {/* Feature Extraction Parameters Form */}
             {selectedRetryStage === 'feature_extraction' && (
-              <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-xl">
-                <h4 className="text-sm font-semibold text-black mb-3 flex items-center">
+              <div className="status-completed mb-6 border-[var(--border-w)] p-4">
+                <h4 className="mb-3 flex items-center text-sm font-black uppercase tracking-[0.06em]">
                   <Settings className="h-4 w-4 mr-2" />
                   ปรับค่า Feature Extraction (ทิ้งว่างเพื่อใช้ค่าเดิม)
                 </h4>
                 <div className="space-y-3">
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                    <p className="brutal-label mb-1 block">
                       Quality Mode
-                    </label>
+                    </p>
                     <select
                       value={retryParams.quality_mode}
                       onChange={(e) => setRetryParams({...retryParams, quality_mode: e.target.value})}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                      className="brutal-select"
                     >
                       <option value="">ใช้ค่าเดิม</option>
                       <option value="fast">Fast</option>
@@ -2059,34 +1875,34 @@ export default function ProjectDetailPage() {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                    <p className="brutal-label mb-1 block">
                       Max Num Features (จำนวน features สูงสุดต่อภาพ)
-                    </label>
+                    </p>
                     <input
                       type="number"
                       placeholder="เช่น 32768"
                       value={retryParams.max_num_features}
                       onChange={(e) => setRetryParams({...retryParams, max_num_features: e.target.value})}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                      className="brutal-input"
                     />
-                    <p className="text-xs text-gray-400 mt-1">ค่าเริ่มต้น: 32768 (สำหรับภาพ 4K)</p>
+                    <p className="mt-1 text-xs text-[var(--text-secondary)]">ค่าเริ่มต้น: 32768 (สำหรับภาพ 4K)</p>
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                    <p className="brutal-label mb-1 block">
                       Max Image Size (ขนาดภาพสูงสุด pixels)
-                    </label>
+                    </p>
                     <input
                       type="number"
                       placeholder="เช่น 4160"
                       value={retryParams.max_image_size}
                       onChange={(e) => setRetryParams({...retryParams, max_image_size: e.target.value})}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                      className="brutal-input"
                     />
-                    <p className="text-xs text-gray-400 mt-1">ค่าเริ่มต้น: 4160</p>
+                    <p className="mt-1 text-xs text-[var(--text-secondary)]">ค่าเริ่มต้น: 4160</p>
                   </div>
                 </div>
-                <p className="text-xs text-gray-500 mt-3">
+                <p className="mt-3 text-xs text-[var(--text-secondary)]">
                   💡 การเพิ่ม features จะช่วยให้ได้ผลลัพธ์ดีขึ้น แต่ใช้เวลานานขึ้น
                 </p>
               </div>
@@ -2094,20 +1910,20 @@ export default function ProjectDetailPage() {
 
             {/* Feature Matching Parameters Form */}
             {selectedRetryStage === 'feature_matching' && (
-              <div className="mb-6 p-4 bg-yellow-50 border border-yellow-200 rounded-xl">
-                <h4 className="text-sm font-semibold text-black mb-3 flex items-center">
+              <div className="status-cancelled mb-6 border-[var(--border-w)] p-4">
+                <h4 className="mb-3 flex items-center text-sm font-black uppercase tracking-[0.06em]">
                   <Settings className="h-4 w-4 mr-2" />
                   ปรับค่า Feature Matching (ทิ้งว่างเพื่อใช้ค่าเดิม)
                 </h4>
                 <div className="space-y-3">
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                    <p className="brutal-label mb-1 block">
                       Quality Mode
-                    </label>
+                    </p>
                     <select
                       value={retryParams.quality_mode}
                       onChange={(e) => setRetryParams({...retryParams, quality_mode: e.target.value})}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                      className="brutal-select"
                     >
                       <option value="">ใช้ค่าเดิม</option>
                       <option value="fast">Fast</option>
@@ -2120,34 +1936,34 @@ export default function ProjectDetailPage() {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                    <p className="brutal-label mb-1 block">
                       Max Num Matches (จำนวน matches สูงสุด)
-                    </label>
+                    </p>
                     <input
                       type="number"
                       placeholder="เช่น 45960"
                       value={retryParams.max_num_matches}
                       onChange={(e) => setRetryParams({...retryParams, max_num_matches: e.target.value})}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                      className="brutal-input"
                     />
-                    <p className="text-xs text-gray-400 mt-1">ค่าเริ่มต้น: 45960 (ปลอดภัยสำหรับ GPU)</p>
+                    <p className="mt-1 text-xs text-[var(--text-secondary)]">ค่าเริ่มต้น: 45960 (ปลอดภัยสำหรับ GPU)</p>
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                    <p className="brutal-label mb-1 block">
                       Sequential Overlap (จำนวนภาพที่ match กัน)
-                    </label>
+                    </p>
                     <input
                       type="number"
                       placeholder="เช่น 20"
                       value={retryParams.sequential_overlap}
                       onChange={(e) => setRetryParams({...retryParams, sequential_overlap: e.target.value})}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                      className="brutal-input"
                     />
-                    <p className="text-xs text-gray-400 mt-1">ค่าเริ่มต้น: 20 (เพิ่มเพื่อ coverage ดีขึ้น)</p>
+                    <p className="mt-1 text-xs text-[var(--text-secondary)]">ค่าเริ่มต้น: 20 (เพิ่มเพื่อ coverage ดีขึ้น)</p>
                   </div>
                 </div>
-                <p className="text-xs text-gray-500 mt-3">
+                <p className="mt-3 text-xs text-[var(--text-secondary)]">
                   💡 หาก GPU หน่วยความจำเต็ม ลอง max_num_matches ลดลง
                 </p>
               </div>
@@ -2155,20 +1971,20 @@ export default function ProjectDetailPage() {
 
             {/* Sparse Reconstruction Parameters Form */}
             {selectedRetryStage === 'sparse_reconstruction' && (
-              <div className="mb-6 p-4 bg-purple-50 border border-purple-200 rounded-xl">
-                <h4 className="text-sm font-semibold text-black mb-3 flex items-center">
+              <div className="brutal-card-muted mb-6 p-4">
+                <h4 className="mb-3 flex items-center text-sm font-black uppercase tracking-[0.06em] text-[var(--ink)]">
                   <Settings className="h-4 w-4 mr-2" />
                   ปรับค่า Sparse Reconstruction (ทิ้งว่างเพื่อใช้ค่าเดิม)
                 </h4>
                 <div className="space-y-3">
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                    <p className="brutal-label mb-1 block">
                       Quality Mode
-                    </label>
+                    </p>
                     <select
                       value={retryParams.quality_mode}
                       onChange={(e) => setRetryParams({...retryParams, quality_mode: e.target.value})}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                      className="brutal-select"
                     >
                       <option value="">ใช้ค่าเดิม</option>
                       <option value="fast">Fast</option>
@@ -2181,34 +1997,34 @@ export default function ProjectDetailPage() {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                    <p className="brutal-label mb-1 block">
                       Min Num Matches (จำนวน matches ขั้นต่ำในการ register)
-                    </label>
+                    </p>
                     <input
                       type="number"
                       placeholder="เช่น 8"
                       value={retryParams.min_num_matches}
                       onChange={(e) => setRetryParams({...retryParams, min_num_matches: e.target.value})}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                      className="brutal-input"
                     />
-                    <p className="text-xs text-gray-400 mt-1">ค่าเริ่มต้น: 8 (ลดลงเพื่อ register ภาพมากขึ้น)</p>
+                    <p className="mt-1 text-xs text-[var(--text-secondary)]">ค่าเริ่มต้น: 8 (ลดลงเพื่อ register ภาพมากขึ้น)</p>
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-gray-700 mb-1">
+                    <p className="brutal-label mb-1 block">
                       Max Num Models (จำนวน models สูงสุดที่สร้าง)
-                    </label>
+                    </p>
                     <input
                       type="number"
                       placeholder="เช่น 50"
                       value={retryParams.max_num_models}
                       onChange={(e) => setRetryParams({...retryParams, max_num_models: e.target.value})}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-black focus:border-black"
+                      className="brutal-input"
                     />
-                    <p className="text-xs text-gray-400 mt-1">ค่าเริ่มต้น: 50 (เพิ่มเพื่อลองหลาย models)</p>
+                    <p className="mt-1 text-xs text-[var(--text-secondary)]">ค่าเริ่มต้น: 50 (เพิ่มเพื่อลองหลาย models)</p>
                   </div>
                 </div>
-                <p className="text-xs text-gray-500 mt-3">
+                <p className="mt-3 text-xs text-[var(--text-secondary)]">
                   💡 ลด min_num_matches เพื่อช่วยให้ภาพที่ยากถูก register ได้
                 </p>
               </div>
@@ -2216,30 +2032,26 @@ export default function ProjectDetailPage() {
 
             {/* Model Conversion - No params needed */}
             {selectedRetryStage === 'model_conversion' && (
-              <div className="mb-6 p-4 bg-gray-50 border border-gray-200 rounded-xl">
-                <h4 className="text-sm font-semibold text-black mb-3 flex items-center">
+              <div className="brutal-card-muted mb-6 p-4">
+                <h4 className="mb-3 flex items-center text-sm font-black uppercase tracking-[0.06em] text-[var(--ink)]">
                   <Info className="h-4 w-4 mr-2" />
                   Model Conversion
                 </h4>
-                <p className="text-sm text-gray-600">
+                <p className="text-sm text-[var(--text-secondary)]">
                   ขั้นตอนนี้จะเลือก sparse model ที่ดีที่สุดโดยอัตโนมัติ ไม่มีพารามิเตอร์ให้ปรับ
                 </p>
               </div>
             )}
             </div>
 
-            <div className="p-8 pt-4 flex-shrink-0 border-t border-gray-200">
+            <div className="flex-shrink-0 border-t-[var(--border-w)] border-[var(--ink)] px-5 py-4">
               <div className="flex space-x-3">
-                <button
-                  onClick={() => setShowRetryModal(false)}
-                  className="flex-1 px-4 py-3 border border-gray-200 text-sm font-medium rounded-xl text-black hover:bg-gray-50 transition-colors"
-                >
+                <button type="button" onClick={() => setShowRetryModal(false)}
+                className="brutal-btn flex-1 justify-center">
                   Cancel
                 </button>
-                <button
-                  onClick={() => handleRetry(selectedRetryStage)}
-                  className="flex-1 px-4 py-3 text-sm font-medium rounded-xl text-white bg-black hover:bg-gray-800 transition-colors"
-                >
+                <button type="button" onClick={() => handleRetry(selectedRetryStage)}
+                className="brutal-btn brutal-btn-primary flex-1 justify-center">
                   Start Retry
                 </button>
               </div>
@@ -2250,52 +2062,47 @@ export default function ProjectDetailPage() {
 
       {/* Download PLY Files Modal */}
       {showDownloadModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 space-y-4 max-h-[80vh] overflow-hidden flex flex-col">
-            <div className="flex items-center justify-between">
-              <h3 className="text-xl font-semibold text-black flex items-center">
-                <FileBox className="h-6 w-6 mr-2 text-blue-600" />
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(10,26,63,0.72)] p-4">
+          <div className="brutal-card flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden p-5">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <h3 className="brutal-h2 flex items-center gap-2">
+                <FileBox className="h-6 w-6" />
                 ดาวน์โหลดโมเดล 3D Gaussian Splatting
               </h3>
-              <button
-                onClick={() => setShowDownloadModal(false)}
-                className="text-gray-400 hover:text-gray-600 transition-colors"
-              >
-                <X className="h-6 w-6" />
-              </button>
+              <button type="button" onClick={() => setShowDownloadModal(false)} className="brutal-btn brutal-btn-xs"><X className="h-6 w-6" /></button>
             </div>
 
             {loadingPlyFiles ? (
               <div className="flex items-center justify-center py-12">
-                <Loader className="h-8 w-8 animate-spin text-blue-600" />
-                <span className="ml-3 text-gray-600">กำลังโหลดรายการไฟล์...</span>
+                <Loader className="h-8 w-8 animate-spin text-[var(--ink)]" />
+                <span className="ml-3 text-[var(--text-secondary)]">กำลังโหลดรายการไฟล์...</span>
               </div>
             ) : plyFiles.length === 0 ? (
-              <div className="text-center py-12">
-                <FileBox className="h-12 w-12 mx-auto text-gray-400 mb-3" />
-                <p className="text-gray-600">ยังไม่มีไฟล์ PLY</p>
-                <p className="text-sm text-gray-500">รอให้การประมวลผลเสร็จสิ้นก่อน</p>
+              <div className="py-12 text-center">
+                <FileBox className="mx-auto mb-3 h-12 w-12 text-[var(--text-muted)]" />
+                <p className="text-[var(--text-secondary)]">ยังไม่มีไฟล์ PLY</p>
+                <p className="text-sm text-[var(--text-muted)]">รอให้การประมวลผลเสร็จสิ้นก่อน</p>
               </div>
             ) : (
-              <div className="flex-1 overflow-y-auto space-y-3 pr-2">
-                <p className="text-sm text-gray-600 mb-4">
+              <div className="brutal-scroll flex-1 space-y-3 overflow-y-auto pr-2">
+                <p className="mb-4 text-sm text-[var(--text-secondary)]">
                   มี {plyFiles.length} ไฟล์ PLY พร้อมดาวน์โหลด (เรียงตามเวลาสร้างล่าสุด)
                 </p>
                 
                 {plyFiles.map((file, index) => (
                   <div
                     key={file.filename}
-                    className={`p-4 rounded-xl border transition-all hover:shadow-md ${
+                    className={`border-[var(--border-w)] p-4 transition-all ${
                       index === 0 
-                        ? 'bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200' 
-                        : 'bg-gray-50 border-gray-200'
+                        ? 'border-[var(--ink)] bg-[var(--paper-muted)] shadow-[var(--shadow-md)]' 
+                        : 'border-[var(--ink)] bg-[var(--paper-card)] shadow-[var(--shadow-sm)]'
                     }`}
                   >
                     <div className="flex items-start justify-between">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1">
                           {index === 0 && (
-                            <span className="px-2 py-0.5 text-xs font-medium bg-blue-600 text-white rounded-full">
+                            <span className="brutal-badge brutal-badge-solid">
                               ล่าสุด
                             </span>
                           )}
@@ -2303,44 +2110,39 @@ export default function ProjectDetailPage() {
                             {file.quality_mode}
                           </span>
                           {file.iterations > 0 && (
-                            <span className="px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-600 rounded-full">
+                            <span className="brutal-badge">
                               {file.iterations.toLocaleString()} iterations
                             </span>
                           )}
                         </div>
-                        <p className="text-sm font-medium text-gray-900 truncate" title={file.filename}>
+                        <p className="truncate text-sm font-bold text-[var(--ink)]" title={file.filename}>
                           {file.filename}
                         </p>
-                        <div className="flex items-center gap-4 mt-1 text-xs text-gray-500">
+                        <div className="mt-1 flex items-center gap-4 text-xs text-[var(--text-secondary)]">
                           <span>{formatFileSize(file.size)}</span>
                           <span>{formatPlyDate(file.created_at)}</span>
                         </div>
                       </div>
-                      <button
-                        onClick={() => downloadPlyFile(file.filename)}
-                        className={`ml-4 px-4 py-2 text-sm font-medium rounded-lg transition-colors flex items-center ${
-                          index === 0
-                            ? 'bg-blue-600 text-white hover:bg-blue-700'
-                            : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
-                        }`}
-                      >
-                        <Download className="h-4 w-4 mr-1" />
-                        Download
-                      </button>
+                      <button type="button" onClick={() => downloadPlyFile(file.filename)}
+                      className={`ml-4 flex items-center text-sm font-medium ${
+                        index === 0
+                          ? 'brutal-btn brutal-btn-primary'
+                          : 'brutal-btn'
+                      }`}><Download className="h-4 w-4 mr-1" />
+                      Download
+                                            </button>
                     </div>
                   </div>
                 ))}
               </div>
             )}
 
-            <div className="flex justify-between items-center pt-4 border-t">
-              <p className="text-xs text-gray-500">
+            <div className="flex items-center justify-between border-t-[var(--border-w)] border-[var(--ink)] pt-4">
+              <p className="text-xs text-[var(--text-secondary)]">
                 💡 ไฟล์ที่ retry ใหม่จะแสดงด้านบน
               </p>
-              <button
-                onClick={() => setShowDownloadModal(false)}
-                className="px-6 py-2 text-sm font-medium rounded-lg text-gray-700 bg-gray-100 hover:bg-gray-200 transition-colors"
-              >
+              <button type="button" onClick={() => setShowDownloadModal(false)}
+              className="brutal-btn">
                 ปิด
               </button>
             </div>
@@ -2351,85 +2153,60 @@ export default function ProjectDetailPage() {
       {/* Image Preview Dialog */}
       {showImagePreview && framePreview.length > 0 && (
         <div
-          className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50"
-          onClick={() => setShowImagePreview(false)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(10,26,63,0.88)]"
         >
-          {/* Close Button */}
-          <button
-            onClick={() => setShowImagePreview(false)}
-            className="absolute top-4 right-4 text-white/80 hover:text-white transition-colors z-10"
-          >
-            <X className="h-8 w-8" />
-          </button>
+          <button type="button" onClick={() => setShowImagePreview(false)}
+          className="absolute right-4 top-4 z-10 brutal-btn brutal-btn-xs brutal-btn-primary"><X className="h-8 w-8" /></button>
 
-          {/* Image Counter */}
-          <div className="absolute top-4 left-1/2 -translate-x-1/2 text-white/80 text-sm font-medium bg-black/40 px-4 py-2 rounded-full">
+          <div className="absolute left-1/2 top-4 -translate-x-1/2 border-[var(--border-w)] border-[var(--paper)] bg-[var(--ink)] px-4 py-2 text-sm font-bold uppercase tracking-[0.12em] text-[var(--text-on-ink)]">
             {previewImageIndex + 1} / {framePreview.length}
           </div>
 
-          {/* Previous Button */}
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              setPreviewImageIndex((prev) => (prev > 0 ? prev - 1 : framePreview.length - 1));
-            }}
-            className="absolute left-4 top-1/2 -translate-y-1/2 bg-black/40 hover:bg-black/60 text-white p-3 rounded-full transition-colors"
-          >
-            <ChevronLeft className="h-8 w-8" />
-          </button>
+          <button type="button" onClick={(e) => {
+            e.stopPropagation();
+            setPreviewImageIndex((prev) => (prev > 0 ? prev - 1 : framePreview.length - 1));
+          }}
+          className="absolute left-4 top-1/2 -translate-y-1/2 brutal-btn brutal-btn-primary"><ChevronLeft className="h-8 w-8" /></button>
 
-          {/* Main Image */}
           <div
-            className="max-w-[90vw] max-h-[85vh] flex items-center justify-center"
-            onClick={(e) => e.stopPropagation()}
+            className="flex max-h-[85vh] max-w-[90vw] items-center justify-center border-[var(--border-w-strong)] border-[var(--paper)] bg-[var(--paper-card)] p-3 shadow-[8px_8px_0_var(--paper-muted-2)]"
           >
             <img
               src={framePreview[previewImageIndex]?.url}
               alt={framePreview[previewImageIndex]?.name || `Frame ${previewImageIndex + 1}`}
-              className="max-w-full max-h-[85vh] object-contain rounded-lg shadow-2xl"
+              className="max-h-[85vh] max-w-full object-contain"
             />
           </div>
 
-          {/* Next Button */}
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              setPreviewImageIndex((prev) => (prev < framePreview.length - 1 ? prev + 1 : 0));
-            }}
-            className="absolute right-4 top-1/2 -translate-y-1/2 bg-black/40 hover:bg-black/60 text-white p-3 rounded-full transition-colors"
-          >
-            <ChevronRight className="h-8 w-8" />
-          </button>
+          <button type="button" onClick={(e) => {
+            e.stopPropagation();
+            setPreviewImageIndex((prev) => (prev < framePreview.length - 1 ? prev + 1 : 0));
+          }}
+          className="absolute right-4 top-1/2 -translate-y-1/2 brutal-btn brutal-btn-primary"><ChevronRight className="h-8 w-8" /></button>
 
-          {/* Thumbnail Strip */}
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 max-w-[90vw] overflow-x-auto">
-            <div className="flex space-x-2 p-2 bg-black/40 rounded-xl">
+            <div className="flex space-x-2 border-[var(--border-w)] border-[var(--paper)] bg-[var(--ink)] p-2">
               {framePreview.map((frame, index) => (
-                <button
-                  key={index}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setPreviewImageIndex(index);
-                  }}
-                  className={`flex-shrink-0 w-16 h-12 rounded-md overflow-hidden transition-all ${
-                    index === previewImageIndex
-                      ? 'ring-2 ring-white scale-110'
-                      : 'opacity-60 hover:opacity-100'
-                  }`}
-                >
-                  <img
-                    src={frame.url}
-                    alt={frame.name}
-                    className="w-full h-full object-cover"
-                    loading="lazy"
-                  />
-                </button>
+                <button type="button" key={frame.url || frame.name || `thumb-${index}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setPreviewImageIndex(index);
+                }}
+                className={`h-12 w-16 flex-shrink-0 overflow-hidden border-[var(--border-w)] transition-all ${
+                  index === previewImageIndex
+                    ? 'border-[var(--paper)] scale-110'
+                    : 'border-[var(--ink-600)] opacity-60 hover:opacity-100'
+                }`}><img
+                  src={frame.url}
+                  alt={frame.name}
+                  className="w-full h-full object-cover"
+                  loading="lazy"
+                /></button>
               ))}
             </div>
           </div>
 
-          {/* Keyboard Navigation Hint */}
-          <div className="absolute bottom-24 left-1/2 -translate-x-1/2 text-white/50 text-xs">
+          <div className="absolute bottom-24 left-1/2 -translate-x-1/2 text-xs font-bold uppercase tracking-[0.12em] text-[var(--text-on-ink-muted)]">
             กดลูกศร ← → เพื่อเลื่อนดูภาพ หรือกด ESC เพื่อปิด
           </div>
         </div>

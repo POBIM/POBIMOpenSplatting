@@ -115,7 +115,6 @@ export default function SplatViewer() {
     pickWorldPoint,
     pickPoint,
     projectWorldToScreen,
-    viewportKey,
     orbitState,
     setOrbitAngles,
     setOrbitDistance,
@@ -144,7 +143,6 @@ export default function SplatViewer() {
     modelToWorld,
     worldToModel,
     getPointWorldPosition,
-    getPointLocalPosition,
     mutatePointPositions,
     setPointsHidden,
     clearHiddenPoints,
@@ -308,18 +306,18 @@ export default function SplatViewer() {
     [processLocalFile],
   );
 
-  const handleLocalDragEnter = useCallback((event: DragEvent<HTMLDivElement>) => {
+  const handleLocalDragEnter = useCallback((event: DragEvent<HTMLFormElement>) => {
     event.preventDefault();
     event.stopPropagation();
     setLocalDragActive(true);
   }, []);
 
-  const handleLocalDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
+  const handleLocalDragOver = useCallback((event: DragEvent<HTMLFormElement>) => {
     event.preventDefault();
     event.stopPropagation();
   }, []);
 
-  const handleLocalDragLeave = useCallback((event: DragEvent<HTMLDivElement>) => {
+  const handleLocalDragLeave = useCallback((event: DragEvent<HTMLFormElement>) => {
     event.preventDefault();
     event.stopPropagation();
     // Ignore dragleave events that move between child elements
@@ -330,7 +328,7 @@ export default function SplatViewer() {
   }, []);
 
   const handleLocalDrop = useCallback(
-    (event: DragEvent<HTMLDivElement>) => {
+    (event: DragEvent<HTMLFormElement>) => {
       event.preventDefault();
       event.stopPropagation();
       setLocalDragActive(false);
@@ -446,7 +444,7 @@ export default function SplatViewer() {
     };
 
     loadTransformation();
-  }, [projectId, transformLoaded, applyModelTransform]);
+  }, [projectId, transformLoaded, applyModelTransform, modelPosition, modelRotation]);
 
   const resetView = useCallback(() => {
     resetScene();
@@ -714,32 +712,37 @@ export default function SplatViewer() {
 
   if (error) {
     return (
-      <div className="relative flex h-full w-full items-center justify-center bg-white">
+      <div className="brutal-shell relative flex h-full w-full items-center justify-center p-4">
         <input
+          id="local-project-file-input"
           ref={fileInputRef}
           type="file"
           accept=".ply"
           className="hidden"
           onChange={handleLocalFileInputChange}
         />
-        <div className="max-w-sm rounded-2xl border border-gray-200 bg-white p-8 text-center shadow-lg">
-          <div className="mx-auto mb-5 flex h-12 w-12 items-center justify-center rounded-full border-2 border-red-200 bg-red-50 text-lg font-semibold text-red-600">
+        <div className="brutal-card relative max-w-sm p-6 text-center">
+          <div className="brutal-dot-bg pointer-events-none absolute inset-0" />
+          <div className="relative mx-auto mb-4 flex h-12 w-12 items-center justify-center border-[3px] border-[var(--ink)] bg-[var(--error-bg)] text-lg font-black text-[var(--error-text)]">
             !
           </div>
-          <h2 className="mb-3 text-xl font-semibold text-black">Viewer unavailable</h2>
-          <p className="mb-6 text-sm text-gray-600">{error}</p>
-          <div className="mt-6 flex flex-col gap-3">
+          <div className="relative">
+            <p className="brutal-eyebrow mb-3">Viewer Error</p>
+            <h2 className="brutal-h2 mb-3">Viewer Unavailable</h2>
+            <p className="mb-6 text-sm font-medium uppercase tracking-[0.08em] text-[var(--text-secondary)]">{error}</p>
+          </div>
+          <div className="relative mt-6 flex flex-col gap-3">
             {localProject && !projectId ? (
               <>
-                <button onClick={handleChooseAnotherLocalFile} className="btn-primary">
+                <button type="button" onClick={handleChooseAnotherLocalFile} className="btn-primary">
                   เลือกไฟล์อื่น
                 </button>
-                <button onClick={goBack} className="btn-secondary">
+                <button type="button" onClick={goBack} className="btn-secondary">
                   กลับ
                 </button>
               </>
             ) : (
-              <button onClick={goBack} className="btn-secondary">
+              <button type="button" onClick={goBack} className="btn-secondary">
                 Go back
               </button>
             )}
@@ -750,8 +753,9 @@ export default function SplatViewer() {
   }
 
   return (
-    <div className="relative h-full w-full overflow-hidden bg-gray-50">
+    <div className="brutal-shell relative h-full w-full overflow-hidden">
       <input
+        id="local-project-file-input"
         ref={fileInputRef}
         type="file"
         accept=".ply"
@@ -760,11 +764,17 @@ export default function SplatViewer() {
       />
 
       {viewerActive && loading && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-white/95 backdrop-blur">
-          <div className="text-center">
-            <div className="mx-auto mb-4 h-12 w-12 animate-spin rounded-full border-2 border-gray-200 border-t-black"></div>
-            <h2 className="text-lg font-medium tracking-wide text-black">Preparing viewer…</h2>
-            <p className="mt-2 text-xs uppercase tracking-[0.2em] text-gray-400">Loading Gaussian splats</p>
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-[color:rgba(244,245,248,0.94)] p-4">
+          <div className="brutal-card relative w-full max-w-sm p-6 text-center">
+            <div className="brutal-dot-bg pointer-events-none absolute inset-0" />
+            <div className="relative">
+              <div className="mx-auto mb-4 h-12 w-12 animate-spin border-[3px] border-[var(--ink)] border-t-transparent" />
+              <p className="brutal-eyebrow mb-3">Loading Scene</p>
+              <h2 className="brutal-h3">Preparing Viewer</h2>
+              <p className="mt-2 text-[11px] font-bold uppercase tracking-[0.18em] text-[var(--text-secondary)]">
+                Loading Gaussian Splats
+              </p>
+            </div>
           </div>
         </div>
       )}
@@ -887,17 +897,19 @@ export default function SplatViewer() {
       {viewerActive && cameraAxes && <ViewCube axes={cameraAxes} onAlign={alignCamera} />}
 
       {localProject && !projectId && viewerActive && (
-        <div className="pointer-events-auto absolute left-5 top-5 z-40 w-80 max-w-full rounded-2xl border border-gray-200 bg-white/90 p-4 text-left shadow-xl backdrop-blur">
-          <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Local project</p>
-          <p className="mt-1 truncate text-sm font-medium text-gray-900" title={localProject.name}>
+        <div className="pointer-events-auto brutal-card absolute left-5 top-5 z-40 w-80 max-w-full p-3 text-left">
+          <p className="brutal-eyebrow mb-2">Local Project</p>
+          <p className="truncate text-sm font-black uppercase tracking-[0.08em] text-[var(--ink)]" title={localProject.name}>
             {localProject.name}
           </p>
-          <p className="mt-1 text-xs text-gray-500">Size {formatFileSize(localProject.size)}</p>
+          <p className="mt-1 text-[11px] font-medium uppercase tracking-[0.1em] text-[var(--text-secondary)]">
+            Size {formatFileSize(localProject.size)}
+          </p>
           <div className="mt-3 flex gap-2">
-            <button onClick={triggerLocalFileDialog} className="btn-primary text-xs">
+            <button type="button" onClick={triggerLocalFileDialog} className="btn-primary text-xs">
               เปลี่ยนไฟล์
             </button>
-            <button onClick={clearLocalProject} className="btn-secondary text-xs">
+            <button type="button" onClick={clearLocalProject} className="btn-secondary text-xs">
               ปิดไฟล์
             </button>
           </div>
@@ -932,7 +944,7 @@ export default function SplatViewer() {
 
           {/* Spawn Point Selection Message */}
           {waitingForSpawnPoint && (
-            <div className="absolute left-1/2 -translate-x-1/2 bottom-24 z-50 rounded-xl bg-blue-600 px-6 py-3 text-sm font-medium text-white shadow-xl">
+            <div className="brutal-card-dark absolute bottom-24 left-1/2 z-50 -translate-x-1/2 px-5 py-3 text-sm font-bold uppercase tracking-[0.12em]">
               🎯 คลิกที่ Point เพื่อเลือกตำแหน่งเริ่มต้น
             </div>
           )}
@@ -940,7 +952,7 @@ export default function SplatViewer() {
           {/* Measurement Message */}
           {measurementMessage && !waitingForSpawnPoint && (
             <div
-              className={`absolute left-1/2 -translate-x-1/2 z-50 rounded-xl bg-black px-4 py-2.5 text-sm font-medium text-white shadow-xl transition-all ${
+              className={`absolute left-1/2 z-50 -translate-x-1/2 border-[3px] border-[var(--ink)] bg-[var(--ink)] px-4 py-2.5 text-sm font-bold uppercase tracking-[0.12em] text-[var(--text-on-ink)] shadow-[var(--shadow-inv)] transition-all ${
                 hasFloatingPanel ? 'bottom-36' : 'bottom-24'
               }`}
             >
@@ -951,41 +963,49 @@ export default function SplatViewer() {
           {/* Rescale Dialog */}
           {rescaleDialogOpen && (
             <div
-              className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm"
-              onClick={closeRescaleDialog}
+              className="fixed inset-0 z-[100] flex items-center justify-center bg-[color:rgba(10,26,63,0.28)] p-4"
+              role="presentation"
             >
+              <button
+                type="button"
+                aria-label="Close measurement scale dialog"
+                className="absolute inset-0"
+                onClick={closeRescaleDialog}
+              />
               <div
-                className="w-full max-w-md rounded-2xl border border-gray-200 bg-white p-6 shadow-2xl"
-                onClick={(e) => e.stopPropagation()}
+                className="brutal-card relative w-full max-w-md p-5"
               >
-                <h3 className="mb-4 text-xl font-semibold text-black">ปรับมาตราส่วน</h3>
-                <p className="mb-6 text-sm text-gray-600">
+                <p className="brutal-eyebrow mb-3">Measurement Scale</p>
+                <h3 className="brutal-h3 mb-3">ปรับมาตราส่วน</h3>
+                <p className="mb-5 text-sm font-medium uppercase tracking-[0.08em] text-[var(--text-secondary)]">
                   ระบุระยะจริงของเส้นที่เลือก เพื่อปรับมาตราส่วนการวัดทั้งหมด
                 </p>
                 <form onSubmit={handleRescaleSubmit}>
                   <div className="mb-6 flex gap-3">
                     <div className="flex-1">
-                      <label className="mb-2 block text-sm font-medium text-gray-700">เมตร</label>
+                      <label className="brutal-label mb-2 block" htmlFor="rescale-meters">เมตร</label>
                       <input
+                        id="rescale-meters"
                         type="number"
                         min="0"
                         step="1"
                         value={rescaleMetersInput}
                         onChange={(e) => setRescaleMetersInput(e.target.value)}
-                        className="w-full rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-black focus:border-black focus:outline-none focus:ring-2 focus:ring-black/5"
+                        className="brutal-input"
                         placeholder="0"
                       />
                     </div>
                     <div className="flex-1">
-                      <label className="mb-2 block text-sm font-medium text-gray-700">เซนติเมตร</label>
+                      <label className="brutal-label mb-2 block" htmlFor="rescale-centimeters">เซนติเมตร</label>
                       <input
+                        id="rescale-centimeters"
                         type="number"
                         min="0"
                         max="99"
                         step="1"
                         value={rescaleCentimetersInput}
                         onChange={(e) => setRescaleCentimetersInput(e.target.value)}
-                        className="w-full rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-black focus:border-black focus:outline-none focus:ring-2 focus:ring-black/5"
+                        className="brutal-input"
                         placeholder="0"
                       />
                     </div>
@@ -994,13 +1014,13 @@ export default function SplatViewer() {
                     <button
                       type="button"
                       onClick={closeRescaleDialog}
-                      className="flex-1 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+                      className="brutal-btn flex-1 justify-center py-2"
                     >
                       ยกเลิก
                     </button>
                     <button
                       type="submit"
-                      className="flex-1 rounded-xl border border-black bg-black px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-gray-800"
+                      className="brutal-btn brutal-btn-primary flex-1 justify-center py-2"
                     >
                       ปรับมาตราส่วน
                     </button>
@@ -1013,27 +1033,34 @@ export default function SplatViewer() {
       )}
 
       {showLocalUploadOverlay && (
-        <div
-          className="absolute inset-0 z-[60] flex flex-col items-center justify-center bg-white px-4"
+        <form
+          className="absolute inset-0 z-[60] flex flex-col items-center justify-center bg-[var(--paper)] px-4"
+          onSubmit={(event) => event.preventDefault()}
           onDragEnter={handleLocalDragEnter}
           onDragOver={handleLocalDragOver}
           onDragLeave={handleLocalDragLeave}
           onDrop={handleLocalDrop}
         >
           <div
-            className={`w-full max-w-xl rounded-3xl border-2 px-8 py-12 text-center shadow-2xl transition-colors ${
-              localDragActive ? 'border-black bg-gray-50' : 'border-dashed border-gray-200 bg-white'
+            className={`relative w-full max-w-xl border-[3px] px-6 py-8 text-center shadow-[var(--shadow-lg)] transition-colors ${
+              localDragActive
+                ? 'border-[var(--ink)] bg-[var(--paper-muted)]'
+                : 'border-[var(--ink)] bg-[var(--paper-card)]'
             }`}
           >
-            <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-black text-white">
+            <div className="brutal-dot-bg pointer-events-none absolute inset-0" />
+            <div className="relative mx-auto flex h-14 w-14 items-center justify-center border-[3px] border-[var(--ink)] bg-[var(--ink)] text-[var(--text-on-ink)] shadow-[var(--shadow-inv)]">
               <UploadCloud className="h-8 w-8" />
             </div>
-            <h2 className="mt-6 text-2xl font-semibold text-black">เปิดโปรเจกต์จากเครื่องของคุณ</h2>
-            <p className="mt-3 text-sm text-gray-600">
+            <div className="relative">
+              <p className="brutal-eyebrow mt-5">Local Import</p>
+              <h2 className="brutal-h2 mt-4">เปิดโปรเจกต์จากเครื่องของคุณ</h2>
+            </div>
+            <p className="relative mt-3 text-sm font-medium uppercase tracking-[0.08em] text-[var(--text-secondary)]">
               ลากไฟล์ Gaussian Splat (.ply) มาวาง หรือเลือกไฟล์ที่สร้างจาก Pobim เพื่อเริ่มตรวจสอบ
             </p>
-            <div className="mt-8 flex flex-col gap-2 sm:flex-row sm:justify-center sm:gap-3">
-              <button onClick={triggerLocalFileDialog} className="btn-primary">
+            <div className="relative mt-8 flex flex-col gap-2 sm:flex-row sm:justify-center sm:gap-3">
+              <button type="button" onClick={triggerLocalFileDialog} className="btn-primary">
                 เลือกไฟล์จากเครื่อง
               </button>
               <Link href="/projects" className="btn-secondary">
@@ -1041,10 +1068,10 @@ export default function SplatViewer() {
               </Link>
             </div>
             {localUploadError && (
-              <p className="mt-4 text-sm text-red-600">{localUploadError}</p>
+              <p className="relative mt-4 text-sm font-bold uppercase tracking-[0.08em] text-[var(--error-text)]">{localUploadError}</p>
             )}
           </div>
-        </div>
+        </form>
       )}
     </div>
   );

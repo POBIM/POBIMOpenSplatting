@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Download, Loader, CheckCircle, XCircle, Package, FileCode, Info } from 'lucide-react';
+import { Download, Loader, CheckCircle, XCircle, Package, Info } from 'lucide-react';
 import { api } from '@/lib/api';
 
 interface MeshExportPanelProps {
@@ -9,21 +9,53 @@ interface MeshExportPanelProps {
   projectStatus: string;
 }
 
+type ExportStatus = 'idle' | 'loading' | 'success' | 'error';
+type MeshMethod = 'poisson' | 'delaunay';
+type MeshQuality = 'low' | 'medium' | 'high';
+type MeshFormat = 'ply' | 'obj' | 'glb' | 'dae';
+
+interface ExportedFile {
+  filename: string;
+  size_mb: number;
+  method: MeshMethod;
+  download_url: string;
+}
+
+interface AvailableExportsResponse {
+  exports?: ExportedFile[];
+}
+
+interface CreateMeshResponse {
+  success: boolean;
+  status?: string;
+  message?: string;
+  filename: string;
+  error?: string;
+  hint?: string;
+}
+
+function getStatusClasses(status: ExportStatus) {
+  if (status === 'loading') {
+    return 'status-processing';
+  }
+  if (status === 'success') {
+    return 'status-completed';
+  }
+  return 'status-failed';
+}
+
 export default function MeshExportPanel({ projectId, projectStatus }: MeshExportPanelProps) {
   const [isExporting, setIsExporting] = useState(false);
-  const [exportStatus, setExportStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [exportStatus, setExportStatus] = useState<ExportStatus>('idle');
   const [exportMessage, setExportMessage] = useState('');
-  const [exportedFile, setExportedFile] = useState<any>(null);
+  const [exportedFile, setExportedFile] = useState<ExportedFile | null>(null);
   const [pollingInterval, setPollingInterval] = useState<NodeJS.Timeout | null>(null);
-
-  // Export settings
-  const [method, setMethod] = useState<'poisson' | 'delaunay'>('poisson');
-  const [quality, setQuality] = useState<'low' | 'medium' | 'high'>('medium');
-  const [format, setFormat] = useState<'ply' | 'obj' | 'glb' | 'dae'>('glb');
+  const [method, setMethod] = useState<MeshMethod>('poisson');
+  const [quality, setQuality] = useState<MeshQuality>('medium');
+  const [format, setFormat] = useState<MeshFormat>('glb');
 
   const canExport = projectStatus === 'completed' || projectStatus === 'error';
 
-  // Cleanup polling on unmount
   useEffect(() => {
     return () => {
       if (pollingInterval) {
@@ -34,19 +66,18 @@ export default function MeshExportPanel({ projectId, projectStatus }: MeshExport
 
   const checkExportStatus = async (expectedFilename: string) => {
     try {
-      const data = await api.getAvailableExports(projectId);
-      const found = data.exports?.find((exp: any) => exp.filename === expectedFilename);
-      
+      const data = (await api.getAvailableExports(projectId)) as unknown as AvailableExportsResponse;
+      const found = data.exports?.find((exp) => exp.filename === expectedFilename);
+
       if (found) {
-        // Export completed!
         if (pollingInterval) {
           clearInterval(pollingInterval);
           setPollingInterval(null);
         }
-        
+
         setIsExporting(false);
         setExportStatus('success');
-        setExportMessage('Mesh created successfully! Ready to download.');
+        setExportMessage('Mesh created successfully. Ready to download.');
         setExportedFile(found);
       }
     } catch (error) {
@@ -55,77 +86,67 @@ export default function MeshExportPanel({ projectId, projectStatus }: MeshExport
   };
 
   const handleExport = async () => {
-    console.log('[MeshExport] handleExport called');
-    console.log('[MeshExport] canExport:', canExport);
-    console.log('[MeshExport] projectStatus:', projectStatus);
-    
     if (!canExport) {
-      console.log('[MeshExport] Cannot export - project not ready');
       setExportMessage('Project must complete processing first');
       setExportStatus('error');
       return;
     }
 
-    console.log('[MeshExport] Starting export with:', { method, quality, format });
-    
     setIsExporting(true);
     setExportStatus('loading');
-    setExportMessage('Starting mesh export... This will take 5-30 minutes depending on quality.');
+    setExportMessage('Starting mesh export. This may take 5-30 minutes depending on quality.');
 
     try {
-      console.log('[MeshExport] Calling API...');
-      const data = await api.createTexturedMesh(projectId, {
+      const data = (await api.createTexturedMesh(projectId, {
         method,
         quality,
         format,
-      });
-
-      console.log('[MeshExport] API response:', data);
+      })) as unknown as CreateMeshResponse;
 
       if (data.success && data.status === 'processing') {
-        console.log('[MeshExport] Export started in background');
-        // Background export started
-        setExportMessage(
-          `${data.message}\n\nPolling for completion every 10 seconds...`
-        );
-        
+        setExportMessage(`${data.message ?? 'Export queued.'} Polling every 10 seconds.`);
         const expectedFilename = data.filename;
-        console.log('[MeshExport] Expected filename:', expectedFilename);
-        
-        // Start polling for export completion
+
         const interval = setInterval(() => {
-          console.log('[MeshExport] Polling for completion...');
-          checkExportStatus(expectedFilename);
-        }, 10000); // Check every 10 seconds
-        
+          void checkExportStatus(expectedFilename);
+        }, 10000);
+
         setPollingInterval(interval);
-        
-        // Check immediately once
+
         setTimeout(() => {
-          console.log('[MeshExport] Initial status check...');
-          checkExportStatus(expectedFilename);
+          void checkExportStatus(expectedFilename);
         }, 2000);
       } else if (data.success) {
-        console.log('[MeshExport] Immediate success');
-        // Immediate success (shouldn't happen with background processing, but handle it)
         setExportStatus('success');
-        setExportMessage(data.message || 'Mesh created successfully!');
-        setExportedFile(data);
+        setExportMessage(data.message || 'Mesh created successfully.');
         setIsExporting(false);
       } else {
-        console.log('[MeshExport] Export failed:', data);
         setExportStatus('error');
         setExportMessage(data.error || data.hint || 'Export failed');
         setIsExporting(false);
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('[MeshExport] Exception:', error);
-      console.error('[MeshExport] Error details:', error.response?.data);
       setExportStatus('error');
-      const errorMsg = error.response?.data?.error || error.message || 'Network error';
-      setExportMessage(errorMsg);
+
+      let errorMessage = 'Network error';
+      if (error instanceof Error) {
+        errorMessage = error.message;
+      } else if (
+        typeof error === 'object' &&
+        error !== null &&
+        'response' in error &&
+        typeof (error as { response?: unknown }).response === 'object' &&
+        (error as { response?: unknown }).response !== null &&
+        'data' in ((error as { response: { data?: unknown } }).response)
+      ) {
+        const responseData = ((error as { response: { data?: { error?: string } } }).response).data;
+        errorMessage = responseData?.error || errorMessage;
+      }
+
+      setExportMessage(errorMessage);
       setIsExporting(false);
-      
+
       if (pollingInterval) {
         clearInterval(pollingInterval);
         setPollingInterval(null);
@@ -134,219 +155,168 @@ export default function MeshExportPanel({ projectId, projectStatus }: MeshExport
   };
 
   const handleDownload = () => {
-    if (exportedFile && exportedFile.download_url) {
-      // Use the API base URL + download URL
-      const downloadUrl = `http://localhost:5000${exportedFile.download_url}`;
-      window.location.href = downloadUrl;
+    if (exportedFile?.download_url) {
+      window.location.href = `http://localhost:5000${exportedFile.download_url}`;
     }
   };
 
   return (
-    <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
-      <div className="flex items-center gap-3 mb-4">
-        <Package className="w-6 h-6 text-blue-400" />
-        <h3 className="text-xl font-semibold text-white">Export Textured Mesh</h3>
+    <div className="brutal-card p-5">
+      <div className="mb-4 flex items-start gap-3">
+        <div className="brutal-card-muted flex h-10 w-10 items-center justify-center p-2">
+          <Package className="h-5 w-5" />
+        </div>
+        <div>
+          <div className="brutal-eyebrow mb-2">Mesh Export</div>
+          <h3 className="brutal-h3">Export Textured Mesh</h3>
+        </div>
       </div>
 
-      <div className="bg-blue-900/20 border border-blue-700/50 rounded-lg p-4 mb-6">
+      <div className="brutal-card-muted mb-5 p-4">
         <div className="flex items-start gap-2">
-          <Info className="w-5 h-5 text-blue-400 mt-0.5 flex-shrink-0" />
-          <div className="text-sm text-blue-200">
-            <p className="font-medium mb-1">Create a textured 3D mesh with colors from your images</p>
-            <ul className="list-disc list-inside space-y-1 text-blue-300/80">
-              <li>GLB format works great in Blender, Unity, and web viewers</li>
-              <li>Poisson method creates smooth, watertight surfaces</li>
-              <li>Processing time: 5-20 minutes depending on quality and image count</li>
+          <Info className="mt-0.5 h-4 w-4 flex-shrink-0" />
+          <div className="text-sm text-[color:var(--text-secondary)]">
+            <p className="font-bold uppercase tracking-[0.12em] text-[color:var(--text-primary)]">
+              Build a textured mesh from the current reconstruction.
+            </p>
+            <ul className="mt-2 space-y-1 text-xs uppercase tracking-[0.08em]">
+              <li>• GLB works well in Blender, Unity, and web viewers</li>
+              <li>• Poisson creates smoother watertight surfaces</li>
+              <li>• Processing time scales with quality and image count</li>
             </ul>
           </div>
         </div>
       </div>
 
-      {/* Settings */}
-      <div className="space-y-4 mb-6">
-        {/* Method Selection */}
+      <div className="space-y-5">
         <div>
-          <label className="block text-sm font-medium text-gray-300 mb-2">
-            Meshing Method
-          </label>
+          <div className="brutal-label mb-2 block">Meshing Method</div>
           <div className="grid grid-cols-2 gap-2">
-            <button
-              onClick={() => setMethod('poisson')}
-              disabled={isExporting}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                method === 'poisson'
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-              } ${isExporting ? 'opacity-50 cursor-not-allowed' : ''}`}
-            >
-              Poisson (Recommended)
-            </button>
-            <button
-              onClick={() => setMethod('delaunay')}
-              disabled={isExporting}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                method === 'delaunay'
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-              } ${isExporting ? 'opacity-50 cursor-not-allowed' : ''}`}
-            >
-              Delaunay
-            </button>
+            {(['poisson', 'delaunay'] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                onClick={() => setMethod(option)}
+                disabled={isExporting}
+                className={`w-full p-3 text-left ${method === option ? 'brutal-card-dark' : 'brutal-card-muted'} ${isExporting ? 'opacity-50' : ''}`}
+              >
+                <div className="text-xs font-bold uppercase tracking-[0.14em]">{option}</div>
+                <div className={`mt-1 text-[11px] ${method === option ? 'text-[color:var(--text-on-ink-muted)]' : 'text-[color:var(--text-secondary)]'}`}>
+                  {option === 'poisson' ? 'Smooth surfaces' : 'Preserve original geometry'}
+                </div>
+              </button>
+            ))}
           </div>
-          <p className="mt-1 text-xs text-gray-400">
-            {method === 'poisson'
-              ? 'Creates smooth, watertight surfaces (best for objects)'
-              : 'Preserves original geometry (best for terrain)'}
-          </p>
         </div>
 
-        {/* Quality Selection */}
         <div>
-          <label className="block text-sm font-medium text-gray-300 mb-2">
-            Quality
-          </label>
+          <div className="brutal-label mb-2 block">Quality</div>
           <div className="grid grid-cols-3 gap-2">
-            {(['low', 'medium', 'high'] as const).map((q) => (
+            {(['low', 'medium', 'high'] as const).map((option) => (
               <button
-                key={q}
-                onClick={() => setQuality(q)}
+                key={option}
+                type="button"
+                onClick={() => setQuality(option)}
                 disabled={isExporting}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                  quality === q
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                } ${isExporting ? 'opacity-50 cursor-not-allowed' : ''}`}
+                className={`w-full p-3 text-center ${quality === option ? 'brutal-card-dark' : 'brutal-card-muted'} ${isExporting ? 'opacity-50' : ''}`}
               >
-                {q.charAt(0).toUpperCase() + q.slice(1)}
+                <div className="text-xs font-bold uppercase tracking-[0.14em]">{option}</div>
               </button>
             ))}
           </div>
-          <p className="mt-1 text-xs text-gray-400">
+          <p className="mt-2 text-xs text-[color:var(--text-secondary)]">
             {quality === 'low' && '~5-10 min, good for preview'}
-            {quality === 'medium' && '~10-15 min, balanced quality/speed (recommended)'}
-            {quality === 'high' && '~20-40 min, best quality for production'}
+            {quality === 'medium' && '~10-15 min, balanced quality and speed'}
+            {quality === 'high' && '~20-40 min, best for production output'}
           </p>
         </div>
 
-        {/* Format Selection */}
         <div>
-          <label className="block text-sm font-medium text-gray-300 mb-2">
-            Output Format
-          </label>
+          <div className="brutal-label mb-2 block">Output Format</div>
           <div className="grid grid-cols-4 gap-2">
-            {(['glb', 'obj', 'ply', 'dae'] as const).map((f) => (
+            {(['glb', 'obj', 'ply', 'dae'] as const).map((option) => (
               <button
-                key={f}
-                onClick={() => setFormat(f)}
+                key={option}
+                type="button"
+                onClick={() => setFormat(option)}
                 disabled={isExporting}
-                className={`px-4 py-2 rounded-lg text-sm font-medium uppercase transition-colors ${
-                  format === f
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                } ${isExporting ? 'opacity-50 cursor-not-allowed' : ''}`}
+                className={`w-full p-3 text-center ${format === option ? 'brutal-card-dark' : 'brutal-card-muted'} ${isExporting ? 'opacity-50' : ''}`}
               >
-                {f}
+                <div className="text-xs font-bold uppercase tracking-[0.14em]">{option}</div>
               </button>
             ))}
           </div>
-          <p className="mt-1 text-xs text-gray-400">
-            {format === 'glb' && 'Binary glTF - Best for Blender, Unity, web viewers'}
-            {format === 'obj' && 'Wavefront OBJ - Universal, works with all 3D software'}
-            {format === 'ply' && 'PLY format - Best for MeshLab, CloudCompare'}
-            {format === 'dae' && 'Collada - XML-based, works with SketchUp'}
+          <p className="mt-2 text-xs text-[color:var(--text-secondary)]">
+            {format === 'glb' && 'Binary glTF for Blender, Unity, and web viewers'}
+            {format === 'obj' && 'Universal OBJ export for broad software support'}
+            {format === 'ply' && 'PLY format for MeshLab and CloudCompare'}
+            {format === 'dae' && 'Collada for DCC pipelines that require XML'}
           </p>
         </div>
       </div>
 
-      {/* Export Button */}
-      <div className="space-y-3">
+      <div className="mt-5 space-y-3">
         <button
+          type="button"
           onClick={handleExport}
           disabled={!canExport || isExporting}
-          className={`w-full flex items-center justify-center gap-2 px-6 py-3 rounded-lg font-medium transition-colors ${
-            !canExport
-              ? 'bg-gray-700 text-gray-400 cursor-not-allowed'
-              : isExporting
-              ? 'bg-blue-600 text-white cursor-wait'
-              : 'bg-gradient-to-r from-blue-600 to-blue-700 text-white hover:from-blue-700 hover:to-blue-800'
-          }`}
+          className={`brutal-btn brutal-btn-lg w-full justify-center ${canExport ? 'brutal-btn-primary' : ''}`}
         >
           {isExporting ? (
             <>
-              <Loader className="w-5 h-5 animate-spin" />
-              Creating Mesh...
+              <Loader className="h-4 w-4 animate-spin" />
+              Creating Mesh
             </>
           ) : !canExport ? (
             <>
-              <XCircle className="w-5 h-5" />
+              <XCircle className="h-4 w-4" />
               Project Not Ready
             </>
           ) : (
             <>
-              <Package className="w-5 h-5" />
+              <Package className="h-4 w-4" />
               Create Textured Mesh
             </>
           )}
         </button>
 
-        {/* Status Message */}
         {exportStatus !== 'idle' && (
-          <div
-            className={`p-4 rounded-lg border ${
-              exportStatus === 'loading'
-                ? 'bg-blue-900/20 border-blue-700/50 text-blue-200'
-                : exportStatus === 'success'
-                ? 'bg-green-900/20 border-green-700/50 text-green-200'
-                : 'bg-red-900/20 border-red-700/50 text-red-200'
-            }`}
-          >
-            <div className="flex items-start gap-2">
-              {exportStatus === 'loading' && <Loader className="w-5 h-5 animate-spin mt-0.5" />}
-              {exportStatus === 'success' && <CheckCircle className="w-5 h-5 mt-0.5" />}
-              {exportStatus === 'error' && <XCircle className="w-5 h-5 mt-0.5" />}
-              <div className="flex-1">
-                <p className="text-sm">{exportMessage}</p>
-                {exportedFile && exportStatus === 'success' && (
-                  <div className="mt-3 text-xs space-y-1">
-                    <p>
-                      <span className="text-gray-400">File:</span>{' '}
-                      <span className="font-mono">{exportedFile.filename}</span>
-                    </p>
-                    <p>
-                      <span className="text-gray-400">Size:</span> {exportedFile.size_mb} MB
-                    </p>
-                    <p>
-                      <span className="text-gray-400">Method:</span>{' '}
-                      {exportedFile.method.charAt(0).toUpperCase() + exportedFile.method.slice(1)}
-                    </p>
-                  </div>
-                )}
-              </div>
+          <div className={`status-badge flex w-full items-start gap-2 p-4 text-left ${getStatusClasses(exportStatus)}`}>
+            {exportStatus === 'loading' && <Loader className="mt-0.5 h-4 w-4 animate-spin" />}
+            {exportStatus === 'success' && <CheckCircle className="mt-0.5 h-4 w-4" />}
+            {exportStatus === 'error' && <XCircle className="mt-0.5 h-4 w-4" />}
+            <div className="flex-1">
+              <p className="text-sm font-medium normal-case tracking-normal">{exportMessage}</p>
+              {exportedFile && exportStatus === 'success' && (
+                <div className="mt-3 space-y-1 text-xs normal-case tracking-normal">
+                  <p>
+                    <span className="font-bold uppercase tracking-[0.12em]">File:</span> {exportedFile.filename}
+                  </p>
+                  <p>
+                    <span className="font-bold uppercase tracking-[0.12em]">Size:</span> {exportedFile.size_mb} MB
+                  </p>
+                  <p>
+                    <span className="font-bold uppercase tracking-[0.12em]">Method:</span> {exportedFile.method}
+                  </p>
+                </div>
+              )}
             </div>
           </div>
         )}
 
-        {/* Download Button */}
         {exportStatus === 'success' && exportedFile && (
-          <button
-            onClick={handleDownload}
-            className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium transition-colors"
-          >
-            <Download className="w-5 h-5" />
+          <button type="button" onClick={handleDownload} className="brutal-btn brutal-btn-lg w-full justify-center">
+            <Download className="h-4 w-4" />
             Download {format.toUpperCase()} File
           </button>
         )}
-      </div>
 
-      {/* Additional Info */}
-      {!canExport && (
-        <div className="mt-4 p-3 bg-yellow-900/20 border border-yellow-700/50 rounded-lg">
-          <p className="text-sm text-yellow-200">
-            ⏳ Please wait for the project to complete Gaussian Splat processing first.
-            You can export the mesh once sparse reconstruction is done.
-          </p>
-        </div>
-      )}
+        {!canExport && (
+          <div className="brutal-card-muted p-3 text-sm text-[color:var(--text-secondary)]">
+            Wait for Gaussian Splat processing to finish before exporting a mesh.
+          </div>
+        )}
+      </div>
     </div>
   );
 }

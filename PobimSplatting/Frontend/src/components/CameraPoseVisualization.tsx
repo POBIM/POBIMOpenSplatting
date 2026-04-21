@@ -136,8 +136,8 @@ function MiniSlider({ label, value, min, max, step, onChange }: {
   onChange: (v: number) => void;
 }) {
   return (
-    <label className="flex items-center gap-2 text-[11px] text-gray-300 select-none">
-      <span className="w-[58px] text-gray-400 shrink-0">{label}</span>
+    <label className="flex items-center gap-2 text-[11px] uppercase tracking-[0.12em] text-[color:var(--text-secondary)] select-none">
+      <span className="w-[58px] shrink-0 font-bold text-[color:var(--text-secondary)]">{label}</span>
       <input
         type="range"
         min={min}
@@ -145,9 +145,9 @@ function MiniSlider({ label, value, min, max, step, onChange }: {
         step={step}
         value={value}
         onChange={e => onChange(parseFloat(e.target.value))}
-        className="flex-1 h-1 accent-white/80 cursor-pointer appearance-none rounded bg-white/15 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:h-2.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:shadow-sm"
+        className="flex-1 h-1 cursor-pointer appearance-none bg-[color:var(--paper-muted-2)] accent-[var(--ink)] [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-2.5 [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:bg-[var(--ink)]"
       />
-      <span className="w-[34px] text-right font-mono text-gray-400 tabular-nums">{value.toFixed(2)}</span>
+      <span className="w-[34px] text-right font-mono tabular-nums text-[color:var(--text-muted)]">{value.toFixed(2)}</span>
     </label>
   );
 }
@@ -539,18 +539,20 @@ export default function CameraPoseVisualization({ data, selectedCamera: selected
 
       {hoveredCamera && (
         <div
-          className="absolute pointer-events-none bg-black/90 text-white px-3 py-2 rounded-lg text-sm z-10 max-w-xs"
+          className="brutal-card pointer-events-none absolute z-10 max-w-xs px-3 py-2 text-sm"
           style={{
             left: Math.min(tooltipPos.x + 12, (containerRef.current?.clientWidth || 400) - 200),
             top: tooltipPos.y - 50,
           }}
         >
-          <div className="font-medium truncate">{hoveredCamera.image_name}</div>
-          <div className="text-gray-400 text-xs mt-0.5">
+          <div className="truncate text-xs font-bold uppercase tracking-[0.14em] text-[color:var(--text-primary)]">
+            {hoveredCamera.image_name}
+          </div>
+          <div className="mt-1 text-xs text-[color:var(--text-secondary)]">
             pos: ({hoveredCamera.position.map(v => v.toFixed(2)).join(', ')})
           </div>
           {hoveredCamera.width && hoveredCamera.height && (
-            <div className="text-gray-400 text-xs">
+            <div className="text-xs text-[color:var(--text-muted)]">
               {hoveredCamera.width}&times;{hoveredCamera.height}
             </div>
           )}
@@ -558,14 +560,14 @@ export default function CameraPoseVisualization({ data, selectedCamera: selected
       )}
 
       <div className="absolute top-3 right-3 z-20 flex flex-col items-end gap-2">
-        <div className="bg-white/95 backdrop-blur rounded-lg px-3 py-2 text-xs text-gray-600 shadow-lg">
+        <div className="brutal-card px-3 py-2 text-[11px] font-bold uppercase tracking-[0.14em] text-[color:var(--text-secondary)]">
           Drag to orbit &middot; Scroll to zoom &middot; Right-click to pan
         </div>
 
         <button
           type="button"
           onClick={() => setSettingsOpen(o => !o)}
-          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium bg-black/88 backdrop-blur text-white border border-white/15 hover:border-white/35 transition-all shadow-lg"
+          className="brutal-btn brutal-btn-xs"
           title="Scene controls"
         >
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-3.5 h-3.5" role="img" aria-label="Settings">
@@ -576,19 +578,19 @@ export default function CameraPoseVisualization({ data, selectedCamera: selected
         </button>
 
         {settingsOpen && (
-          <div className="w-[240px] bg-black/90 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl overflow-hidden">
-            <div className="px-3 pt-2.5 pb-1.5 flex items-center justify-between border-b border-white/5">
-              <span className="text-[11px] font-semibold text-white/70 uppercase tracking-wider">Scene</span>
+          <div className="brutal-card w-[240px] overflow-hidden">
+            <div className="flex items-center justify-between border-b-[var(--border-w)] border-[color:var(--ink)] bg-[color:var(--paper-muted)] px-3 pb-1.5 pt-2.5">
+              <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-[color:var(--text-secondary)]">Scene</span>
               <button
                 type="button"
                 onClick={() => setSettingsOpen(false)}
-                className="text-gray-500 hover:text-white text-xs leading-none p-0.5"
+                className="brutal-btn brutal-btn-xs"
               >
                 ✕
               </button>
             </div>
 
-            <div className="px-3 py-2.5 space-y-2">
+            <div className="space-y-2 px-3 py-2.5">
               <MiniSlider
                 label="Frustum"
                 value={frustumScale}
@@ -609,18 +611,18 @@ export default function CameraPoseVisualization({ data, selectedCamera: selected
                 />
               )}
 
-              <div className="flex items-center gap-2 text-[11px] text-gray-300">
-                <span className="w-[58px] text-gray-400 shrink-0">Axis</span>
+              <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.12em] text-[color:var(--text-secondary)]">
+                <span className="w-[58px] shrink-0 font-bold text-[color:var(--text-secondary)]">Axis</span>
                 <div className="flex gap-1 flex-1">
                   {(Object.keys(AXIS_PRESETS) as AxisPreset[]).map(key => (
                     <button
                       key={key}
                       type="button"
                       onClick={() => setAxisPreset(key)}
-                      className={`flex-1 px-1.5 py-[3px] rounded text-[10px] font-medium transition-colors ${
+                      className={`border-[var(--border-w)] px-1.5 py-[3px] text-[10px] font-bold uppercase tracking-[0.12em] transition-colors ${
                         axisPreset === key
-                          ? 'bg-white/20 text-white'
-                          : 'bg-white/5 text-gray-500 hover:text-gray-300 hover:bg-white/10'
+                          ? 'border-[color:var(--ink)] bg-[color:var(--ink)] text-[color:var(--text-on-ink)]'
+                          : 'border-[color:var(--ink)] bg-[color:var(--paper-card)] text-[color:var(--text-secondary)] hover:bg-[color:var(--paper-muted)]'
                       }`}
                     >
                       {AXIS_PRESETS[key].label}
@@ -629,8 +631,8 @@ export default function CameraPoseVisualization({ data, selectedCamera: selected
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 text-[11px] text-gray-300">
-                <span className="w-[58px] text-gray-400 shrink-0">Flip</span>
+              <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.12em] text-[color:var(--text-secondary)]">
+                <span className="w-[58px] shrink-0 font-bold text-[color:var(--text-secondary)]">Flip</span>
                 <div className="flex gap-1.5 flex-1">
                   {([
                     { label: 'X', color: '#ff3333', active: flipX, toggle: () => setFlipX(f => !f) },
@@ -641,14 +643,14 @@ export default function CameraPoseVisualization({ data, selectedCamera: selected
                       key={ax.label}
                       type="button"
                       onClick={ax.toggle}
-                      className={`flex items-center gap-1 px-2 py-[3px] rounded text-[10px] font-medium transition-colors ${
-                        ax.active
-                          ? 'bg-white/20 text-white'
-                          : 'bg-white/5 text-gray-500 hover:text-gray-300 hover:bg-white/10'
-                      }`}
-                    >
+                        className={`flex items-center gap-1 border-[var(--border-w)] px-2 py-[3px] text-[10px] font-bold uppercase tracking-[0.12em] transition-colors ${
+                          ax.active
+                            ? 'border-[color:var(--ink)] bg-[color:var(--ink)] text-[color:var(--text-on-ink)]'
+                            : 'border-[color:var(--ink)] bg-[color:var(--paper-card)] text-[color:var(--text-secondary)] hover:bg-[color:var(--paper-muted)]'
+                        }`}
+                      >
                       <span
-                        className="inline-block w-1.5 h-1.5 rounded-full"
+                        className="inline-block h-1.5 w-1.5"
                         style={{ backgroundColor: ax.color }}
                       />
                       {ax.label}
@@ -657,14 +659,14 @@ export default function CameraPoseVisualization({ data, selectedCamera: selected
                 </div>
               </div>
 
-              <div className="border-t border-white/5 pt-2 mt-1 space-y-1.5">
+              <div className="mt-1 space-y-1.5 border-t-[var(--border-w)] border-[color:var(--paper-muted-2)] pt-2">
                 <div className="flex items-center justify-between">
-                  <span className="text-[10px] font-semibold text-white/50 uppercase tracking-wider">Rotate</span>
+                  <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-[color:var(--text-secondary)]">Rotate</span>
                   {(rotXDeg !== 0 || rotYDeg !== 0 || rotZDeg !== 0) && (
                     <button
                       type="button"
                       onClick={() => { setRotXDeg(0); setRotYDeg(0); setRotZDeg(0); }}
-                      className="text-[9px] text-gray-500 hover:text-white px-1.5 py-0.5 rounded bg-white/5 hover:bg-white/10 transition-colors"
+                      className="brutal-btn brutal-btn-xs"
                     >
                       Reset
                     </button>
@@ -675,10 +677,10 @@ export default function CameraPoseVisualization({ data, selectedCamera: selected
                   { label: 'Y', color: '#33ff33', value: rotYDeg, set: setRotYDeg },
                   { label: 'Z', color: '#3377ff', value: rotZDeg, set: setRotZDeg },
                 ] as const).map(ax => (
-                  <label key={ax.label} className="flex items-center gap-2 text-[11px] text-gray-300 select-none">
+                  <label key={ax.label} className="flex items-center gap-2 text-[11px] uppercase tracking-[0.12em] text-[color:var(--text-secondary)] select-none">
                     <span className="w-[58px] shrink-0 flex items-center gap-1.5">
-                      <span className="inline-block w-1.5 h-1.5 rounded-full" style={{ backgroundColor: ax.color }} />
-                      <span className="text-gray-400">{ax.label}</span>
+                      <span className="inline-block h-1.5 w-1.5" style={{ backgroundColor: ax.color }} />
+                      <span className="font-bold text-[color:var(--text-secondary)]">{ax.label}</span>
                     </span>
                     <input
                       type="range"
@@ -687,9 +689,9 @@ export default function CameraPoseVisualization({ data, selectedCamera: selected
                       step={1}
                       value={ax.value}
                       onChange={e => ax.set(parseFloat(e.target.value))}
-                      className="flex-1 h-1 accent-white/80 cursor-pointer appearance-none rounded bg-white/15 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:h-2.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:shadow-sm"
+                      className="flex-1 h-1 cursor-pointer appearance-none bg-[color:var(--paper-muted-2)] accent-[var(--ink)] [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:h-2.5 [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:bg-[var(--ink)]"
                     />
-                    <span className="w-[34px] text-right font-mono text-gray-400 tabular-nums text-[10px]">{ax.value}°</span>
+                    <span className="w-[34px] text-right font-mono tabular-nums text-[10px] text-[color:var(--text-muted)]">{ax.value}°</span>
                   </label>
                 ))}
               </div>
@@ -698,16 +700,16 @@ export default function CameraPoseVisualization({ data, selectedCamera: selected
         )}
       </div>
 
-      <div className="absolute bottom-3 left-3 bg-white/95 backdrop-blur rounded-lg px-3 py-2 text-xs shadow-lg">
+      <div className="brutal-card absolute bottom-3 left-3 px-3 py-2 text-xs">
         <div className="flex items-center gap-3">
           <span className="flex items-center gap-1">
-            <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: '#ff3333' }} /> X
+            <span className="inline-block h-2 w-2" style={{ backgroundColor: '#ff3333' }} /> X
           </span>
           <span className="flex items-center gap-1">
-            <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: '#33ff33' }} /> Y
+            <span className="inline-block h-2 w-2" style={{ backgroundColor: '#33ff33' }} /> Y
           </span>
           <span className="flex items-center gap-1">
-            <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: '#3377ff' }} /> Z
+            <span className="inline-block h-2 w-2" style={{ backgroundColor: '#3377ff' }} /> Z
           </span>
         </div>
       </div>

@@ -6,15 +6,21 @@ import SplatViewer from '@/components/SplatViewer';
 export default function ViewerPage() {
   return (
     <div
-      className="w-full overflow-hidden"
+      className="brutal-shell w-full overflow-hidden"
       style={{ height: 'calc(100vh - var(--navbar-height))' }}
     >
       <Suspense fallback={
-        <div className="flex items-center justify-center h-full bg-gradient-to-br from-purple-600 to-blue-600">
-          <div className="text-center text-white">
-            <div className="w-16 h-16 border-4 border-white border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-            <h2 className="text-2xl font-bold mb-2">Loading 3D Viewer</h2>
-            <p className="text-blue-100">Initializing Gaussian Splat viewer...</p>
+        <div className="flex h-full items-center justify-center p-4">
+          <div className="brutal-card relative w-full max-w-md p-6 text-center">
+            <div className="brutal-dot-bg pointer-events-none absolute inset-0" />
+            <div className="relative">
+              <div className="mx-auto mb-4 h-12 w-12 animate-spin border-[3px] border-[var(--ink)] border-t-transparent" />
+              <p className="brutal-eyebrow mb-3">Viewer Boot</p>
+              <h2 className="brutal-h2 mb-2">Loading 3D Viewer</h2>
+              <p className="text-sm font-medium uppercase tracking-[0.14em] text-[var(--text-secondary)]">
+                Initializing Gaussian Splat Viewer
+              </p>
+            </div>
           </div>
         </div>
       }>

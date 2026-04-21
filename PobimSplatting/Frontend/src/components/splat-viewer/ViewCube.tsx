@@ -190,7 +190,7 @@ export function ViewCube({ axes, onAlign }: ViewCubeProps) {
     <div className="pointer-events-none absolute right-4 top-12 z-1090" data-orbit-block="true">
       <div
         ref={containerRef}
-        className="pointer-events-auto h-24 w-24 rounded-xl p-2"
+        className="pointer-events-auto brutal-card h-24 w-24 p-2"
         data-orbit-block="true"
       />
     </div>

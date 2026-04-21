@@ -59,6 +59,7 @@ export default function RoomMarkerVisualization({ selectedMarkerId, onMarkerSele
   const markersRef = useRef<THREE.Mesh[]>([]);
   const cameraPathRef = useRef<THREE.Group | null>(null);
   const animationFrameRef = useRef<number>(0);
+  const hoveredMarkerIdRef = useRef<number | null>(null);
   const [hoveredMarker, setHoveredMarker] = useState<MarkerPosition | null>(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
   const [showCameraPath, setShowCameraPath] = useState(false);
@@ -439,7 +440,7 @@ export default function RoomMarkerVisualization({ selectedMarkerId, onMarkerSele
         const markerData = marker.userData.markerData as MarkerPosition;
         const material = marker.material as THREE.MeshStandardMaterial;
         
-        if (markerData.id === selectedMarkerId || markerData.id === hoveredMarker?.id) {
+        if (markerData.id === selectedMarkerId || markerData.id === hoveredMarkerIdRef.current) {
           material.emissiveIntensity = 0.6;
           marker.scale.setScalar(1.2);
         } else {
@@ -475,6 +476,7 @@ export default function RoomMarkerVisualization({ selectedMarkerId, onMarkerSele
 
   // Update hover effect in animation loop
   useEffect(() => {
+    hoveredMarkerIdRef.current = hoveredMarker?.id ?? null;
     markersRef.current.forEach((marker) => {
       const markerData = marker.userData.markerData as MarkerPosition;
       const material = marker.material as THREE.MeshStandardMaterial;
@@ -487,7 +489,7 @@ export default function RoomMarkerVisualization({ selectedMarkerId, onMarkerSele
         marker.scale.setScalar(1);
       }
     });
-  }, [selectedMarkerId, hoveredMarker]);
+  }, [selectedMarkerId, hoveredMarker?.id]);
 
   // Toggle camera path visibility
   useEffect(() => {
@@ -549,55 +551,56 @@ export default function RoomMarkerVisualization({ selectedMarkerId, onMarkerSele
 
   return (
     <div className="relative w-full h-full">
-      <div ref={containerRef} className="w-full h-full rounded-xl overflow-hidden" />
+      <div ref={containerRef} className="h-full w-full overflow-hidden" />
       
       {/* Tooltip */}
       {hoveredMarker && (
         <div 
-          className="absolute pointer-events-none bg-black/90 text-white px-3 py-2 rounded-lg text-sm z-10"
+          className="brutal-card pointer-events-none absolute z-10 px-3 py-2 text-sm"
           style={{ 
             left: tooltipPos.x + 10, 
             top: tooltipPos.y - 60,
             transform: 'translateX(-50%)'
           }}
         >
-          <div className="font-bold">ID: {hoveredMarker.id}</div>
-          <div className="text-gray-300">{hoveredMarker.label}</div>
-          <div className="text-xs text-gray-400">ความสูง: {hoveredMarker.heightCm}</div>
+          <div className="text-xs font-bold uppercase tracking-[0.14em] text-[color:var(--text-primary)]">ID: {hoveredMarker.id}</div>
+          <div className="text-sm text-[color:var(--text-secondary)]">{hoveredMarker.label}</div>
+          <div className="text-xs text-[color:var(--text-muted)]">ความสูง: {hoveredMarker.heightCm}</div>
         </div>
       )}
 
       {/* Legend */}
-      <div className="absolute bottom-3 left-3 bg-white/95 backdrop-blur rounded-lg p-3 text-xs shadow-lg">
-        <div className="font-semibold mb-2 text-gray-800">ระดับความสูง</div>
+      <div className="brutal-card absolute bottom-3 left-3 p-3 text-xs">
+        <div className="mb-2 font-bold uppercase tracking-[0.14em] text-[color:var(--text-primary)]">ระดับความสูง</div>
         <div className="space-y-1.5">
           <div className="flex items-center">
-            <div className="w-3 h-3 rounded-sm mr-2" style={{ backgroundColor: '#22c55e' }}></div>
-            <span className="text-gray-700">พื้น (0-10 cm)</span>
+            <div className="mr-2 h-3 w-3 border-[var(--border-w)] border-[color:var(--ink)]" style={{ backgroundColor: '#22c55e' }}></div>
+            <span className="text-[color:var(--text-secondary)]">พื้น (0-10 cm)</span>
           </div>
           <div className="flex items-center">
-            <div className="w-3 h-3 rounded-sm mr-2" style={{ backgroundColor: '#3b82f6' }}></div>
-            <span className="text-gray-700">ต่ำ (30-50 cm)</span>
+            <div className="mr-2 h-3 w-3 border-[var(--border-w)] border-[color:var(--ink)]" style={{ backgroundColor: '#3b82f6' }}></div>
+            <span className="text-[color:var(--text-secondary)]">ต่ำ (30-50 cm)</span>
           </div>
           <div className="flex items-center">
-            <div className="w-3 h-3 rounded-sm mr-2" style={{ backgroundColor: '#a855f7' }}></div>
-            <span className="text-gray-700">กลาง (100-120 cm)</span>
+            <div className="mr-2 h-3 w-3 border-[var(--border-w)] border-[color:var(--ink)]" style={{ backgroundColor: '#a855f7' }}></div>
+            <span className="text-[color:var(--text-secondary)]">กลาง (100-120 cm)</span>
           </div>
           <div className="flex items-center">
-            <div className="w-3 h-3 rounded-sm mr-2" style={{ backgroundColor: '#f97316' }}></div>
-            <span className="text-gray-700">สูง (170-200 cm)</span>
+            <div className="mr-2 h-3 w-3 border-[var(--border-w)] border-[color:var(--ink)]" style={{ backgroundColor: '#f97316' }}></div>
+            <span className="text-[color:var(--text-secondary)]">สูง (170-200 cm)</span>
           </div>
         </div>
       </div>
 
       {/* Camera Path Toggle */}
-      <div className="absolute bottom-3 right-3 bg-white/95 backdrop-blur rounded-lg shadow-lg overflow-hidden">
+      <div className="absolute bottom-3 right-3 overflow-hidden">
         <button
+          type="button"
           onClick={() => setShowCameraPath(!showCameraPath)}
-          className={`px-3 py-2 text-xs font-medium flex items-center transition-colors ${
+          className={`brutal-btn brutal-btn-xs ${
             showCameraPath 
-              ? 'bg-red-500 text-white' 
-              : 'bg-white text-gray-700 hover:bg-gray-100'
+              ? 'brutal-btn-primary'
+              : ''
           }`}
         >
           🎬 {showCameraPath ? 'ซ่อนเส้นทาง' : 'แสดงเส้นทางถ่าย'}
@@ -606,28 +609,30 @@ export default function RoomMarkerVisualization({ selectedMarkerId, onMarkerSele
 
       {/* Camera Path Controls - Show when path is visible */}
       {showCameraPath && (
-        <div className="absolute bottom-16 right-3 bg-white/95 backdrop-blur rounded-lg p-3 shadow-lg max-w-[200px]">
-          <div className="text-xs font-semibold text-gray-800 mb-2">
+        <div className="brutal-card absolute bottom-16 right-3 max-w-[220px] p-3">
+          <div className="mb-2 text-xs font-bold uppercase tracking-[0.14em] text-[color:var(--text-primary)]">
             🎥 ขั้นตอนที่ {currentStep + 1}/{CAMERA_PATH.length}
           </div>
-          <div className="text-xs text-gray-600 mb-2">
+          <div className="mb-2 text-xs text-[color:var(--text-secondary)]">
             {CAMERA_PATH[currentStep].label}
           </div>
-          <div className="text-xs text-green-600 mb-3">
+          <div className="mb-3 text-xs text-[color:var(--text-muted)]">
             💡 {CAMERA_PATH[currentStep].tilt}
           </div>
           <div className="flex gap-2">
             <button
+              type="button"
               onClick={prevStep}
               disabled={isAnimating}
-              className="flex-1 px-2 py-1.5 bg-gray-100 hover:bg-gray-200 rounded text-xs font-medium disabled:opacity-50"
+              className="brutal-btn brutal-btn-xs flex-1 justify-center"
             >
               ◀ ก่อน
             </button>
             <button
+              type="button"
               onClick={nextStep}
               disabled={isAnimating}
-              className="flex-1 px-2 py-1.5 bg-red-500 hover:bg-red-600 text-white rounded text-xs font-medium disabled:opacity-50"
+              className="brutal-btn brutal-btn-primary brutal-btn-xs flex-1 justify-center"
             >
               ถัดไป ▶
             </button>
@@ -636,12 +641,12 @@ export default function RoomMarkerVisualization({ selectedMarkerId, onMarkerSele
       )}
 
       {/* Instructions */}
-      <div className="absolute top-3 right-3 bg-white/95 backdrop-blur rounded-lg px-3 py-2 text-xs text-gray-600 shadow-lg">
+      <div className="brutal-card absolute top-3 right-3 px-3 py-2 text-xs font-bold uppercase tracking-[0.14em] text-[color:var(--text-secondary)]">
         🖱️ ลากเพื่อหมุน • Scroll เพื่อซูม
       </div>
 
       {/* Room dimensions */}
-      <div className="absolute top-3 left-3 bg-white/95 backdrop-blur rounded-lg px-3 py-2 text-xs text-gray-600 shadow-lg">
+      <div className="brutal-card absolute top-3 left-3 px-3 py-2 text-xs font-bold uppercase tracking-[0.14em] text-[color:var(--text-secondary)]">
         📐 ห้องจำลอง 4×3×2.5 เมตร
       </div>
     </div>

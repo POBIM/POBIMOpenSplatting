@@ -1,5 +1,22 @@
-import { Camera, Compass, RefreshCcw, ZoomIn, Move, Plane, Target, Zap } from 'lucide-react';
-import { OrbitState, ProjectionMode, CameraMode, BulletSettings, GameModeSettings } from './useSplatScene';
+import {
+  Camera,
+  Compass,
+  Move,
+  Plane,
+  RefreshCcw,
+  Target,
+  Zap,
+  ZoomIn,
+} from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+
+import {
+  BulletSettings,
+  CameraMode,
+  GameModeSettings,
+  OrbitState,
+  ProjectionMode,
+} from './useSplatScene';
 
 interface CameraControlPanelProps {
   orbitState: OrbitState;
@@ -28,10 +45,11 @@ interface CameraControlPanelProps {
   className?: string;
 }
 
-const sliderBaseClass =
-  'flex-1 h-1.5 appearance-none rounded-full bg-gray-200 transition-[background-color]';
+const sliderClass = 'h-1.5 flex-1 appearance-none border-2 border-[var(--ink)] bg-[var(--paper-muted)]';
+const labelClass = 'flex items-center justify-between gap-2 text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--text-secondary)]';
+const sectionTitleClass = 'mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-[var(--text-secondary)]';
 
-const cameraModeOptions: Array<{ id: CameraMode; label: string; icon: any }> = [
+const cameraModeOptions: Array<{ id: CameraMode; label: string; icon: LucideIcon }> = [
   { id: 'orbit', label: 'Orbit', icon: Compass },
   { id: 'walk', label: 'Walk', icon: Move },
   { id: 'fly', label: 'Fly', icon: Plane },
@@ -42,6 +60,111 @@ const projectionOptions: Array<{ id: ProjectionMode; label: string }> = [
   { id: 'perspective', label: 'Perspective' },
   { id: 'orthographic', label: 'Orthographic' },
 ];
+
+type SliderFieldProps = {
+  icon: LucideIcon;
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  onChange: (value: number) => void;
+  suffix: string;
+  disabled?: boolean;
+};
+
+function SliderField({
+  icon: Icon,
+  label,
+  value,
+  min,
+  max,
+  step,
+  onChange,
+  suffix,
+  disabled,
+}: SliderFieldProps) {
+  const formatted = Number.isFinite(value) ? value.toFixed(step < 1 ? 2 : 0) : '0';
+
+  return (
+    <div className="space-y-1.5">
+      <div className={labelClass}>
+        <span className="flex items-center gap-2">
+          <Icon className="h-3.5 w-3.5 text-[var(--ink)]" />
+          {label}
+        </span>
+        <span className="font-mono text-[var(--ink)]">
+          {formatted}
+          {suffix}
+        </span>
+      </div>
+      <div className="flex items-center gap-2">
+        <input
+          type="range"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          onChange={(event) => onChange(Number(event.target.value))}
+          disabled={disabled}
+          className={`${sliderClass} ${disabled ? 'opacity-50' : ''}`}
+          style={{ accentColor: 'var(--ink)' }}
+        />
+        <input
+          type="number"
+          min={min}
+          max={max}
+          step={step}
+          value={Number.isFinite(value) ? value : 0}
+          onChange={(event) => {
+            const next = Number(event.target.value);
+            if (Number.isFinite(next)) {
+              onChange(next);
+            }
+          }}
+          disabled={disabled}
+          className={`brutal-input w-20 px-2 py-1 text-xs ${disabled ? 'opacity-60' : ''}`}
+        />
+      </div>
+    </div>
+  );
+}
+
+type ToggleCardProps = {
+  title: string;
+  enabled: boolean;
+  onChange: (next: boolean) => void;
+  description: string;
+  icon: LucideIcon;
+};
+
+function ToggleCard({ title, enabled, onChange, description, icon: Icon }: ToggleCardProps) {
+  return (
+    <div className="brutal-card-muted p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.16em] text-[var(--text-secondary)]">
+            <Icon className="h-3.5 w-3.5 text-[var(--ink)]" />
+            {title}
+          </p>
+          <p className="mt-1 text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--text-muted)]">
+            {description}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => onChange(!enabled)}
+          className={`flex h-7 min-w-[3.2rem] items-center border-2 border-[var(--ink)] px-1 transition-colors ${
+            enabled ? 'bg-[var(--ink)] justify-end' : 'bg-[var(--paper-card)] justify-start'
+          }`}
+          aria-pressed={enabled}
+        >
+          <span className="h-4 w-4 border-2 border-[var(--ink)] bg-[var(--paper-card)]" />
+        </button>
+      </div>
+    </div>
+  );
+}
 
 export function CameraControlPanel({
   orbitState,
@@ -71,137 +194,34 @@ export function CameraControlPanel({
 }: CameraControlPanelProps) {
   const containerClass = className ?? 'absolute right-5 top-24 z-40';
 
-  const renderOrbitSlider = (
-    label: string,
-    value: number,
-    min: number,
-    max: number,
-    step: number,
-    onChange: (value: number) => void,
-    suffix: string,
-  ) => (
-    <div className="space-y-2">
-      <label className="flex items-center justify-between text-[11px] font-medium uppercase tracking-wide text-gray-600">
-        <span className="flex items-center gap-2">
-          <Compass className="h-4 w-4 text-gray-500" />
-          {label}
-        </span>
-        <span className="font-mono text-gray-700">
-          {Number.isFinite(value) ? value.toFixed(step < 1 ? 2 : 0) : '0'}
-          {suffix}
-        </span>
-      </label>
-      <div className="flex items-center gap-2">
-        <input
-          type="range"
-          min={min}
-          max={max}
-          step={step}
-          value={value}
-          onChange={(event) => onChange(Number(event.target.value))}
-          className={sliderBaseClass}
-          style={{ accentColor: '#111827' }}
-        />
-        <input
-          type="number"
-          min={min}
-          max={max}
-          step={step}
-          value={Number.isFinite(value) ? value : 0}
-          onChange={(event) => {
-            const next = Number(event.target.value);
-            if (Number.isFinite(next)) {
-              onChange(next);
-            }
-          }}
-          className="w-20 rounded-lg border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900 focus:outline-none focus-visible:ring-1 focus-visible:ring-gray-400"
-        />
-      </div>
-    </div>
-  );
-
-  const renderProjectionSlider = (
-    label: string,
-    value: number,
-    min: number,
-    max: number,
-    step: number,
-    onChange: (value: number) => void,
-    suffix: string,
-    disabled: boolean,
-  ) => (
-    <div className="space-y-2">
-      <label className="flex items-center justify-between text-[11px] font-medium uppercase tracking-wide text-gray-600">
-        <span className="flex items-center gap-2">
-          <ZoomIn className="h-4 w-4 text-gray-500" />
-          {label}
-        </span>
-        <span className="font-mono text-gray-700">
-          {Number.isFinite(value) ? value.toFixed(step < 1 ? 2 : 0) : '0'}
-          {suffix}
-        </span>
-      </label>
-      <div className="flex items-center gap-2">
-        <input
-          type="range"
-          min={min}
-          max={max}
-          step={step}
-          value={value}
-          onChange={(event) => onChange(Number(event.target.value))}
-          disabled={disabled}
-          className={`${sliderBaseClass} ${disabled ? 'opacity-50' : ''}`}
-          style={{ accentColor: '#111827' }}
-        />
-        <input
-          type="number"
-          min={min}
-          max={max}
-          step={step}
-          value={Number.isFinite(value) ? value : 0}
-          onChange={(event) => {
-            const next = Number(event.target.value);
-            if (Number.isFinite(next)) {
-              onChange(next);
-            }
-          }}
-          disabled={disabled}
-          className={`w-20 rounded-lg border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900 focus:outline-none focus-visible:ring-1 focus-visible:ring-gray-400 ${
-            disabled ? 'opacity-60' : ''
-          }`}
-        />
-      </div>
-    </div>
-  );
-
   return (
     <div
-      className={`${containerClass} w-80 max-h-[80vh] overflow-y-auto rounded-2xl border border-gray-200 bg-white p-5 shadow-2xl`}
+      className={`${containerClass} brutal-card brutal-scroll w-80 max-h-[80vh] overflow-y-auto p-4`}
       data-orbit-block="true"
     >
-      <h3 className="mb-5 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-gray-600">
-        <Camera className="h-4 w-4 text-gray-500" />
-        Camera
-      </h3>
+      <div className="mb-4">
+        <p className="brutal-eyebrow mb-2">Camera System</p>
+        <h3 className="flex items-center gap-2 text-sm font-black uppercase tracking-[0.12em] text-[var(--ink)]">
+          <Camera className="h-4 w-4" />
+          Camera
+        </h3>
+      </div>
 
-      <div className="mb-6 space-y-3">
-        <h4 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-gray-600">
+      <div className="mb-4 border-t-[var(--border-w)] border-[var(--ink)] pt-4">
+        <h4 className={sectionTitleClass}>
           <Camera className="h-4 w-4" />
           Control Mode
         </h4>
-        <div className="flex gap-2">
+        <div className="grid grid-cols-2 gap-2">
           {cameraModeOptions.map((option) => {
             const active = cameraMode === option.id;
             const Icon = option.icon;
+
             return (
               <button
                 key={option.id}
                 type="button"
-                className={`flex-1 flex items-center justify-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-medium transition-colors ${
-                  active
-                    ? 'border-black bg-black text-white shadow'
-                    : 'border-gray-200 bg-white text-gray-600 hover:border-black hover:text-black'
-                }`}
+                className={`brutal-btn brutal-btn-xs justify-center px-2 ${active ? 'brutal-btn-primary' : ''}`}
                 onClick={() => onCameraModeChange(option.id)}
                 aria-pressed={active}
               >
@@ -211,366 +231,253 @@ export function CameraControlPanel({
             );
           })}
         </div>
+
         {cameraMode !== 'orbit' && (
           <>
-            <div className="rounded-lg bg-blue-50 p-3 text-xs text-blue-900">
-              <p className="font-medium">
-                {cameraMode === 'walk' ? 'Walk Mode (FPS + Gravity)' :
-                 cameraMode === 'game' ? 'Game Mode (FPS + Shooting)' :
-                 'Fly Mode (Free Flight)'}
+            <div className="brutal-card-muted mt-3 p-3">
+              <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-[var(--ink)]">
+                {cameraMode === 'walk'
+                  ? 'Walk Mode'
+                  : cameraMode === 'game'
+                    ? 'Game Mode'
+                    : 'Fly Mode'}
               </p>
-              <ul className="mt-1 space-y-0.5 text-blue-800">
-                <li>• Click point to spawn</li>
-                <li>• WASD / Arrows: Move</li>
-                <li>• Mouse: Look around</li>
+              <ul className="mt-2 space-y-1 text-[10px] font-medium uppercase tracking-[0.08em] text-[var(--text-secondary)]">
+                <li>• Click Point To Spawn</li>
+                <li>• WASD / Arrows Move</li>
+                <li>• Mouse Look Around</li>
                 {cameraMode === 'walk' || (cameraMode === 'game' && !gameModeSettings.flyModeEnabled) ? (
                   <>
-                    <li>• Space: Jump</li>
-                    {cameraMode === 'game' && <li>• Left Click: Shoot 🔫</li>}
-                    <li>• Gravity + Collision: ON</li>
+                    <li>• Space Jump</li>
+                    {cameraMode === 'game' && <li>• Left Click Shoot</li>}
+                    <li>• Gravity + Collision On</li>
                   </>
                 ) : (
                   <>
-                    <li>• Q/E: Down/Up</li>
-                    {cameraMode === 'game' && <li>• Left Click: Shoot 🔫</li>}
-                    <li>• Collision: OFF</li>
+                    <li>• Q/E Down / Up</li>
+                    {cameraMode === 'game' && <li>• Left Click Shoot</li>}
+                    <li>• Collision Off</li>
                   </>
                 )}
               </ul>
             </div>
-            <div className="space-y-2">
-              <label className="flex items-center justify-between text-[11px] font-medium uppercase tracking-wide text-gray-600">
-                <span className="flex items-center gap-2">
-                  <Move className="h-4 w-4 text-gray-500" />
-                  Movement Speed
-                </span>
-                <span className="font-mono text-gray-700">
-                  {moveSpeed.toFixed(1)} m/s
-                </span>
-              </label>
-              <div className="flex items-center gap-2">
-                <input
-                  type="range"
-                  min={0.1}
-                  max={20}
-                  step={0.1}
-                  value={moveSpeed}
-                  onChange={(event) => onMoveSpeedChange(Number(event.target.value))}
-                  className={sliderBaseClass}
-                  style={{ accentColor: '#111827' }}
+
+            <div className="mt-3 space-y-3">
+              <SliderField
+                icon={Move}
+                label="Movement Speed"
+                value={moveSpeed}
+                min={0.1}
+                max={20}
+                step={0.1}
+                onChange={onMoveSpeedChange}
+                suffix=" m/s"
+              />
+              <SliderField
+                icon={Camera}
+                label="Camera Height"
+                value={cameraHeight}
+                min={0.05}
+                max={3}
+                step={0.05}
+                onChange={onCameraHeightChange}
+                suffix=" m"
+              />
+              {(cameraMode === 'walk' || cameraMode === 'game') && (
+                <SliderField
+                  icon={Move}
+                  label="Jump Height"
+                  value={jumpHeight}
+                  min={1}
+                  max={15}
+                  step={0.5}
+                  onChange={onJumpHeightChange}
+                  suffix=" m/s"
                 />
-                <input
-                  type="number"
-                  min={0.1}
-                  max={20}
-                  step={0.1}
-                  value={moveSpeed}
-                  onChange={(event) => {
-                    const next = Number(event.target.value);
-                    if (Number.isFinite(next)) {
-                      onMoveSpeedChange(next);
-                    }
-                  }}
-                  className="w-20 rounded-lg border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900 focus:outline-none focus-visible:ring-1 focus-visible:ring-gray-400"
-                />
-              </div>
+              )}
             </div>
-            <div className="space-y-2">
-              <label className="flex items-center justify-between text-[11px] font-medium uppercase tracking-wide text-gray-600">
-                <span className="flex items-center gap-2">
-                  <Camera className="h-4 w-4 text-gray-500" />
-                  Camera Height
-                </span>
-                <span className="font-mono text-gray-700">
-                  {cameraHeight.toFixed(2)} m
-                </span>
-              </label>
-              <div className="flex items-center gap-2">
-                <input
-                  type="range"
-                  min={0.05}
-                  max={3.0}
-                  step={0.05}
-                  value={cameraHeight}
-                  onChange={(event) => onCameraHeightChange(Number(event.target.value))}
-                  className={sliderBaseClass}
-                  style={{ accentColor: '#111827' }}
-                />
-                <input
-                  type="number"
-                  min={0.05}
-                  max={3.0}
-                  step={0.05}
-                  value={cameraHeight}
-                  onChange={(event) => {
-                    const next = Number(event.target.value);
-                    if (Number.isFinite(next)) {
-                      onCameraHeightChange(next);
-                    }
-                  }}
-                  className="w-20 rounded-lg border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900 focus:outline-none focus-visible:ring-1 focus-visible:ring-gray-400"
-                />
-              </div>
-            </div>
-            {(cameraMode === 'walk' || cameraMode === 'game') && (
-              <div className="space-y-2">
-                <label className="flex items-center justify-between text-[11px] font-medium uppercase tracking-wide text-gray-600">
-                  <span className="flex items-center gap-2">
-                    <Move className="h-4 w-4 text-gray-500" />
-                    Jump Height
-                  </span>
-                  <span className="font-mono text-gray-700">
-                    {jumpHeight.toFixed(1)} m/s
-                  </span>
-                </label>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="range"
-                    min={1.0}
-                    max={15.0}
-                    step={0.5}
-                    value={jumpHeight}
-                    onChange={(event) => onJumpHeightChange(Number(event.target.value))}
-                    className={sliderBaseClass}
-                    style={{ accentColor: '#111827' }}
-                  />
-                  <input
-                    type="number"
-                    min={1.0}
-                    max={15.0}
-                    step={0.5}
-                    value={jumpHeight}
-                    onChange={(event) => {
-                      const next = Number(event.target.value);
-                      if (Number.isFinite(next)) {
-                        onJumpHeightChange(next);
-                      }
-                    }}
-                    className="w-20 rounded-lg border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900 focus:outline-none focus-visible:ring-1 focus-visible:ring-gray-400"
-                  />
-                </div>
-              </div>
-            )}
+
             {cameraMode === 'game' && (
-              <>
-                <div className="mt-4 border-t border-gray-200 pt-4">
-                  <h5 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-gray-600 mb-3">
-                    <Target className="h-4 w-4" />
-                    Game Mode Settings
-                  </h5>
-                </div>
-                <div className="space-y-2">
-                  <label className="flex items-center justify-between text-[11px] font-medium uppercase tracking-wide text-gray-600">
-                    <span className="flex items-center gap-2">
-                      <Plane className="h-4 w-4 text-gray-500" />
-                      Enable Fly Mode
-                    </span>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={gameModeSettings.flyModeEnabled}
-                        onChange={(e) => onGameModeSettingsChange({ flyModeEnabled: e.target.checked })}
-                        className="sr-only peer"
-                      />
-                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-black/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-black"></div>
-                    </label>
-                  </label>
-                  <p className="text-[10px] text-gray-500 mt-1">
-                    เปิดเพื่อบินได้อิสระ (ปิด Gravity + Collision)
-                  </p>
-                </div>
-                <div className="mt-4 border-t border-gray-200 pt-4">
-                  <h5 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-gray-600 mb-3">
+              <div className="mt-4 space-y-4 border-t-[var(--border-w)] border-[var(--ink)] pt-4">
+                <h5 className={sectionTitleClass}>
+                  <Target className="h-4 w-4" />
+                  Game Mode Settings
+                </h5>
+
+                <ToggleCard
+                  title="Enable Fly Mode"
+                  enabled={gameModeSettings.flyModeEnabled}
+                  onChange={(flyModeEnabled) => onGameModeSettingsChange({ flyModeEnabled })}
+                  description="Toggle Gravity And Collision"
+                  icon={Plane}
+                />
+
+                <div className="border-t-[var(--border-w)] border-[var(--ink)] pt-4">
+                  <h5 className={sectionTitleClass}>
                     <Zap className="h-4 w-4" />
                     Bullet Settings
                   </h5>
-                </div>
-                <div className="space-y-2">
-                  <label className="flex items-center justify-between text-[11px] font-medium uppercase tracking-wide text-gray-600">
-                    <span>Bullet Speed</span>
-                    <span className="font-mono text-gray-700">
-                      {bulletSettings.speed.toFixed(2)} m/s
-                    </span>
-                  </label>
-                  <input
-                    type="range"
-                    min={0.1}
-                    max={100}
-                    step={0.1}
-                    value={bulletSettings.speed}
-                    onChange={(event) => onBulletSettingsChange({ speed: Number(event.target.value) })}
-                    className={sliderBaseClass}
-                    style={{ accentColor: '#111827' }}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="flex items-center justify-between text-[11px] font-medium uppercase tracking-wide text-gray-600">
-                    <span>Bullet Size</span>
-                    <span className="font-mono text-gray-700">
-                      {bulletSettings.size.toFixed(3)} m
-                    </span>
-                  </label>
-                  <input
-                    type="range"
-                    min={0.001}
-                    max={0.5}
-                    step={0.001}
-                    value={bulletSettings.size}
-                    onChange={(event) => onBulletSettingsChange({ size: Number(event.target.value) })}
-                    className={sliderBaseClass}
-                    style={{ accentColor: '#111827' }}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="flex items-center justify-between text-[11px] font-medium uppercase tracking-wide text-gray-600">
-                    <span>Bullet Gravity</span>
-                    <span className="font-mono text-gray-700">
-                      {bulletSettings.gravity.toFixed(2)} m/s²
-                    </span>
-                  </label>
-                  <input
-                    type="range"
-                    min={0}
-                    max={20}
-                    step={0.1}
-                    value={bulletSettings.gravity}
-                    onChange={(event) => onBulletSettingsChange({ gravity: Number(event.target.value) })}
-                    className={sliderBaseClass}
-                    style={{ accentColor: '#111827' }}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="flex items-center justify-between text-[11px] font-medium uppercase tracking-wide text-gray-600">
-                    <span>Bullet Lifetime</span>
-                    <span className="font-mono text-gray-700">
-                      {bulletSettings.lifetime.toFixed(1)} s
-                    </span>
-                  </label>
-                  <input
-                    type="range"
-                    min={0.5}
-                    max={30}
-                    step={0.5}
-                    value={bulletSettings.lifetime}
-                    onChange={(event) => onBulletSettingsChange({ lifetime: Number(event.target.value) })}
-                    className={sliderBaseClass}
-                    style={{ accentColor: '#111827' }}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="flex items-center justify-between text-[11px] font-medium uppercase tracking-wide text-gray-600">
-                    <span>Bounciness 🏀</span>
-                    <span className="font-mono text-gray-700">
-                      {(bulletSettings.bounciness * 100).toFixed(1)}%
-                    </span>
-                  </label>
-                  <input
-                    type="range"
-                    min={0}
-                    max={1}
-                    step={0.001}
-                    value={bulletSettings.bounciness}
-                    onChange={(event) => onBulletSettingsChange({ bounciness: Number(event.target.value) })}
-                    className={sliderBaseClass}
-                    style={{ accentColor: '#111827' }}
-                  />
-                  <p className="text-[10px] text-gray-500 mt-1">
-                    0% = ไม่เด้ง, 100% = เด้งสมบูรณ์
-                  </p>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-[11px] font-medium uppercase tracking-wide text-gray-600 block mb-1">
-                    Bullet Color
-                  </label>
-                  <div className="flex gap-2">
-                    <div className="flex-1">
-                      <label className="text-[10px] text-gray-500 block mb-1">R</label>
+                  <div className="space-y-3">
+                    <SliderField
+                      icon={Zap}
+                      label="Bullet Speed"
+                      value={bulletSettings.speed}
+                      min={0.1}
+                      max={100}
+                      step={0.1}
+                      onChange={(speed) => onBulletSettingsChange({ speed })}
+                      suffix=" m/s"
+                    />
+                    <SliderField
+                      icon={Zap}
+                      label="Bullet Size"
+                      value={bulletSettings.size}
+                      min={0.001}
+                      max={0.5}
+                      step={0.001}
+                      onChange={(size) => onBulletSettingsChange({ size })}
+                      suffix=" m"
+                    />
+                    <SliderField
+                      icon={Zap}
+                      label="Bullet Gravity"
+                      value={bulletSettings.gravity}
+                      min={0}
+                      max={20}
+                      step={0.1}
+                      onChange={(gravity) => onBulletSettingsChange({ gravity })}
+                      suffix=" m/s²"
+                    />
+                    <SliderField
+                      icon={Zap}
+                      label="Bullet Lifetime"
+                      value={bulletSettings.lifetime}
+                      min={0.5}
+                      max={30}
+                      step={0.5}
+                      onChange={(lifetime) => onBulletSettingsChange({ lifetime })}
+                      suffix=" s"
+                    />
+                    <div className="space-y-1.5">
+                      <div className={labelClass}>
+                        <span>Bounciness</span>
+                        <span className="font-mono text-[var(--ink)]">
+                          {(bulletSettings.bounciness * 100).toFixed(1)}%
+                        </span>
+                      </div>
                       <input
                         type="range"
                         min={0}
                         max={1}
-                        step={0.1}
-                        value={bulletSettings.color.r}
-                        onChange={(event) => onBulletSettingsChange({
-                          color: { ...bulletSettings.color, r: Number(event.target.value) }
-                        })}
-                        className="w-full h-1 appearance-none rounded-full bg-red-200"
-                        style={{ accentColor: '#ef4444' }}
+                        step={0.001}
+                        value={bulletSettings.bounciness}
+                        onChange={(event) =>
+                          onBulletSettingsChange({ bounciness: Number(event.target.value) })
+                        }
+                        className={sliderClass}
+                        style={{ accentColor: 'var(--ink)' }}
                       />
                     </div>
-                    <div className="flex-1">
-                      <label className="text-[10px] text-gray-500 block mb-1">G</label>
-                      <input
-                        type="range"
-                        min={0}
-                        max={1}
-                        step={0.1}
-                        value={bulletSettings.color.g}
-                        onChange={(event) => onBulletSettingsChange({
-                          color: { ...bulletSettings.color, g: Number(event.target.value) }
-                        })}
-                        className="w-full h-1 appearance-none rounded-full bg-green-200"
-                        style={{ accentColor: '#22c55e' }}
-                      />
-                    </div>
-                    <div className="flex-1">
-                      <label className="text-[10px] text-gray-500 block mb-1">B</label>
-                      <input
-                        type="range"
-                        min={0}
-                        max={1}
-                        step={0.1}
-                        value={bulletSettings.color.b}
-                        onChange={(event) => onBulletSettingsChange({
-                          color: { ...bulletSettings.color, b: Number(event.target.value) }
-                        })}
-                        className="w-full h-1 appearance-none rounded-full bg-blue-200"
-                        style={{ accentColor: '#3b82f6' }}
+                    <div className="space-y-2">
+                      <div className="text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--text-secondary)]">
+                        Bullet Color
+                      </div>
+                      <div className="grid grid-cols-3 gap-2">
+                        {(['r', 'g', 'b'] as const).map((channel) => (
+                          <div key={channel} className="space-y-1">
+                            <div className="block text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-muted)]">
+                              {channel}
+                            </div>
+                            <input
+                              type="range"
+                              min={0}
+                              max={1}
+                              step={0.1}
+                              value={bulletSettings.color[channel]}
+                              onChange={(event) =>
+                                onBulletSettingsChange({
+                                  color: {
+                                    ...bulletSettings.color,
+                                    [channel]: Number(event.target.value),
+                                  },
+                                })
+                              }
+                              className={sliderClass}
+                              style={{ accentColor: 'var(--ink)' }}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                      <div
+                        className="h-8 border-2 border-[var(--ink)]"
+                        style={{
+                          backgroundColor: `rgb(${bulletSettings.color.r * 255}, ${bulletSettings.color.g * 255}, ${bulletSettings.color.b * 255})`,
+                        }}
                       />
                     </div>
                   </div>
-                  <div
-                    className="w-full h-8 rounded-lg border border-gray-300 mt-2"
-                    style={{
-                      backgroundColor: `rgb(${bulletSettings.color.r * 255}, ${bulletSettings.color.g * 255}, ${bulletSettings.color.b * 255})`
-                    }}
-                  />
                 </div>
-              </>
+              </div>
             )}
           </>
         )}
       </div>
 
       {cameraMode === 'orbit' && (
-        <div className="mb-6 space-y-3">
-          <h4 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-gray-600">
+        <div className="mb-4 border-t-[var(--border-w)] border-[var(--ink)] pt-4">
+          <h4 className={sectionTitleClass}>
             <Compass className="h-4 w-4" />
             Orbit
           </h4>
-          {renderOrbitSlider('Azimuth', orbitState.azimuth, -180, 180, 1, onAzimuthChange, '°')}
-          {renderOrbitSlider('Elevation', orbitState.elevation, -89, 89, 1, onElevationChange, '°')}
-          {renderOrbitSlider('Distance', orbitState.distance, 0.25, 100, 0.25, onDistanceChange, 'm')}
+          <div className="space-y-3">
+            <SliderField
+              icon={Compass}
+              label="Azimuth"
+              value={orbitState.azimuth}
+              min={-180}
+              max={180}
+              step={1}
+              onChange={onAzimuthChange}
+              suffix="°"
+            />
+            <SliderField
+              icon={Compass}
+              label="Elevation"
+              value={orbitState.elevation}
+              min={-89}
+              max={89}
+              step={1}
+              onChange={onElevationChange}
+              suffix="°"
+            />
+            <SliderField
+              icon={Compass}
+              label="Distance"
+              value={orbitState.distance}
+              min={0.25}
+              max={100}
+              step={0.25}
+              onChange={onDistanceChange}
+              suffix=" m"
+            />
+          </div>
         </div>
       )}
 
-      <div className="mb-6 space-y-3">
-        <h4 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-gray-600">
+      <div className="mb-4 border-t-[var(--border-w)] border-[var(--ink)] pt-4">
+        <h4 className={sectionTitleClass}>
           <ZoomIn className="h-4 w-4" />
           Projection
         </h4>
-        <div className="flex gap-2">
+        <div className="grid grid-cols-2 gap-2">
           {projectionOptions.map((option) => {
             const active = projectionMode === option.id;
+
             return (
               <button
                 key={option.id}
                 type="button"
-                className={`flex-1 rounded-xl border px-3 py-2 text-xs font-medium transition-colors ${
-                  active
-                    ? 'border-black bg-black text-white shadow'
-                    : 'border-gray-200 bg-white text-gray-600 hover:border-black hover:text-black'
-                }`}
+                className={`brutal-btn brutal-btn-xs justify-center px-2 ${active ? 'brutal-btn-primary' : ''}`}
                 onClick={() => onProjectionChange(option.id)}
                 aria-pressed={active}
               >
@@ -579,37 +486,36 @@ export function CameraControlPanel({
             );
           })}
         </div>
-        {renderProjectionSlider(
-          'Field of View',
-          fieldOfView,
-          20,
-          110,
-          1,
-          onFieldOfViewChange,
-          '°',
-          projectionMode !== 'perspective',
-        )}
-        {renderProjectionSlider(
-          'Ortho Size',
-          orthoHeight,
-          0.5,
-          50,
-          0.5,
-          onOrthoHeightChange,
-          '',
-          projectionMode !== 'orthographic',
-        )}
+        <div className="mt-3 space-y-3">
+          <SliderField
+            icon={ZoomIn}
+            label="Field Of View"
+            value={fieldOfView}
+            min={20}
+            max={110}
+            step={1}
+            onChange={onFieldOfViewChange}
+            suffix="°"
+            disabled={projectionMode !== 'perspective'}
+          />
+          <SliderField
+            icon={ZoomIn}
+            label="Ortho Size"
+            value={orthoHeight}
+            min={0.5}
+            max={50}
+            step={0.5}
+            onChange={onOrthoHeightChange}
+            suffix=""
+            disabled={projectionMode !== 'orthographic'}
+          />
+        </div>
       </div>
 
-      <button
-        type="button"
-        onClick={onReset}
-        className="w-full inline-flex items-center justify-center gap-2 rounded-full border border-gray-300 bg-gray-100 px-4 py-3 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-200"
-      >
+      <button type="button" onClick={onReset} className="brutal-btn brutal-btn-primary w-full justify-center py-2">
         <RefreshCcw className="h-4 w-4" />
         Reset Camera
       </button>
     </div>
   );
 }
-

@@ -11,7 +11,7 @@ import {
   Trash2,
   Download,
   Info,
-  ImageIcon
+  ImageIcon,
 } from 'lucide-react';
 import { Project } from '@/lib/api';
 
@@ -25,28 +25,36 @@ export default function ProjectCard({ project, onDelete, onDownload }: ProjectCa
   const [imageError, setImageError] = useState(false);
   const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
   const thumbnailUrl = `${API_BASE_URL}/api/project/${project.id}/thumbnail`;
+  const errorMessage = (project as unknown as { error?: string }).error;
 
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case 'uploaded':
-        return <Clock className="h-5 w-5 text-gray-500" />;
+  const statusIcon = (() => {
+    switch (project.status) {
+      case 'uploading':
+      case 'pending':
+        return <Clock className="h-4 w-4" style={{ color: 'var(--text-muted)' }} />;
       case 'processing':
-        return <Loader className="h-5 w-5 animate-spin" style={{ color: 'var(--processing-text)' }} />;
+        return <Loader className="h-4 w-4 animate-spin" style={{ color: 'var(--processing-icon)' }} />;
       case 'completed':
-        return <CheckCircle className="h-5 w-5" style={{ color: 'var(--success-icon)' }} />;
+        return <CheckCircle className="h-4 w-4" style={{ color: 'var(--success-icon)' }} />;
       case 'failed':
-        return <AlertCircle className="h-5 w-5" style={{ color: 'var(--error-icon)' }} />;
+        return <AlertCircle className="h-4 w-4" style={{ color: 'var(--error-icon)' }} />;
       case 'cancelled':
-        return <AlertCircle className="h-5 w-5" style={{ color: 'var(--warning-text)' }} />;
+        return <AlertCircle className="h-4 w-4" style={{ color: 'var(--warning-icon)' }} />;
       default:
         return null;
     }
-  };
+  })();
+
+  const statusClass =
+    project.status === 'processing' ? 'status-processing' :
+    project.status === 'completed' ? 'status-completed' :
+    project.status === 'failed' ? 'status-failed' :
+    project.status === 'cancelled' ? 'status-cancelled' :
+    'status-badge';
 
   return (
-    <div className="card-hover overflow-hidden">
-      {/* Thumbnail Section */}
-      <div className="relative w-full h-48 bg-gray-100">
+    <div className="brutal-card-hover overflow-hidden flex flex-col">
+      <div className="relative w-full aspect-[16/10] bg-[color:var(--paper-muted)]" style={{ borderBottom: 'var(--border-w) solid var(--ink)' }}>
         {!imageError ? (
           <img
             src={thumbnailUrl}
@@ -55,88 +63,93 @@ export default function ProjectCard({ project, onDelete, onDownload }: ProjectCa
             onError={() => setImageError(true)}
           />
         ) : (
-          <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-gray-100 to-gray-200">
-            <ImageIcon className="h-16 w-16 text-gray-400" />
+          <div className="w-full h-full flex items-center justify-center" style={{ background: 'var(--paper-muted-2)' }}>
+            <ImageIcon className="h-10 w-10" style={{ color: 'var(--text-muted)' }} />
           </div>
         )}
 
-        {/* Status Badge Overlay */}
-        <div className="absolute top-3 right-3">
-          <span className={`status-badge ${
-            project.status === 'processing' ? 'status-processing' :
-            project.status === 'completed' ? 'status-completed' :
-            project.status === 'failed' ? 'status-failed' :
-            project.status === 'cancelled' ? 'status-cancelled' :
-            'bg-gray-100 text-gray-600'
-          }`}>
+        <div className="absolute top-2 right-2">
+          <span className={statusClass}>
             {project.status.toUpperCase()}
           </span>
         </div>
 
-        {/* Progress Bar for Processing */}
         {project.status === 'processing' && (
-          <div className="absolute bottom-0 left-0 right-0 bg-black/50 backdrop-blur-sm p-2">
-            <div className="w-full bg-gray-200/30 rounded-full h-1.5">
+          <div
+            className="absolute bottom-0 left-0 right-0 px-2 py-1.5"
+            style={{ background: 'var(--ink)', color: '#fff', borderTop: 'var(--border-w) solid var(--ink)' }}
+          >
+            <div className="w-full h-1" style={{ background: 'var(--ink-600)' }}>
               <div
-                className="bg-white h-1.5 rounded-full transition-all duration-300"
-                style={{ width: `${project.progress}%` }}
+                className="h-1 transition-all duration-300"
+                style={{ width: `${project.progress}%`, background: '#fff' }}
               />
             </div>
-            <p className="text-xs text-white mt-1">Processing: {project.progress}%</p>
+            <p className="text-[10px] font-bold uppercase tracking-wider mt-0.5">
+              {project.progress}% Processing
+            </p>
           </div>
         )}
       </div>
 
-      {/* Content Section */}
-      <div className="p-5">
-        {/* Header */}
-        <div className="flex items-start gap-3 mb-3">
-          {getStatusIcon(project.status)}
+      <div className="p-3 flex flex-col gap-2 flex-1">
+        <div className="flex items-start gap-2">
+          <span className="mt-0.5">{statusIcon}</span>
           <div className="flex-1 min-w-0">
-            <h3 className="text-lg font-semibold text-black truncate">
+            <h3 className="text-sm font-black uppercase tracking-tight text-[color:var(--ink)] truncate">
               {project.metadata?.name || project.id}
             </h3>
             {project.metadata?.description && (
-              <p className="text-sm text-gray-600 line-clamp-2 mt-1">
+              <p className="text-xs text-[color:var(--text-secondary)] line-clamp-2 mt-0.5 font-medium">
                 {project.metadata.description}
               </p>
             )}
-            <div className="flex items-center gap-3 mt-2 text-xs text-gray-500">
-              <span className="flex items-center gap-1">
-                <Clock className="h-3 w-3" />
-                {new Date(project.created_at).toLocaleDateString('th-TH', {
-                  year: 'numeric',
-                  month: 'short',
-                  day: 'numeric',
-                  hour: '2-digit',
-                  minute: '2-digit'
-                })}
-              </span>
-              <span className="px-2 py-0.5 bg-gray-100 rounded-full">
-                {project.file_count} ไฟล์
-              </span>
-              <span className="px-2 py-0.5 bg-gray-100 rounded-full capitalize">
-                {project.input_type}
-              </span>
-            </div>
           </div>
         </div>
 
-        {/* Error Message */}
-        {(project as any).error && (
-          <div className="mb-3 p-2.5 bg-red-50 border border-red-200 rounded-lg">
-            <p className="text-xs text-red-800">{(project as any).error}</p>
+        <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-[color:var(--text-muted)]">
+          <span className="inline-flex items-center gap-1">
+            <Clock className="h-2.5 w-2.5" />
+            {new Date(project.created_at).toLocaleDateString('th-TH', {
+              year: 'numeric',
+              month: 'short',
+              day: 'numeric',
+            })}
+          </span>
+          <span
+            className="px-1.5 py-0.5"
+            style={{ background: 'var(--paper-muted)', border: 'var(--border-w) solid var(--ink)' }}
+          >
+            {project.file_count} FILES
+          </span>
+          <span
+            className="px-1.5 py-0.5"
+            style={{ background: 'var(--paper-muted)', border: 'var(--border-w) solid var(--ink)' }}
+          >
+            {project.input_type}
+          </span>
+        </div>
+
+        {errorMessage && (
+          <div
+            className="px-2 py-1.5"
+            style={{ background: 'var(--error-bg)', border: 'var(--border-w) solid var(--ink)' }}
+          >
+            <p className="text-[11px] font-bold" style={{ color: 'var(--error-text)' }}>
+              {errorMessage}
+            </p>
           </div>
         )}
 
-        {/* Actions */}
-        <div className="flex flex-wrap gap-2 pt-3 border-t border-gray-100">
-          {/* View Details button for all projects */}
+        <div
+          className="mt-auto pt-2 flex flex-wrap gap-1.5"
+          style={{ borderTop: 'var(--border-w) solid var(--ink)' }}
+        >
           <Link
             href={`/processing/${project.id}`}
-            className="btn-secondary text-xs py-1.5 flex-1 min-w-[80px] justify-center"
+            className="brutal-btn brutal-btn-xs flex-1 min-w-[90px]"
           >
-            <Info className="h-3 w-3 mr-1.5" />
+            <Info className="h-3 w-3" />
             รายละเอียด
           </Link>
 
@@ -144,17 +157,17 @@ export default function ProjectCard({ project, onDelete, onDownload }: ProjectCa
             <>
               <Link
                 href={`/viewer?project=${project.id}`}
-                className="btn-primary text-xs py-1.5 flex-1 min-w-[80px] justify-center"
+                className="brutal-btn brutal-btn-primary brutal-btn-xs flex-1 min-w-[80px]"
               >
-                <Eye className="h-3 w-3 mr-1.5" />
+                <Eye className="h-3 w-3" />
                 ดู 3D
               </Link>
               <button
                 type="button"
                 onClick={() => onDownload(project.id, project.metadata?.name)}
-                className="btn-secondary text-xs py-1.5 flex-1 min-w-[80px] justify-center"
+                className="brutal-btn brutal-btn-xs flex-1 min-w-[90px]"
               >
-                <Download className="h-3 w-3 mr-1.5" />
+                <Download className="h-3 w-3" />
                 ดาวน์โหลด
               </button>
             </>
@@ -163,10 +176,10 @@ export default function ProjectCard({ project, onDelete, onDownload }: ProjectCa
           <button
             type="button"
             onClick={() => onDelete(project.id)}
-            className="inline-flex items-center justify-center px-3 py-1.5 border border-gray-200 text-xs font-medium rounded-xl text-gray-600 hover:text-red-600 hover:border-red-200 transition-colors"
+            className="brutal-btn brutal-btn-xs"
+            aria-label="Delete project"
           >
-            <Trash2 className="h-3 w-3 mr-1.5" />
-            ลบ
+            <Trash2 className="h-3 w-3" />
           </button>
         </div>
       </div>

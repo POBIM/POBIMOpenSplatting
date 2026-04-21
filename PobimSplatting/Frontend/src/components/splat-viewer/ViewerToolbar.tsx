@@ -10,13 +10,8 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import {
-  ReactNode,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 
 import type { BackgroundId } from './useSplatScene';
 
@@ -54,20 +49,19 @@ interface IconToggleProps {
 }
 
 const iconButtonBase =
-  'h-10 w-10 inline-flex items-center justify-center rounded-full border border-white/15 bg-slate-950/60 text-white transition-colors hover:bg-white/10 hover:border-white/30 focus:outline-none focus-visible:ring-1 focus-visible:ring-white/60';
-const iconButtonActive = 'bg-white text-slate-900 border-white shadow';
-
-const pillButtonBase =
-  'h-10 px-4 inline-flex items-center justify-center gap-2 rounded-full border border-white/15 bg-slate-950/60 text-white text-sm font-medium transition-colors hover:bg-white/10 hover:border-white/30 focus:outline-none focus-visible:ring-1 focus-visible:ring-white/60';
+  'flex h-9 w-9 items-center justify-center border-2 border-[var(--ink)] bg-[var(--paper-card)] text-[var(--ink)] transition-all hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[var(--shadow-md)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ink)]/20';
+const iconButtonActive = 'bg-[var(--ink)] text-[var(--text-on-ink)] shadow-[var(--shadow-inv)]';
+const pillButtonBase = 'brutal-btn brutal-btn-xs h-9 gap-1.5 px-3';
 
 function IconToggle({ icon: Icon, label, active, onClick }: IconToggleProps) {
   return (
     <button
       type="button"
-      className={`${iconButtonBase} ${active ? iconButtonActive : ''}`}
+      className={`${iconButtonBase} ${active ? iconButtonActive : 'shadow-[var(--shadow-sm)]'}`}
       onClick={onClick}
       aria-pressed={active}
       aria-label={label}
+      title={label}
     >
       <Icon className="h-4 w-4" />
       <span className="sr-only">{label}</span>
@@ -127,26 +121,25 @@ export function ViewerToolbar({
   );
 
   return (
-    <div className="absolute inset-x-4 top-4 z-40 flex items-start justify-between pointer-events-none">
-      <div className="flex items-center gap-2 pointer-events-auto" data-orbit-block="true">
-        <button
-          type="button"
-          className={pillButtonBase}
-          onClick={onBack}
-        >
-          <ArrowLeft className="h-4 w-4" />
+    <div className="pointer-events-none absolute inset-x-4 top-4 z-40 flex items-start justify-between gap-4">
+      <div
+        className="pointer-events-auto flex min-h-11 items-center gap-2 border-b-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-card)] px-3 py-2 shadow-[var(--shadow-sm)]"
+        data-orbit-block="true"
+      >
+        <button type="button" className={`${pillButtonBase} brutal-btn-primary`} onClick={onBack}>
+          <ArrowLeft className="h-3.5 w-3.5" />
           <span>Back</span>
         </button>
 
-        <IconToggle icon={RotateCcw} label="Reset view" onClick={onReset} />
+        <div className="h-6 w-[2px] bg-[var(--ink)]" />
 
+        <IconToggle icon={RotateCcw} label="Reset view" onClick={onReset} />
         <IconToggle
           icon={Move}
           label="Transform panel"
           onClick={onToggleTransform}
           active={showTransform}
         />
-
         <IconToggle
           icon={isFullscreen ? Minimize2 : Maximize2}
           label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
@@ -154,14 +147,17 @@ export function ViewerToolbar({
         />
       </div>
 
-      <div className="flex items-center gap-2 pointer-events-auto" data-orbit-block="true">
+      <div
+        className="pointer-events-auto flex min-h-11 items-center gap-2 border-b-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-card)] px-3 py-2 shadow-[var(--shadow-sm)]"
+        data-orbit-block="true"
+      >
         {splatCount !== null && (
-          <div className="px-3 h-9 inline-flex items-center rounded-full bg-slate-950/55 border border-white/10 text-xs font-medium text-white/80">
-            {splatCount.toLocaleString()} splats
-          </div>
+          <div className="brutal-badge font-mono">{splatCount.toLocaleString()} Splats</div>
         )}
 
         {rightExtra}
+
+        <div className="h-6 w-[2px] bg-[var(--ink)]" />
 
         <IconToggle
           icon={Axis3D}
@@ -180,23 +176,19 @@ export function ViewerToolbar({
         <div className="relative" ref={paletteAnchorRef} data-orbit-block="true">
           <button
             type="button"
-            className={`${iconButtonBase} ${paletteOpen ? iconButtonActive : ''}`}
+            className={`${iconButtonBase} ${paletteOpen ? iconButtonActive : 'shadow-[var(--shadow-sm)]'}`}
             onClick={() => setPaletteOpen((prev) => !prev)}
             aria-expanded={paletteOpen}
             aria-haspopup="true"
+            title="Background"
           >
             <Palette className="h-4 w-4" />
             <span className="sr-only">Background</span>
           </button>
 
           {paletteOpen && (
-            <div
-              className="absolute right-0 mt-2 w-40 rounded-2xl border border-white/10 bg-slate-950/85 p-2 shadow-xl backdrop-blur"
-              data-orbit-block="true"
-            >
-              <p className="px-2 pb-2 text-[11px] font-medium uppercase tracking-wide text-white/40">
-                Background
-              </p>
+            <div className="brutal-card absolute right-0 mt-2 w-40 p-2" data-orbit-block="true">
+              <p className="brutal-label px-1 pb-2">Background</p>
               <div className="flex flex-col gap-1">
                 {simplifiedOptions.map((option) => {
                   const isActive = option.id === activeBackground;
@@ -204,8 +196,10 @@ export function ViewerToolbar({
                     <button
                       type="button"
                       key={option.id}
-                      className={`flex items-center gap-2 rounded-xl px-2 py-2 text-left text-sm text-white/80 transition-colors hover:bg-white/10 ${
-                        isActive ? 'bg-white/15 text-white' : ''
+                      className={`flex items-center gap-2 border-2 px-2 py-1.5 text-left text-[11px] font-bold uppercase tracking-[0.12em] transition-all ${
+                        isActive
+                          ? 'border-[var(--ink)] bg-[var(--ink)] text-[var(--text-on-ink)] shadow-[var(--shadow-sm)]'
+                          : 'border-transparent bg-[var(--paper-card)] text-[var(--ink)] hover:border-[var(--ink)] hover:bg-[var(--paper-muted)]'
                       }`}
                       onClick={() => {
                         onBackgroundSelect(option.id);
@@ -213,7 +207,7 @@ export function ViewerToolbar({
                       }}
                     >
                       <span
-                        className="h-4 w-4 rounded-full border border-white/20"
+                        className="h-4 w-4 rounded-full border-2 border-[var(--ink)]"
                         style={{ backgroundColor: option.css }}
                       />
                       {option.label}
@@ -225,12 +219,7 @@ export function ViewerToolbar({
           )}
         </div>
 
-        <IconToggle
-          icon={Info}
-          label="Toggle info"
-          onClick={onToggleInfo}
-          active={infoOpen}
-        />
+        <IconToggle icon={Info} label="Toggle info" onClick={onToggleInfo} active={infoOpen} />
       </div>
     </div>
   );

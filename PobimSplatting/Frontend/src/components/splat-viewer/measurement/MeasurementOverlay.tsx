@@ -27,22 +27,36 @@ export function MeasurementOverlay({
   const { measurementScreenData, previewLine, pointerHandlers, handleStartDrag, isOverlayInteractive } =
     overlayState;
 
+  const handleSvgPointerDown = (event: ReactPointerEvent<SVGSVGElement>) => {
+    pointerHandlers.onPointerDown(event as unknown as ReactPointerEvent<HTMLDivElement>);
+  };
+
+  const handleSvgPointerMove = (event: ReactPointerEvent<SVGSVGElement>) => {
+    pointerHandlers.onPointerMove(event as unknown as ReactPointerEvent<HTMLDivElement>);
+  };
+
+  const handleSvgPointerUp = (event: ReactPointerEvent<SVGSVGElement>) => {
+    pointerHandlers.onPointerUp(event as unknown as ReactPointerEvent<HTMLDivElement>);
+  };
+
+  const handleSvgPointerLeave = () => {
+    pointerHandlers.onPointerLeave();
+  };
+
   return (
     <>
-      <div
-        className={`absolute inset-0 z-30 ${isOverlayInteractive ? 'pointer-events-auto' : 'pointer-events-none'}`}
-        onPointerDown={pointerHandlers.onPointerDown}
-        onPointerMove={pointerHandlers.onPointerMove}
-        onPointerUp={pointerHandlers.onPointerUp}
-        onPointerLeave={pointerHandlers.onPointerLeave}
-        onContextMenu={(event) => event.preventDefault()}
-      >
+      <div className="absolute inset-0 z-30 pointer-events-none" role="presentation">
         <svg
-          className="h-full w-full"
+          className={`h-full w-full ${isOverlayInteractive ? 'pointer-events-auto' : 'pointer-events-none'}`}
           viewBox="0 0 100 100"
           preserveAspectRatio="none"
-          style={{ pointerEvents: 'none' }}
+          onPointerDown={handleSvgPointerDown}
+          onPointerMove={handleSvgPointerMove}
+          onPointerUp={handleSvgPointerUp}
+          onPointerLeave={handleSvgPointerLeave}
+          onContextMenu={(event) => event.preventDefault()}
         >
+          <title>Measurement overlay</title>
           {/* Preview line while drawing */}
           {previewLine && (
             <g>
@@ -51,18 +65,18 @@ export function MeasurementOverlay({
                 y1={previewLine.start.y}
                 x2={previewLine.end.x}
                 y2={previewLine.end.y}
-                stroke="#ef4444"
+                stroke="var(--ink)"
                 strokeWidth={0.5}
                 strokeDasharray="1.4 0.9"
               />
-              <circle cx={previewLine.start.x} cy={previewLine.start.y} r={0.6} stroke="#111827" strokeWidth={0.15} fill="none" />
-              <circle cx={previewLine.end.x} cy={previewLine.end.y} r={0.7} stroke="#111827" strokeWidth={0.15} fill="none" />
+              <circle cx={previewLine.start.x} cy={previewLine.start.y} r={0.6} stroke="var(--ink)" strokeWidth={0.15} fill="none" />
+              <circle cx={previewLine.end.x} cy={previewLine.end.y} r={0.7} stroke="var(--ink)" strokeWidth={0.15} fill="none" />
             </g>
           )}
 
           {/* Measurement lines */}
           {measurementScreenData.map((item) => {
-            const lineColor = item.isSelected ? '#111827' : '#ef4444';
+            const lineColor = 'var(--ink)';
             const crossSize = 0.32;
             const startRadius = item.isSelected ? 0.85 : 0.65;
             const endRadius = item.isSelected ? 0.9 : 0.7;
@@ -75,21 +89,20 @@ export function MeasurementOverlay({
                   y2={item.endView.y}
                   stroke={lineColor}
                   strokeWidth={item.isSelected ? 0.65 : 0.45}
-                  style={{ pointerEvents: 'auto', cursor: 'pointer' }}
-                  onClick={() => onSelectDistance(item.id)}
+                  style={{ pointerEvents: 'none' }}
                 />
                 {/* Start handle */}
                 <g
                   style={{ pointerEvents: 'auto', cursor: 'grab' }}
-                  onPointerDown={(e: ReactPointerEvent<SVGGElement>) => handleStartDrag(e as any, item.id, 'start')}
+                  onPointerDown={(event: ReactPointerEvent<SVGGElement>) => handleStartDrag(event, item.id, 'start')}
                 >
-                  <circle cx={item.startView.x} cy={item.startView.y} r={startRadius} stroke="#111827" strokeWidth={0.15} fill="none" />
+                  <circle cx={item.startView.x} cy={item.startView.y} r={startRadius} stroke="var(--ink)" strokeWidth={0.15} fill="none" />
                   <line
                     x1={item.startView.x - crossSize}
                     y1={item.startView.y - crossSize}
                     x2={item.startView.x + crossSize}
                     y2={item.startView.y + crossSize}
-                    stroke="#111827"
+                    stroke="var(--ink)"
                     strokeWidth={0.12}
                   />
                   <line
@@ -97,22 +110,22 @@ export function MeasurementOverlay({
                     y1={item.startView.y + crossSize}
                     x2={item.startView.x + crossSize}
                     y2={item.startView.y - crossSize}
-                    stroke="#111827"
+                    stroke="var(--ink)"
                     strokeWidth={0.12}
                   />
                 </g>
                 {/* End handle */}
                 <g
                   style={{ pointerEvents: 'auto', cursor: 'grab' }}
-                  onPointerDown={(e: ReactPointerEvent<SVGGElement>) => handleStartDrag(e as any, item.id, 'end')}
+                  onPointerDown={(event: ReactPointerEvent<SVGGElement>) => handleStartDrag(event, item.id, 'end')}
                 >
-                  <circle cx={item.endView.x} cy={item.endView.y} r={endRadius} stroke="#111827" strokeWidth={0.15} fill="none" />
+                  <circle cx={item.endView.x} cy={item.endView.y} r={endRadius} stroke="var(--ink)" strokeWidth={0.15} fill="none" />
                   <line
                     x1={item.endView.x - crossSize}
                     y1={item.endView.y - crossSize}
                     x2={item.endView.x + crossSize}
                     y2={item.endView.y + crossSize}
-                    stroke="#111827"
+                    stroke="var(--ink)"
                     strokeWidth={0.12}
                   />
                   <line
@@ -120,7 +133,7 @@ export function MeasurementOverlay({
                     y1={item.endView.y + crossSize}
                     x2={item.endView.x + crossSize}
                     y2={item.endView.y - crossSize}
-                    stroke="#111827"
+                    stroke="var(--ink)"
                     strokeWidth={0.12}
                   />
                 </g>
@@ -133,11 +146,14 @@ export function MeasurementOverlay({
       {/* Labels */}
       <div className="absolute inset-0 z-31 pointer-events-none">
         {measurementScreenData.map((item) => (
-          <div
+          <button
+            type="button"
             key={`label-${item.id}`}
-            className={`absolute pointer-events-auto ${
-              item.isSelected ? 'bg-black text-white' : 'bg-neutral-700/90 text-white'
-            } flex items-center gap-1 rounded px-2 py-1 text-xs font-medium shadow-lg cursor-pointer`}
+            className={`absolute pointer-events-auto flex cursor-pointer items-center gap-1 border-2 px-2 py-1 text-[11px] font-bold uppercase tracking-[0.12em] shadow-[var(--shadow-sm)] ${
+              item.isSelected
+                ? 'border-[var(--ink)] bg-[var(--ink)] text-[var(--text-on-ink)] shadow-[var(--shadow-inv)]'
+                : 'border-[var(--ink)] bg-[var(--paper-card)] text-[var(--ink)]'
+            }`}
             style={{
               left: `${item.midPoint.x}px`,
               top: `${item.midPoint.y}px`,
@@ -146,12 +162,12 @@ export function MeasurementOverlay({
             onClick={() => onSelectDistance(item.id)}
           >
             <span>{item.label}</span>
-          </div>
+          </button>
         ))}
 
         {previewLine && (
           <div
-            className="absolute rounded bg-black/90 px-2 py-1 text-xs font-medium text-white shadow-lg"
+            className="absolute border-2 border-[var(--ink)] bg-[var(--paper-card)] px-2 py-1 text-[11px] font-bold uppercase tracking-[0.12em] text-[var(--ink)] shadow-[var(--shadow-sm)]"
             style={{
               left: `${previewLine.midPx.x}px`,
               top: `${previewLine.midPx.y}px`,
@@ -165,23 +181,25 @@ export function MeasurementOverlay({
 
       {/* Selected distance panel */}
       {selectedDistanceLabel && selectedDistanceId && (
-        <div className="absolute left-1/2 -translate-x-1/2 bottom-24 z-50 rounded-xl bg-black px-4 py-3 shadow-2xl">
+        <div className="brutal-card-dark absolute bottom-24 left-1/2 z-50 -translate-x-1/2 px-4 py-3">
           <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex flex-col gap-1 text-white">
-                <div className="text-xs font-medium text-white/70">ระยะที่เลือก</div>
-                <div className="text-lg font-semibold">{selectedDistanceLabel}</div>
+              <div className="flex flex-col gap-1 text-[var(--text-on-ink)]">
+                <div className="text-[11px] font-bold uppercase tracking-[0.14em] text-[var(--text-on-ink-muted)]">ระยะที่เลือก</div>
+                <div className="font-mono text-lg font-semibold uppercase tracking-[0.08em]">{selectedDistanceLabel}</div>
               </div>
               <div className="flex gap-1.5">
                 <button
+                  type="button"
                   onClick={onOpenRescaleDialog}
-                  className="rounded-lg bg-white/10 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-white/20"
+                  className="brutal-btn brutal-btn-xs"
                 >
                   ปรับมาตราส่วน
                 </button>
                 <button
+                  type="button"
                   onClick={() => onDeleteMeasurement(selectedDistanceId)}
-                  className="rounded-lg bg-red-600/80 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-red-600"
+                  className="brutal-btn brutal-btn-danger brutal-btn-xs"
                 >
                   ลบ
                 </button>
@@ -194,16 +212,16 @@ export function MeasurementOverlay({
                   return (
                     <div
                       key={`selected-axis-${axis}`}
-                      className="rounded-lg border px-3 py-2"
+                      className="border-2 px-3 py-2"
                       style={{
-                        borderColor: `${config.color}33`,
-                        backgroundColor: `${config.color}14`,
+                        borderColor: 'var(--paper-muted-2)',
+                        backgroundColor: 'rgba(255,255,255,0.08)',
                       }}
                     >
-                      <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: config.color }}>
+                      <div className="text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: config.color }}>
                         {config.shortLabel}
                       </div>
-                      <div className="mt-1 text-sm font-semibold text-white">
+                      <div className="mt-1 font-mono text-sm font-semibold text-[var(--text-on-ink)]">
                         {selectedAxisComponents.formatted[axis]}
                       </div>
                     </div>

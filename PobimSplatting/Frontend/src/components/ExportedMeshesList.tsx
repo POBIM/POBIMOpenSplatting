@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Download, FileCode, Package, Loader, RefreshCw } from 'lucide-react';
 import { api } from '@/lib/api';
 
@@ -17,137 +17,128 @@ interface ExportedMeshesListProps {
   projectId: string;
 }
 
+interface ExportsResponse {
+  exports?: Export[];
+}
+
+function getErrorMessage(error: unknown): string {
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'response' in error &&
+    typeof (error as { response?: unknown }).response === 'object' &&
+    (error as { response?: unknown }).response !== null &&
+    'data' in ((error as { response: { data?: unknown } }).response)
+  ) {
+    const responseData = ((error as { response: { data?: { error?: string } } }).response).data;
+    if (responseData?.error) {
+      return responseData.error;
+    }
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return 'Network error';
+}
+
 export default function ExportedMeshesList({ projectId }: ExportedMeshesListProps) {
   const [exports, setExports] = useState<Export[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  const fetchExports = async () => {
+  const fetchExports = useCallback(async () => {
     setLoading(true);
     setError('');
 
     try {
-      const data = await api.getAvailableExports(projectId);
+      const data = (await api.getAvailableExports(projectId)) as unknown as ExportsResponse;
       setExports(data.exports || []);
-    } catch (err: any) {
-      const errorMsg = err.response?.data?.error || err.message || 'Network error';
-      setError(errorMsg);
+    } catch (err: unknown) {
+      setError(getErrorMessage(err));
     } finally {
       setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    fetchExports();
   }, [projectId]);
 
+  useEffect(() => {
+    void fetchExports();
+  }, [fetchExports]);
+
   const handleDownload = (downloadUrl: string) => {
-    // Use the API base URL + download URL  
-    const fullUrl = `http://localhost:5000${downloadUrl}`;
-    window.location.href = fullUrl;
+    window.location.href = `http://localhost:5000${downloadUrl}`;
   };
 
-  const formatDate = (timestamp: number) => {
-    return new Date(timestamp * 1000).toLocaleString();
-  };
+  const formatDate = (timestamp: number) => new Date(timestamp * 1000).toLocaleString();
 
   const getFormatIcon = (format: string) => {
-    switch (format) {
-      case 'glb':
-      case 'gltf':
-        return <Package className="w-5 h-5 text-blue-400" />;
-      case 'obj':
-      case 'ply':
-      case 'dae':
-        return <FileCode className="w-5 h-5 text-green-400" />;
-      default:
-        return <FileCode className="w-5 h-5 text-gray-400" />;
+    if (format === 'glb' || format === 'gltf') {
+      return <Package className="h-4 w-4" />;
     }
-  };
-
-  const getFormatColor = (format: string) => {
-    switch (format) {
-      case 'glb':
-        return 'bg-blue-900/30 text-blue-300 border-blue-700/50';
-      case 'obj':
-        return 'bg-green-900/30 text-green-300 border-green-700/50';
-      case 'ply':
-        return 'bg-purple-900/30 text-purple-300 border-purple-700/50';
-      case 'dae':
-        return 'bg-yellow-900/30 text-yellow-300 border-yellow-700/50';
-      default:
-        return 'bg-gray-900/30 text-gray-300 border-gray-700/50';
-    }
+    return <FileCode className="h-4 w-4" />;
   };
 
   if (loading) {
     return (
-      <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
-        <div className="flex items-center justify-center gap-2 text-gray-400">
-          <Loader className="w-5 h-5 animate-spin" />
-          <span>Loading exports...</span>
+      <div className="brutal-card p-5">
+        <div className="flex items-center justify-center gap-2 text-sm font-bold uppercase tracking-[0.14em] text-[color:var(--text-secondary)]">
+          <Loader className="h-4 w-4 animate-spin" />
+          Loading Exports
         </div>
       </div>
     );
   }
 
   if (exports.length === 0) {
-    return null; // Don't show if no exports
+    return null;
   }
 
   return (
-    <div className="bg-gray-800 rounded-lg p-6 border border-gray-700">
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-2">
-          <Package className="w-5 h-5 text-blue-400" />
-          <h3 className="text-lg font-semibold text-white">
-            Exported Meshes ({exports.length})
-          </h3>
+    <div className="brutal-card p-5">
+      <div className="mb-4 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <div className="brutal-card-muted flex h-10 w-10 items-center justify-center p-2">
+            <Package className="h-5 w-5" />
+          </div>
+          <div>
+            <div className="brutal-eyebrow mb-2">Mesh Files</div>
+            <h3 className="brutal-h3">Exported Meshes ({exports.length})</h3>
+          </div>
         </div>
-        <button
-          onClick={fetchExports}
-          className="p-2 hover:bg-gray-700 rounded-lg transition-colors"
-          title="Refresh"
-        >
-          <RefreshCw className="w-4 h-4 text-gray-400" />
+        <button type="button" onClick={() => void fetchExports()} className="brutal-btn brutal-btn-xs" title="Refresh">
+          <RefreshCw className="h-3.5 w-3.5" />
+          Refresh
         </button>
       </div>
 
-      <div className="space-y-2">
-        {exports.map((exp, index) => (
-          <div
-            key={index}
-            className="bg-gray-900/50 rounded-lg p-4 border border-gray-700 hover:border-gray-600 transition-colors"
-          >
-            <div className="flex items-center justify-between gap-4">
-              <div className="flex items-center gap-3 flex-1 min-w-0">
-                {getFormatIcon(exp.format)}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <p className="text-sm font-medium text-white truncate">
-                      {exp.filename}
+      <div className="space-y-3">
+        {exports.map((exportItem) => (
+          <div key={exportItem.filename} className="brutal-card-muted p-4">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="flex min-w-0 items-start gap-3">
+                <div className="brutal-card flex h-10 w-10 items-center justify-center p-2">
+                  {getFormatIcon(exportItem.format)}
+                </div>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="truncate text-sm font-bold uppercase tracking-[0.12em] text-[color:var(--text-primary)]">
+                      {exportItem.filename}
                     </p>
-                    <span
-                      className={`px-2 py-0.5 rounded text-xs font-medium border ${getFormatColor(
-                        exp.format
-                      )}`}
-                    >
-                      {exp.format.toUpperCase()}
-                    </span>
+                    <span className="brutal-badge">{exportItem.format.toUpperCase()}</span>
                   </div>
-                  <div className="flex items-center gap-3 text-xs text-gray-400">
-                    <span>{exp.size_mb.toFixed(1)} MB</span>
-                    <span>•</span>
-                    <span>{formatDate(exp.created_at)}</span>
+                  <div className="mt-1 text-xs text-[color:var(--text-secondary)]">
+                    {exportItem.size_mb.toFixed(1)} MB • {formatDate(exportItem.created_at)}
                   </div>
                 </div>
               </div>
 
               <button
-                onClick={() => handleDownload(exp.download_url)}
-                className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors flex-shrink-0"
+                type="button"
+                onClick={() => handleDownload(exportItem.download_url)}
+                className="brutal-btn brutal-btn-xs justify-center"
               >
-                <Download className="w-4 h-4" />
+                <Download className="h-3.5 w-3.5" />
                 Download
               </button>
             </div>
@@ -156,8 +147,8 @@ export default function ExportedMeshesList({ projectId }: ExportedMeshesListProp
       </div>
 
       {error && (
-        <div className="mt-4 p-3 bg-red-900/20 border border-red-700/50 rounded-lg">
-          <p className="text-sm text-red-200">{error}</p>
+        <div className="status-badge status-failed mt-4 p-3 normal-case tracking-normal">
+          {error}
         </div>
       )}
     </div>

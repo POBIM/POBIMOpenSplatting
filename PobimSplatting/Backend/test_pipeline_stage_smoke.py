@@ -7,6 +7,7 @@ import unittest
 from unittest import mock
 
 from PobimSplatting.Backend.pipeline import runner
+from PobimSplatting.Backend.pipeline import runtime_support
 from PobimSplatting.Backend.pipeline import stage_features, stage_sparse, stage_training
 
 
@@ -162,6 +163,69 @@ class PipelineStageSmokeTests(unittest.TestCase):
         self.assertEqual(
             call_order,
             ['feature_extraction', 'feature_matching', 'sparse_reconstruction', 'model_conversion', 'training'],
+        )
+
+    def test_describe_colmap_bundle_adjustment_mode_reports_dense_and_sparse_gpu_modes(self):
+        with mock.patch.object(
+            runtime_support,
+            'get_colmap_ceres_capabilities',
+            return_value={'ceres_cuda_enabled': True, 'ceres_cudss_enabled': False},
+        ):
+            dense_plan = runtime_support.describe_colmap_bundle_adjustment_mode('/tmp/colmap', 200, True)
+
+        self.assertEqual(dense_plan['mode'], 'gpu_dense')
+        self.assertEqual(dense_plan['runtime_summary'], 'GPU dense BA (DENSE_SCHUR)')
+
+        with mock.patch.object(
+            runtime_support,
+            'get_colmap_ceres_capabilities',
+            return_value={'ceres_cuda_enabled': True, 'ceres_cudss_enabled': True},
+        ):
+            sparse_plan = runtime_support.describe_colmap_bundle_adjustment_mode('/tmp/colmap', 500, True)
+
+        self.assertEqual(sparse_plan['mode'], 'gpu_sparse')
+        self.assertEqual(sparse_plan['runtime_summary'], 'GPU sparse BA via cuDSS (SPARSE_SCHUR)')
+
+    def test_describe_colmap_bundle_adjustment_mode_reports_cpu_fallback(self):
+        with mock.patch.object(
+            runtime_support,
+            'get_colmap_ceres_capabilities',
+            return_value={'ceres_cuda_enabled': True, 'ceres_cudss_enabled': False},
+        ):
+            plan = runtime_support.describe_colmap_bundle_adjustment_mode('/tmp/colmap', 500, True)
+
+        self.assertEqual(plan['mode'], 'cpu')
+        self.assertEqual(plan['runtime_summary'], 'CPU bundle adjustment fallback')
+
+    def test_stage_sparse_logs_runtime_bundle_adjustment_mode(self):
+        ba_plan = {
+            'summary': 'GPU bundle adjustment via DENSE_SCHUR',
+            'runtime_summary': 'GPU dense BA (DENSE_SCHUR)',
+            'detail': 'Dense GPU BA is active for this mapper run.',
+        }
+        sparse_tracker = {}
+
+        with mock.patch.object(stage_sparse, 'append_log_line') as append_log_line:
+            handled = stage_sparse._maybe_log_colmap_ba_runtime_event(
+                'project',
+                'Running bundle adjustment',
+                sparse_tracker,
+                ba_plan,
+            )
+            handled_again = stage_sparse._maybe_log_colmap_ba_runtime_event(
+                'project',
+                'Running bundle adjustment',
+                sparse_tracker,
+                ba_plan,
+            )
+
+        self.assertTrue(handled)
+        self.assertTrue(handled_again)
+        self.assertEqual(
+            append_log_line.call_args_list,
+            [
+                mock.call('project', '[COLMAP] Bundle adjustment phase started: GPU dense BA (DENSE_SCHUR)'),
+            ],
         )
 
 

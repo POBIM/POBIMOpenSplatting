@@ -107,3 +107,11 @@ PobimSplatting/runtime/*
 # COLMAP/GLOMAP source (cloned repos - optional)
 # colmap/
 # glomap/
+
+# Local build artifacts (Ceres w/ CUDA + cuDSS shim)
+ceres-build/
+ceres-solver/
+cudss-shim/
+
+# OpenCode / agent tooling
+.opencode/

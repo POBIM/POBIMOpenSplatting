@@ -197,6 +197,174 @@ def get_colmap_native_feature_capabilities(colmap_exe):
     }
 
 
+def _find_colmap_build_dir(colmap_exe):
+    try:
+        exe_path = Path(colmap_exe).resolve()
+    except Exception:
+        return None
+
+    candidates = []
+    if exe_path.name == 'colmap':
+        candidates.extend(
+            [
+                exe_path.parents[2] if len(exe_path.parents) > 2 else None,
+                exe_path.parents[3] if len(exe_path.parents) > 3 else None,
+            ]
+        )
+
+    for candidate in candidates:
+        if candidate and (candidate / 'CMakeCache.txt').is_file():
+            return candidate
+
+    return None
+
+
+@lru_cache(maxsize=4)
+def get_colmap_ceres_capabilities(colmap_exe):
+    build_dir = _find_colmap_build_dir(colmap_exe)
+    result = {
+        'build_dir': str(build_dir) if build_dir else None,
+        'ceres_dir': None,
+        'ceres_version': None,
+        'ceres_cuda_enabled': False,
+        'ceres_cudss_enabled': False,
+    }
+
+    if not build_dir:
+        return result
+
+    cache_path = build_dir / 'CMakeCache.txt'
+    try:
+        cache_text = cache_path.read_text(encoding='utf-8', errors='ignore')
+    except Exception:
+        return result
+
+    ceres_dir_match = re.search(r'^Ceres_DIR:[^=]+=(.+)$', cache_text, re.MULTILINE)
+    if not ceres_dir_match:
+        return result
+
+    ceres_dir = Path(ceres_dir_match.group(1).strip()).resolve()
+    result['ceres_dir'] = str(ceres_dir)
+
+    version_header = ceres_dir.parents[2] / 'include' / 'ceres' / 'version.h'
+    if version_header.is_file():
+        try:
+            version_text = version_header.read_text(encoding='utf-8', errors='ignore')
+            major_match = re.search(r'^#define CERES_VERSION_MAJOR (\d+)$', version_text, re.MULTILINE)
+            minor_match = re.search(r'^#define CERES_VERSION_MINOR (\d+)$', version_text, re.MULTILINE)
+            patch_match = re.search(r'^#define CERES_VERSION_REVISION (\d+)$', version_text, re.MULTILINE)
+            if major_match and minor_match and patch_match:
+                result['ceres_version'] = '.'.join(
+                    [major_match.group(1), minor_match.group(1), patch_match.group(1)]
+                )
+        except Exception:
+            pass
+
+    targets_text = ""
+    for candidate in ('CeresTargets.cmake', 'CeresTargets-release.cmake', 'CeresConfig.cmake'):
+        target_path = ceres_dir / candidate
+        if target_path.is_file():
+            try:
+                targets_text += "\n" + target_path.read_text(encoding='utf-8', errors='ignore')
+            except Exception:
+                pass
+
+    if 'ceres_cuda_kernels' in targets_text or 'find_dependency(CUDAToolkit' in targets_text:
+        result['ceres_cuda_enabled'] = True
+
+    config_header = ceres_dir.parents[2] / 'include' / 'ceres' / 'internal' / 'config.h'
+    if config_header.is_file():
+        try:
+            config_text = config_header.read_text(encoding='utf-8', errors='ignore')
+        except Exception:
+            config_text = ''
+        if 'CERES_NO_CUDSS' in config_text and not re.search(
+            r'^\s*#define\s+CERES_NO_CUDSS\b', config_text, re.MULTILINE
+        ):
+            result['ceres_cudss_enabled'] = True
+
+    ceres_build_dir = None
+    try:
+        if ceres_dir.parts[-4:] == ('install', 'lib', 'cmake', 'Ceres'):
+            ceres_build_dir = ceres_dir.parents[3]
+    except Exception:
+        ceres_build_dir = None
+
+    if ceres_build_dir and (ceres_build_dir / 'CMakeCache.txt').is_file():
+        try:
+            ceres_cache_text = (ceres_build_dir / 'CMakeCache.txt').read_text(encoding='utf-8', errors='ignore')
+        except Exception:
+            ceres_cache_text = ''
+        if re.search(r'(^|[^A-Z])CUDSS([^A-Z]|$)', ceres_cache_text):
+            result['ceres_cudss_enabled'] = True
+
+    if not result['ceres_cudss_enabled']:
+        try:
+            ldconfig_output = subprocess.run(
+                ['bash', '-lc', 'ldconfig -p | grep -i cudss || true'],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if ldconfig_output.stdout.strip():
+                # Runtime library availability alone does not guarantee compile-time
+                # support, but when present it is still useful for diagnostics.
+                result['ceres_cudss_enabled'] = 'CUDSS' in targets_text or 'cudss' in targets_text.lower()
+        except Exception:
+            pass
+
+    return result
+
+
+def describe_colmap_bundle_adjustment_mode(colmap_exe, num_images, has_cuda):
+    caps = get_colmap_ceres_capabilities(colmap_exe)
+    plan = {
+        'mode': 'cpu',
+        'summary': 'CPU bundle adjustment only',
+        'runtime_summary': 'CPU bundle adjustment fallback',
+        'detail': 'COLMAP mapper registration remains CPU-heavy.',
+        'caps': caps,
+    }
+
+    if not has_cuda:
+        plan['detail'] = 'COLMAP was started without CUDA support.'
+        return plan
+
+    if not caps['ceres_cuda_enabled']:
+        plan['detail'] = 'Ceres lacks CUDA dense solver support.'
+        return plan
+
+    if num_images < 50:
+        plan['detail'] = 'Problem is below COLMAP GPU BA threshold (min_num_images_gpu_solver=50).'
+        return plan
+
+    if num_images <= 200:
+        plan['mode'] = 'gpu_dense'
+        plan['summary'] = 'GPU bundle adjustment via DENSE_SCHUR'
+        plan['runtime_summary'] = 'GPU dense BA (DENSE_SCHUR)'
+        plan['detail'] = (
+            f'{num_images} images is within COLMAP direct dense GPU threshold '
+            '(<= 200). Registration between BA passes still runs mostly on CPU.'
+        )
+        return plan
+
+    if caps['ceres_cudss_enabled'] and num_images <= 4000:
+        plan['mode'] = 'gpu_sparse'
+        plan['summary'] = 'GPU bundle adjustment via SPARSE_SCHUR + cuDSS'
+        plan['runtime_summary'] = 'GPU sparse BA via cuDSS (SPARSE_SCHUR)'
+        plan['detail'] = (
+            f'{num_images} images exceeds dense GPU threshold, but cuDSS support '
+            'is available for sparse GPU BA.'
+        )
+        return plan
+
+    plan['detail'] = (
+        f'{num_images} images exceeds dense GPU threshold (200) and this build '
+        'does not expose cuDSS sparse GPU BA, so solver work is expected to stay mostly on CPU.'
+    )
+    return plan
+
+
 def get_native_aliked_max_num_features(quality_mode, fallback_max_num_features):
     caps = {
         'fast': 2048,

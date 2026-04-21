@@ -50,8 +50,10 @@ from .recovery_planners import (
 )
 from .runtime_support import (
     HLOC_AVAILABLE,
+    get_pycolmap_module,
     normalize_feature_method,
     normalize_matcher_type,
+    pycolmap_supports_global_mapping,
     resolve_colmap_feature_pipeline_profile,
 )
 from .stage_features import (

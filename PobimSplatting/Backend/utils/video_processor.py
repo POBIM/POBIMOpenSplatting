@@ -20,6 +20,7 @@ import subprocess
 import json
 import tempfile
 import shutil
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, Callable, List, Dict, Any
 
@@ -203,6 +204,25 @@ def check_gpu_decode_available() -> Dict[str, Any]:
     return result
 
 
+def get_gpu_total_vram_mb() -> Optional[int]:
+    """Return total VRAM for the first NVIDIA GPU in MiB."""
+    try:
+        gpu_env = get_gpu_environment()
+        result = subprocess.run(
+            ['nvidia-smi', '--query-gpu=memory.total', '--format=csv,noheader,nounits'],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env=gpu_env['env'],
+        )
+        if result.returncode != 0:
+            return None
+        line = (result.stdout or '').strip().splitlines()[0].strip()
+        return int(line) if line else None
+    except Exception:
+        return None
+
+
 # Cache the GPU availability check
 _GPU_DECODE_INFO: Optional[Dict[str, Any]] = None
 _FFMPEG_FPS_MODE_SUPPORTED: Optional[bool] = None
@@ -255,6 +275,60 @@ class VideoProcessor:
         self.problematic_codecs = {'hevc', 'h265', 'av1'}  # Codecs that often cause issues
         self.recommended_codecs = {'h264', 'avc', 'mpeg4'}
         self.last_extraction_stats: Dict[str, Any] = {}
+
+    @staticmethod
+    def _extract_ffmpeg_error_tail(stderr_text: str, max_lines: int = 12) -> str:
+        lines = [line.strip() for line in (stderr_text or '').splitlines() if line.strip()]
+        return '\n'.join(lines[-max_lines:])
+
+    def _is_retryable_gpu_ffmpeg_error(self, stderr_text: str) -> bool:
+        normalized = (stderr_text or '').lower()
+        retryable_markers = (
+            'cannot allocate memory',
+            'no device available for decoder',
+            'device creation failed',
+            'hardware device setup failed',
+            'resource temporarily unavailable',
+            'cannot init cuda',
+            'cuda error',
+            'error while opening decoder',
+        )
+        return any(marker in normalized for marker in retryable_markers)
+
+    def _estimate_safe_gpu_parallel_chunks(
+        self,
+        video_info: Dict[str, Any],
+        requested_chunk_count: int,
+    ) -> int:
+        chunk_cap = max(1, int(requested_chunk_count))
+        width = int(video_info.get('width') or 0)
+        height = int(video_info.get('height') or 0)
+        codec_name = str(video_info.get('codec_name') or '').lower()
+        profile = str(video_info.get('profile') or '').lower()
+        pix_fmt = str(video_info.get('pix_fmt') or '').lower()
+        bitrate = int(video_info.get('bit_rate') or 0)
+        gpu_vram_mb = get_gpu_total_vram_mb() or 0
+        gpu_env = get_gpu_environment()
+
+        is_4k_or_higher = max(width, height) >= 3840
+        is_10bit = '10' in profile or '10' in pix_fmt or pix_fmt.endswith('p10le')
+        is_heavy_hevc = codec_name in {'hevc', 'h265'}
+        is_high_bitrate = bitrate >= 80_000_000
+
+        if is_4k_or_higher:
+            chunk_cap = min(chunk_cap, 4)
+        if is_heavy_hevc:
+            chunk_cap = min(chunk_cap, 3)
+        if is_10bit:
+            chunk_cap = min(chunk_cap, 2)
+        if is_high_bitrate:
+            chunk_cap = min(chunk_cap, 2)
+        if gpu_env['is_wsl'] and is_4k_or_higher and is_heavy_hevc:
+            chunk_cap = min(chunk_cap, 2)
+        if gpu_vram_mb and gpu_vram_mb <= 8192 and is_4k_or_higher and is_10bit:
+            chunk_cap = min(chunk_cap, 1)
+
+        return max(1, chunk_cap)
 
     def is_video_file(self, filename):
         """Check if file is a supported video format"""
@@ -763,11 +837,13 @@ class VideoProcessor:
         target_output_count = int(plan['target_output_count'])
         candidate_count = len(extracted_frames)
         search_radius = self._get_effective_search_radius(total_frames, fps, extraction_config)
+        source_video_path = str(extraction_config.get('source_video_path') or '')
         status_callback = extraction_config.get('status_callback')
         requested_workers = int(extraction_config.get('ffmpeg_cpu_workers') or 0)
         if requested_workers <= 0:
             requested_workers = min(4, max(1, (os.cpu_count() or 4) // 2))
         scoring_workers = min(max(1, requested_workers), max(1, candidate_count))
+        candidate_source_indices = self._estimate_candidate_source_indices(total_frames, candidate_count)
 
         if callable(status_callback):
             status_callback('candidate_scoring_start', {
@@ -783,12 +859,20 @@ class VideoProcessor:
             if frame is None:
                 return None
             score_info = self._score_frame_candidate(frame, None, quality_percent)
+            source_frame_index = None
+            source_time_seconds = None
+            if 0 <= candidate_index < len(candidate_source_indices):
+                source_frame_index = int(candidate_source_indices[candidate_index])
+                if fps > 0:
+                    source_time_seconds = round(source_frame_index / fps, 6)
             return {
                 'path': str(frame_path),
                 'candidate_index': candidate_index,
                 'score': float(score_info['score']),
                 'accepted': bool(score_info['accepted']),
                 'metrics': score_info['metrics'],
+                'source_frame_index': source_frame_index,
+                'source_time_seconds': source_time_seconds,
             }
 
         scored_candidates = []
@@ -888,13 +972,20 @@ class VideoProcessor:
 
             approx_target_source_index = int(round((target_idx + 0.5) * source_frames_per_target))
             approx_selected_source_index = int(round(best['candidate_index'] * source_frames_per_candidate))
+            selected_source_index = (
+                int(best['source_frame_index'])
+                if best.get('source_frame_index') is not None
+                else approx_selected_source_index
+            )
             selection_records.append({
                 'target_index': approx_target_source_index,
-                'selected_index': approx_selected_source_index,
-                'offset': int(approx_selected_source_index - approx_target_source_index),
+                'selected_index': selected_source_index,
+                'offset': int(selected_source_index - approx_target_source_index),
                 'sharpness': round(best['metrics']['sharpness'], 2),
                 'accepted': bool(best['accepted']),
                 'fallback_used': not bool(best['accepted']),
+                'source_frame_index': selected_source_index,
+                'source_time_seconds': best.get('source_time_seconds'),
             })
             if callable(status_callback) and ((target_idx + 1) % 10 == 0 or target_idx + 1 == target_output_count):
                 status_callback('candidate_selection_progress', {
@@ -906,6 +997,7 @@ class VideoProcessor:
 
         selected_paths = {item['path'] for item in selected_candidates}
         final_paths = []
+        frame_manifest = []
         for old_path in extracted_frames:
             if old_path not in selected_paths:
                 try:
@@ -922,6 +1014,20 @@ class VideoProcessor:
                 except Exception:
                     new_path = current_path
             final_paths.append(str(new_path))
+            frame_manifest.append({
+                'image_name': new_path.name,
+                'source_video_path': source_video_path or None,
+                'source_frame_index': (
+                    int(candidate['source_frame_index'])
+                    if candidate.get('source_frame_index') is not None
+                    else None
+                ),
+                'source_time_seconds': candidate.get('source_time_seconds'),
+                'candidate_index': int(candidate['candidate_index']),
+                'score': round(float(candidate['score']), 4),
+                'accepted': bool(candidate['accepted']),
+                'sharpness': round(float(candidate['metrics']['sharpness']), 4),
+            })
 
         self.last_extraction_stats = {
             **self.last_extraction_stats,
@@ -934,6 +1040,10 @@ class VideoProcessor:
             'oversample_factor': plan['oversample_factor'],
             'scoring_workers': scoring_workers,
             'selections': selection_records,
+            'frame_manifest': frame_manifest,
+            'source_video_path': source_video_path or None,
+            'source_total_frames': int(total_frames),
+            'source_fps': float(fps or 0.0),
         }
         if callable(status_callback):
             status_callback('candidate_selection_complete', {
@@ -959,6 +1069,7 @@ class VideoProcessor:
         target_height,
         jpeg_quality,
         gpu_info,
+        chunk_count_override=None,
     ):
         video_info = self._get_video_info_ffprobe(video_path)
         fps = video_info['fps'] if video_info else 0.0
@@ -971,7 +1082,7 @@ class VideoProcessor:
         if requested_workers <= 0:
             requested_workers = min(4, max(1, cpu_count // 6))
 
-        chunk_count = min(requested_workers, max(1, int(duration // 20)))
+        chunk_count = int(chunk_count_override or min(requested_workers, max(1, int(duration // 20))))
         if chunk_count <= 1:
             raise ValueError("parallel extraction requested without enough chunks")
 
@@ -997,7 +1108,7 @@ class VideoProcessor:
             cmd = ['ffmpeg', '-y', '-hide_banner', '-loglevel', 'error']
 
             if gpu_info['method'] == 'nvdec':
-                cmd.extend(['-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda'])
+                cmd.extend(['-hwaccel', 'cuda'])
             elif gpu_info['method'] == 'vaapi':
                 cmd.extend(['-hwaccel', 'vaapi', '-hwaccel_device', '/dev/dri/renderD128'])
 
@@ -1008,9 +1119,7 @@ class VideoProcessor:
             ])
 
             filter_chain = ','.join(filters)
-            if gpu_info['method'] == 'nvdec':
-                cmd.extend(['-vf', f'hwdownload,format=nv12,{filter_chain}'])
-            else:
+            if filter_chain:
                 cmd.extend(['-vf', filter_chain])
 
             cmd.extend([
@@ -1023,13 +1132,19 @@ class VideoProcessor:
             ])
             cmd.extend(get_ffmpeg_vfr_args())
 
-            subprocess.run(
+            result = subprocess.run(
                 cmd,
-                check=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                check=False,
+                capture_output=True,
+                text=True,
                 env=env,
             )
+            if result.returncode != 0:
+                stderr_tail = self._extract_ffmpeg_error_tail(result.stderr)
+                raise RuntimeError(
+                    f"GPU ffmpeg chunk {chunk_index} failed with exit code {result.returncode}"
+                    + (f": {stderr_tail}" if stderr_tail else "")
+                )
 
             frames = sorted(chunk_dir.glob('frame_*.jpg'))
             return chunk_index, frames, chunk_dir
@@ -1143,6 +1258,7 @@ class VideoProcessor:
         logger.info(f"Target resolution: {target_width}x{target_height} ({resolution})")
         
         sampling_plan = self._build_sampling_plan(total_frames, fps, extraction_config)
+        gpu_parallel_retryable_failure = False
 
         if mode in {'fps', 'target_count'}:
             expected_frames = sampling_plan['candidate_count'] if sampling_plan['smart_selection'] else sampling_plan['target_output_count']
@@ -1153,23 +1269,57 @@ class VideoProcessor:
                 parallel_workers = min(4, auto_workers)
 
             if parallel_workers > 1 and duration >= 45 and expected_frames >= 60:
-                logger.info(f"GPU parallel extraction enabled: {parallel_workers} workers")
-                try:
-                    return self._extract_frames_ffmpeg_gpu_parallel(
-                        video_path=video_path,
-                        output_dir=output_dir,
-                        extraction_config=extraction_config,
-                        progress_callback=progress_callback,
-                        duration=duration,
-                        width=width,
-                        height=height,
-                        target_width=target_width,
-                        target_height=target_height,
-                        jpeg_quality=jpeg_quality,
-                        gpu_info=gpu_info,
+                requested_chunk_count = min(parallel_workers, max(1, int(duration // 20)))
+                safe_chunk_cap = self._estimate_safe_gpu_parallel_chunks(video_info, requested_chunk_count)
+                if safe_chunk_cap < requested_chunk_count:
+                    logger.info(
+                        "Reducing GPU parallel extraction from "
+                        f"{requested_chunk_count} to {safe_chunk_cap} worker(s) "
+                        f"for {video_info.get('codec_name', 'unknown').upper()} "
+                        f"{video_info.get('profile', '') or video_info.get('pix_fmt', '')} "
+                        f"{width}x{height}"
                     )
-                except Exception as e:
-                    logger.warning(f"Parallel GPU extraction failed, falling back to single-process GPU ffmpeg: {e}")
+
+                retry_chunk_counts = []
+                current_chunk_count = safe_chunk_cap
+                while current_chunk_count > 1:
+                    retry_chunk_counts.append(current_chunk_count)
+                    if current_chunk_count == 2:
+                        break
+                    current_chunk_count = max(2, current_chunk_count // 2)
+
+                if retry_chunk_counts:
+                    logger.info(f"GPU parallel extraction enabled: {parallel_workers} workers")
+
+                for chunk_count in retry_chunk_counts:
+                    try:
+                        return self._extract_frames_ffmpeg_gpu_parallel(
+                            video_path=video_path,
+                            output_dir=output_dir,
+                            extraction_config=extraction_config,
+                            progress_callback=progress_callback,
+                            duration=duration,
+                            width=width,
+                            height=height,
+                            target_width=target_width,
+                            target_height=target_height,
+                            jpeg_quality=jpeg_quality,
+                            gpu_info=gpu_info,
+                            chunk_count_override=chunk_count,
+                        )
+                    except Exception as e:
+                        error_text = str(e)
+                        retryable = self._is_retryable_gpu_ffmpeg_error(error_text)
+                        gpu_parallel_retryable_failure = gpu_parallel_retryable_failure or retryable
+                        logger.warning(
+                            f"Parallel GPU extraction failed at {chunk_count} worker(s): {error_text}"
+                        )
+                        if not retryable:
+                            break
+
+                if gpu_parallel_retryable_failure:
+                    logger.info("Retryable GPU decoder error detected during parallel extraction; retrying with single-process GPU ffmpeg")
+                    time.sleep(1.0)
             fps_filter = sampling_plan['sampling_filter']
         else:
             expected_frames = sampling_plan['candidate_count'] if sampling_plan['smart_selection'] else sampling_plan['target_output_count']
@@ -1200,27 +1350,21 @@ class VideoProcessor:
         
         # Add hardware acceleration based on method
         if gpu_info['method'] == 'nvdec':
-            cmd.extend(['-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda'])
+            cmd.extend(['-hwaccel', 'cuda'])
         elif gpu_info['method'] == 'vaapi':
             cmd.extend(['-hwaccel', 'vaapi', '-hwaccel_device', '/dev/dri/renderD128'])
         
         cmd.extend(['-i', str(video_path)])
         
         if filter_chain:
-            # For CUDA hwaccel, we need to transfer from GPU to CPU for filtering
-            if gpu_info['method'] == 'nvdec':
-                cmd.extend(['-vf', f'hwdownload,format=nv12,{filter_chain}'])
-            else:
-                cmd.extend(['-vf', filter_chain])
-        elif gpu_info['method'] == 'nvdec':
-            cmd.extend(['-vf', 'hwdownload,format=nv12'])
+            cmd.extend(['-vf', filter_chain])
         
         cmd.extend([
-            '-vsync', 'vfn',
             '-qscale:v', str(ffmpeg_quality),
             '-start_number', '0',
             output_pattern
         ])
+        cmd.extend(get_ffmpeg_vfr_args())
         
         logger.info(f"FFmpeg command: {' '.join(cmd)}")
         
@@ -1240,7 +1384,11 @@ class VideoProcessor:
             
             # Monitor stderr for progress
             frame_count = 0
+            stderr_tail = []
             for line in process.stderr:
+                stderr_tail.append(line.rstrip())
+                if len(stderr_tail) > 25:
+                    stderr_tail.pop(0)
                 # FFmpeg outputs frame progress like "frame=  123"
                 if 'frame=' in line:
                     try:
@@ -1256,7 +1404,10 @@ class VideoProcessor:
             process.wait()
             
             if process.returncode != 0:
+                error_tail = '\n'.join(stderr_tail[-12:])
                 logger.error(f"FFmpeg failed with return code {process.returncode}")
+                if error_tail:
+                    logger.warning(f"GPU ffmpeg stderr tail:\n{error_tail}")
                 logger.warning("Falling back to ffmpeg CPU extraction")
                 return self._extract_frames_ffmpeg_cpu(video_path, output_dir, extraction_config, progress_callback)
             
@@ -1376,7 +1527,10 @@ class VideoProcessor:
                 'width': int(stream.get('width', 0)),
                 'height': int(stream.get('height', 0)),
                 'duration': duration,
-                'codec_name': stream.get('codec_name', 'unknown')
+                'codec_name': stream.get('codec_name', 'unknown'),
+                'pix_fmt': stream.get('pix_fmt', ''),
+                'profile': stream.get('profile', ''),
+                'bit_rate': int(stream.get('bit_rate') or format_info.get('bit_rate') or 0),
             }
         except Exception as e:
             logger.warning(f"ffprobe failed: {e}")
@@ -1805,6 +1959,23 @@ class VideoProcessor:
             'oversample_factor': oversample_factor,
         }
 
+    def _estimate_candidate_source_indices(
+        self,
+        total_frames: int,
+        candidate_count: int,
+    ) -> List[int]:
+        if total_frames <= 0 or candidate_count <= 0:
+            return []
+
+        if candidate_count == 1:
+            return [0]
+
+        positions = np.linspace(0, total_frames - 1, num=candidate_count)
+        return [
+            max(0, min(total_frames - 1, int(round(float(position)))))
+            for position in positions
+        ]
+
     def _get_effective_search_radius(self, total_frames: int, fps: float, extraction_config: Dict[str, Any]) -> int:
         requested_radius = max(1, int(extraction_config.get('replacement_search_radius', 4) or 4))
         if not extraction_config.get('smart_frame_selection', False):
@@ -1954,6 +2125,80 @@ class VideoProcessor:
 
         cap.release()
         return info
+
+    def extract_exact_frames(
+        self,
+        video_path,
+        frame_requests,
+        output_dir,
+        *,
+        resolution='2K',
+        progress_callback=None,
+    ):
+        """Extract exact frame indices into predetermined output filenames."""
+        video_path = Path(video_path)
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        requests = sorted(
+            [
+                request for request in (frame_requests or [])
+                if request.get('output_name') and request.get('frame_index') is not None
+            ],
+            key=lambda item: int(item['frame_index']),
+        )
+        if not requests:
+            return []
+
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            raise ValueError(f"Could not open video file: {video_path}")
+
+        source_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        source_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        target_width, target_height, jpeg_quality = get_target_dimensions(
+            resolution,
+            source_width,
+            source_height,
+        )
+        need_scale = target_width != source_width or target_height != source_height
+
+        extracted_paths = []
+        try:
+            total_requests = len(requests)
+            for index, request in enumerate(requests, start=1):
+                frame_index = max(0, int(request['frame_index']))
+                output_name = str(request['output_name'])
+                output_path = output_dir / output_name
+
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+                ret, frame = cap.read()
+                if not ret:
+                    logger.warning(
+                        "Could not read exact frame %s from %s",
+                        frame_index,
+                        video_path,
+                    )
+                    continue
+
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                if need_scale:
+                    frame_rgb = cv2.resize(
+                        frame_rgb,
+                        (target_width, target_height),
+                        interpolation=cv2.INTER_LANCZOS4,
+                    )
+
+                pil_image = Image.fromarray(frame_rgb)
+                pil_image.save(str(output_path), 'JPEG', quality=jpeg_quality, optimize=True)
+                extracted_paths.append(str(output_path))
+
+                if progress_callback and (index % 5 == 0 or index == total_requests):
+                    progress_callback(index, total_requests, str(output_path))
+        finally:
+            cap.release()
+
+        return extracted_paths
 
     def estimate_frame_count(self, video_path, extraction_config=None):
         """Estimate how many frames will be extracted"""

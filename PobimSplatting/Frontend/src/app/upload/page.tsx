@@ -26,7 +26,7 @@ export default function UploadPage() {
     project_name: '',
     quality_mode: 'hard',
     camera_model: 'SIMPLE_RADIAL',
-    matcher_type: 'exhaustive' as MatcherMode,
+    matcher_type: 'auto' as MatcherMode,
     extraction_mode: 'fps',
     max_frames: 100,
     target_fps: 2.0,
@@ -48,7 +48,6 @@ export default function UploadPage() {
     // 8K Optimization
     crop_size: 0  // Patch-based training (0 = disabled)
   });
-  const hardModeForcesExhaustive = config.quality_mode === 'hard';
   const usesGlobalSfm = config.sfm_engine === 'glomap';
 
   // Custom parameters - starts with High quality (7000 iter) baseline
@@ -249,9 +248,7 @@ export default function UploadPage() {
       ? `${config.target_fps * config.oversample_factor} FPS candidate pass`
       : `${config.max_frames * config.oversample_factor} candidates before pruning`;
   const largeImageSet = inputProfile === 'images' && files.length >= 300;
-  const matcherRecommendation = hardModeForcesExhaustive
-    ? 'Hard mode locks the first pass to Exhaustive so the backend maximizes pair coverage before a later training retry. Global SfM is the default fit for unordered photos, Sequential is better for ordered captures, and Vocabulary Tree is the experimental scale-up path for larger unordered sets.'
-    : hasVideo
+  const matcherRecommendation = hasVideo
     ? 'Auto is recommended for video and orbit captures. Sequential matching usually fits ordered frames best, Global SfM is the safer fallback for harder cases, and Exhaustive is only worth forcing when you want maximum pair coverage.'
     : hasImages && !hasVideo
       ? largeImageSet
@@ -575,12 +572,6 @@ export default function UploadPage() {
       : policyToneKey === 'images'
         ? Image
         : Info;
-
-  useEffect(() => {
-    if (hardModeForcesExhaustive && config.matcher_type !== 'exhaustive') {
-      setConfig((current) => ({ ...current, matcher_type: 'exhaustive' }));
-    }
-  }, [hardModeForcesExhaustive, config.matcher_type]);
 
   useEffect(() => {
     if (config.sfm_engine !== 'glomap' && config.sfm_backend !== 'cli') {
@@ -1226,10 +1217,7 @@ export default function UploadPage() {
                       <select
                         value={config.matcher_type}
                         onChange={(e) => setConfig({ ...config, matcher_type: e.target.value as MatcherMode })}
-                        disabled={hardModeForcesExhaustive}
-                        className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent ${
-                          hardModeForcesExhaustive ? 'cursor-not-allowed bg-gray-100 text-gray-500' : ''
-                        }`}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       >
                         <option value="auto">Auto (Recommended, backend decides)</option>
                         <option value="sequential">Sequential (Ordered sequences / video)</option>
@@ -1237,11 +1225,6 @@ export default function UploadPage() {
                         <option value="vocab_tree">Vocabulary Tree (Experimental, large unordered photo sets)</option>
                       </select>
                       <p className="mt-2 text-xs text-gray-500">{matcherRecommendation}</p>
-                      {hardModeForcesExhaustive && (
-                        <p className="mt-1 text-xs font-medium text-amber-700">
-                          Hard preset is forcing `exhaustive` matching for the first pass.
-                        </p>
-                      )}
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">Camera Model</label>

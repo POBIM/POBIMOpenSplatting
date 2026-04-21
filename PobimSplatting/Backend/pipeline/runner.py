@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+import json
 import os
 import re
 import shutil
 import sqlite3
 import subprocess
+import tempfile
 import time
 import importlib
 from datetime import datetime
@@ -31,6 +33,13 @@ from ..utils.video_processor import VideoProcessor
 logger = logging.getLogger(__name__)
 
 COLMAP_PAIR_ID_FACTOR = 2147483647
+ORDERED_CAPTURE_POLICY_IMAGE_LIMIT = 600
+FRAME_SELECTION_MANIFEST_NAME = 'frame_selection_manifest.json'
+ORBIT_SAFE_PROFILE_PERMISSIVENESS = {
+    'local-conservative': 0,
+    'bridge-balanced': 1,
+    'bridge-recovery': 2,
+}
 
 video_processor = VideoProcessor()
 
@@ -224,6 +233,278 @@ def count_verified_matching_pairs(database_path):
             return int(row[0]) if row else 0
     except sqlite3.Error:
         return 0
+
+
+def is_gpu_matching_error_text(text):
+    normalized = (text or '').lower()
+    return (
+        'not enough gpu memory' in normalized
+        or 'failed to create feature matcher' in normalized
+        or 'cuda error' in normalized
+        or 'cuda driver version is insufficient' in normalized
+        or 'cannot use gpu feature matching without cuda or opengl support' in normalized
+    )
+
+
+def clear_colmap_database(database_path):
+    db_path = Path(database_path)
+    for candidate in (db_path, Path(f"{db_path}-shm"), Path(f"{db_path}-wal")):
+        try:
+            if candidate.exists():
+                candidate.unlink()
+        except OSError as exc:
+            logger.warning("Failed to remove database file %s: %s", candidate, exc)
+
+
+def get_frame_selection_manifest_path(paths):
+    return Path(paths['project_path']) / FRAME_SELECTION_MANIFEST_NAME
+
+
+def persist_frame_selection_manifest(paths, extraction_stats):
+    frame_manifest = list(extraction_stats.get('frame_manifest') or [])
+    if not frame_manifest:
+        return
+
+    manifest_path = get_frame_selection_manifest_path(paths)
+    manifest_payload = {
+        'created_at': datetime.utcnow().isoformat() + 'Z',
+        'source_video_path': extraction_stats.get('source_video_path'),
+        'source_total_frames': extraction_stats.get('source_total_frames'),
+        'source_fps': extraction_stats.get('source_fps'),
+        'entries': frame_manifest,
+    }
+    manifest_path.write_text(
+        json.dumps(manifest_payload, ensure_ascii=True, indent=2),
+        encoding='utf-8',
+    )
+
+
+def load_frame_selection_manifest(paths):
+    manifest_path = get_frame_selection_manifest_path(paths)
+    if not manifest_path.exists():
+        return None
+
+    try:
+        return json.loads(manifest_path.read_text(encoding='utf-8'))
+    except Exception as exc:
+        logger.warning("Failed to read frame selection manifest %s: %s", manifest_path, exc)
+        return None
+
+
+def _build_dense_boundary_indices(left_source_index, right_source_index, desired_total_frames):
+    gap = int(right_source_index) - int(left_source_index)
+    if gap <= 1:
+        return []
+
+    desired_total = max(3, min(int(desired_total_frames), gap + 1))
+    dense_indices = []
+    seen = {int(left_source_index), int(right_source_index)}
+    for step in range(1, desired_total - 1):
+        position = left_source_index + (gap * (step / (desired_total - 1)))
+        candidate_index = int(round(position))
+        candidate_index = max(int(left_source_index) + 1, min(int(right_source_index) - 1, candidate_index))
+        if candidate_index in seen:
+            continue
+        dense_indices.append(candidate_index)
+        seen.add(candidate_index)
+    return dense_indices
+
+
+def build_boundary_frame_densification_plan(paths, colmap_cfg, config):
+    manifest = load_frame_selection_manifest(paths)
+    if not manifest:
+        return None
+
+    entries = list(manifest.get('entries') or [])
+    if not entries:
+        return None
+
+    weak_boundaries = list(((colmap_cfg.get('pair_geometry_stats') or {}).get('weak_boundaries')) or [])
+    if not weak_boundaries:
+        return None
+
+    source_fps = float(manifest.get('source_fps') or 0.0)
+    entry_by_name = {
+        str(entry.get('image_name')): entry
+        for entry in entries
+        if entry.get('image_name')
+    }
+    inserted_after = {}
+    inserted_keys = set()
+    target_segment_frames = int(config.get('boundary_target_segment_frames') or 8)
+    planned_boundaries = []
+
+    for boundary in weak_boundaries:
+        left_name = boundary.get('left_image_name')
+        right_name = boundary.get('right_image_name')
+        left_entry = entry_by_name.get(left_name)
+        right_entry = entry_by_name.get(right_name)
+        if not left_entry or not right_entry:
+            continue
+
+        left_video = left_entry.get('source_video_path')
+        right_video = right_entry.get('source_video_path')
+        if not left_video or left_video != right_video:
+            continue
+
+        left_source_index = left_entry.get('source_frame_index')
+        right_source_index = right_entry.get('source_frame_index')
+        if left_source_index is None or right_source_index is None:
+            continue
+
+        dense_indices = _build_dense_boundary_indices(
+            int(left_source_index),
+            int(right_source_index),
+            target_segment_frames,
+        )
+        if not dense_indices:
+            continue
+
+        planned_entries = []
+        for source_index in dense_indices:
+            source_key = (left_video, int(source_index))
+            if source_key in inserted_keys:
+                continue
+            inserted_keys.add(source_key)
+            planned_entries.append({
+                'source_video_path': left_video,
+                'source_frame_index': int(source_index),
+                'source_time_seconds': round(source_index / source_fps, 6) if source_fps > 0 else None,
+                'inserted_for_boundary': [left_name, right_name],
+            })
+
+        if not planned_entries:
+            continue
+
+        inserted_after.setdefault(left_name, []).extend(planned_entries)
+        planned_boundaries.append({
+            'left_image_name': left_name,
+            'right_image_name': right_name,
+            'inserted_frame_indices': [item['source_frame_index'] for item in planned_entries],
+        })
+
+    if not inserted_after:
+        return None
+
+    updated_entries = []
+    existing_keys = set()
+    for entry in entries:
+        source_key = (entry.get('source_video_path'), entry.get('source_frame_index'))
+        if source_key not in existing_keys:
+            updated_entries.append(dict(entry))
+            existing_keys.add(source_key)
+        for inserted_entry in inserted_after.get(entry.get('image_name'), []):
+            source_key = (inserted_entry.get('source_video_path'), inserted_entry.get('source_frame_index'))
+            if source_key in existing_keys:
+                continue
+            updated_entries.append(dict(inserted_entry))
+            existing_keys.add(source_key)
+
+    return {
+        'manifest': manifest,
+        'entries': updated_entries,
+        'inserted_count': len(updated_entries) - len(entries),
+        'planned_boundaries': planned_boundaries,
+    }
+
+
+def should_run_boundary_frame_densification(config, colmap_cfg, sparse_summary, paths):
+    if not sparse_summary or not sparse_summary.get('has_multiple_models'):
+        return False
+
+    if colmap_cfg.get('boundary_frame_densification_attempted'):
+        return False
+
+    if str(config.get('feature_method', 'sift')).lower() != 'sift':
+        return False
+
+    manifest = load_frame_selection_manifest(paths)
+    if not manifest or not (manifest.get('entries') or []):
+        return False
+
+    pair_geometry_stats = colmap_cfg.get('pair_geometry_stats') or {}
+    return bool(pair_geometry_stats.get('weak_boundaries'))
+
+
+def rebuild_images_from_frame_manifest(project_id, paths, current_manifest, updated_entries, *, resolution):
+    images_path = Path(paths['images_path'])
+    project_path = Path(paths['project_path'])
+    temp_images_path = project_path / '.images_boundary_densify'
+    backup_images_path = project_path / '.images_boundary_backup'
+
+    if temp_images_path.exists():
+        shutil.rmtree(temp_images_path)
+    temp_images_path.mkdir(parents=True, exist_ok=True)
+
+    current_entries = list((current_manifest or {}).get('entries') or [])
+    existing_images = {}
+    for entry in current_entries:
+        source_key = (entry.get('source_video_path'), entry.get('source_frame_index'))
+        image_name = entry.get('image_name')
+        image_path = images_path / image_name if image_name else None
+        if image_path and image_path.exists():
+            existing_images[source_key] = image_path
+
+    extraction_requests_by_video: Dict[str, List[Dict[str, Any]]] = {}
+    finalized_entries = []
+
+    for index, entry in enumerate(updated_entries):
+        new_name = f'frame_{index:06d}.jpg'
+        updated_entry = dict(entry)
+        updated_entry['image_name'] = new_name
+        target_path = temp_images_path / new_name
+
+        source_key = (updated_entry.get('source_video_path'), updated_entry.get('source_frame_index'))
+        existing_path = existing_images.get(source_key)
+        if existing_path and existing_path.exists():
+            shutil.copy2(existing_path, target_path)
+        else:
+            source_video_path = updated_entry.get('source_video_path')
+            source_frame_index = updated_entry.get('source_frame_index')
+            if not source_video_path or source_frame_index is None:
+                raise ValueError(f"Cannot rebuild frame {new_name}: missing source mapping")
+            extraction_requests_by_video.setdefault(str(source_video_path), []).append({
+                'frame_index': int(source_frame_index),
+                'output_name': new_name,
+            })
+
+        finalized_entries.append(updated_entry)
+
+    for source_video_path, frame_requests in extraction_requests_by_video.items():
+        append_log_line(
+            project_id,
+            f"🧠 Re-extracting {len(frame_requests)} densified frame(s) from {Path(source_video_path).name}",
+        )
+        video_processor.extract_exact_frames(
+            source_video_path,
+            frame_requests,
+            temp_images_path,
+            resolution=resolution,
+        )
+
+    final_image_count = len(list(temp_images_path.glob('frame_*.jpg')))
+    if final_image_count != len(finalized_entries):
+        raise RuntimeError(
+            f"Densified image rebuild incomplete: expected {len(finalized_entries)} files, found {final_image_count}"
+        )
+
+    if backup_images_path.exists():
+        shutil.rmtree(backup_images_path)
+    if images_path.exists():
+        images_path.rename(backup_images_path)
+    temp_images_path.rename(images_path)
+    if backup_images_path.exists():
+        shutil.rmtree(backup_images_path)
+
+    manifest_payload = dict(current_manifest or {})
+    manifest_payload['created_at'] = datetime.utcnow().isoformat() + 'Z'
+    manifest_payload['entries'] = finalized_entries
+    get_frame_selection_manifest_path(paths).write_text(
+        json.dumps(manifest_payload, ensure_ascii=True, indent=2),
+        encoding='utf-8',
+    )
+
+    return finalized_entries
 
 
 def estimate_gpu_safe_match_limit(total_vram_mb=None, peak_feature_count=None):
@@ -475,6 +756,256 @@ def get_orbit_safe_profile_settings(profile_name, num_images):
     }
 
 
+def get_orbit_safe_profile_permissiveness(profile_name):
+    return ORBIT_SAFE_PROFILE_PERMISSIVENESS.get(str(profile_name or '').strip(), 0)
+
+
+def merge_no_regression_floors(existing_floor, candidate_floor):
+    if not existing_floor:
+        return candidate_floor
+    if not candidate_floor:
+        return existing_floor
+
+    merged_matcher = dict(existing_floor.get('matcher_params') or {})
+    candidate_matcher = dict(candidate_floor.get('matcher_params') or {})
+
+    overlap_values = []
+    for source in (merged_matcher, candidate_matcher):
+        try:
+            overlap_values.append(int(source.get('SequentialMatching.overlap', '0')))
+        except (TypeError, ValueError):
+            continue
+    if overlap_values:
+        merged_matcher['SequentialMatching.overlap'] = str(max(overlap_values))
+
+    for key in ('SequentialMatching.quadratic_overlap', 'SequentialMatching.loop_detection'):
+        merged_matcher[key] = '1' if any(
+            str(source.get(key, '0')) == '1'
+            for source in (merged_matcher, candidate_matcher)
+        ) else '0'
+
+    merged_mapper = dict(existing_floor.get('mapper_params') or {})
+    candidate_mapper = dict(candidate_floor.get('mapper_params') or {})
+
+    if any(
+        str(source.get('Mapper.structure_less_registration_fallback', '0')) == '1'
+        for source in (merged_mapper, candidate_mapper)
+    ):
+        merged_mapper['Mapper.structure_less_registration_fallback'] = '1'
+    else:
+        merged_mapper['Mapper.structure_less_registration_fallback'] = '0'
+
+    def _float_candidates(key):
+        values = []
+        for source in (merged_mapper, candidate_mapper):
+            try:
+                values.append(float(source.get(key)))
+            except (TypeError, ValueError):
+                continue
+        return values
+
+    def _int_candidates(key):
+        values = []
+        for source in (merged_mapper, candidate_mapper):
+            try:
+                values.append(int(source.get(key)))
+            except (TypeError, ValueError):
+                continue
+        return values
+
+    max_error_values = _float_candidates('Mapper.abs_pose_max_error')
+    if max_error_values:
+        merged_mapper['Mapper.abs_pose_max_error'] = str(max(max_error_values))
+
+    min_inlier_values = _int_candidates('Mapper.abs_pose_min_num_inliers')
+    if min_inlier_values:
+        merged_mapper['Mapper.abs_pose_min_num_inliers'] = str(min(min_inlier_values))
+
+    min_ratio_values = _float_candidates('Mapper.abs_pose_min_inlier_ratio')
+    if min_ratio_values:
+        merged_mapper['Mapper.abs_pose_min_inlier_ratio'] = str(min(min_ratio_values))
+
+    reg_trial_values = _int_candidates('Mapper.max_reg_trials')
+    if reg_trial_values:
+        merged_mapper['Mapper.max_reg_trials'] = str(max(reg_trial_values))
+
+    min_num_matches_values = []
+    for floor in (existing_floor, candidate_floor):
+        try:
+            min_num_matches_values.append(int(floor.get('min_num_matches')))
+        except (TypeError, ValueError):
+            continue
+
+    init_num_trials_values = []
+    for floor in (existing_floor, candidate_floor):
+        try:
+            init_num_trials_values.append(int(floor.get('init_num_trials')))
+        except (TypeError, ValueError):
+            continue
+
+    merged_profile = existing_floor.get('orbit_safe_profile')
+    candidate_profile = candidate_floor.get('orbit_safe_profile')
+    if get_orbit_safe_profile_permissiveness(candidate_profile) > get_orbit_safe_profile_permissiveness(merged_profile):
+        merged_profile = candidate_profile
+
+    return {
+        'orbit_safe_profile': merged_profile,
+        'matcher_params': merged_matcher,
+        'mapper_params': merged_mapper,
+        'min_num_matches': min(min_num_matches_values) if min_num_matches_values else None,
+        'init_num_trials': max(init_num_trials_values) if init_num_trials_values else None,
+    }
+
+
+def capture_no_regression_floor(colmap_cfg):
+    matcher_candidates = [dict(colmap_cfg.get('matcher_params') or {})]
+    recovery_matching_pass = colmap_cfg.get('recovery_matching_pass') or {}
+    if recovery_matching_pass.get('matcher_params'):
+        matcher_candidates.append(dict(recovery_matching_pass['matcher_params']))
+
+    matcher_floor = {}
+    overlap_values = []
+    for source in matcher_candidates:
+        try:
+            overlap_values.append(int(source.get('SequentialMatching.overlap', '0')))
+        except (TypeError, ValueError):
+            continue
+    if overlap_values:
+        matcher_floor['SequentialMatching.overlap'] = str(max(overlap_values))
+
+    for key in ('SequentialMatching.quadratic_overlap', 'SequentialMatching.loop_detection'):
+        matcher_floor[key] = '1' if any(
+            str(source.get(key, '0')) == '1' for source in matcher_candidates
+        ) else '0'
+
+    return {
+        'orbit_safe_profile': colmap_cfg.get('orbit_safe_profile'),
+        'matcher_params': matcher_floor,
+        'mapper_params': dict(colmap_cfg.get('mapper_params') or {}),
+        'min_num_matches': colmap_cfg.get('min_num_matches'),
+        'init_num_trials': colmap_cfg.get('init_num_trials'),
+    }
+
+
+def apply_no_regression_floor(colmap_cfg, project_id=None, reason=None):
+    floor = colmap_cfg.get('no_regression_floor') or {}
+    if not floor:
+        return colmap_cfg, False
+
+    matcher_params = dict(colmap_cfg.get('matcher_params') or {})
+    mapper_params = dict(colmap_cfg.get('mapper_params') or {})
+    changes = []
+
+    floor_profile = floor.get('orbit_safe_profile')
+    current_profile = colmap_cfg.get('orbit_safe_profile')
+    if get_orbit_safe_profile_permissiveness(floor_profile) > get_orbit_safe_profile_permissiveness(current_profile):
+        colmap_cfg['orbit_safe_profile'] = floor_profile
+        changes.append(f'profile={floor_profile}')
+
+    floor_matcher = dict(floor.get('matcher_params') or {})
+    try:
+        current_overlap = int(matcher_params.get('SequentialMatching.overlap', '0'))
+    except (TypeError, ValueError):
+        current_overlap = 0
+    try:
+        floor_overlap = int(floor_matcher.get('SequentialMatching.overlap', '0'))
+    except (TypeError, ValueError):
+        floor_overlap = 0
+    if floor_overlap > current_overlap:
+        matcher_params['SequentialMatching.overlap'] = str(floor_overlap)
+        changes.append(f'overlap={current_overlap}->{floor_overlap}')
+
+    for key in ('SequentialMatching.quadratic_overlap', 'SequentialMatching.loop_detection'):
+        current_value = str(matcher_params.get(key, '0'))
+        floor_value = str(floor_matcher.get(key, '0'))
+        if floor_value == '1' and current_value != '1':
+            matcher_params[key] = '1'
+            changes.append(f'{key}=1')
+
+    floor_mapper = dict(floor.get('mapper_params') or {})
+    if (
+        str(floor_mapper.get('Mapper.structure_less_registration_fallback', '0')) == '1'
+        and str(mapper_params.get('Mapper.structure_less_registration_fallback', '0')) != '1'
+    ):
+        mapper_params['Mapper.structure_less_registration_fallback'] = '1'
+        changes.append('structure_less_registration_fallback=1')
+
+    def _get_float(mapping, key):
+        try:
+            return float(mapping.get(key))
+        except (TypeError, ValueError):
+            return None
+
+    def _get_int(mapping, key):
+        try:
+            return int(mapping.get(key))
+        except (TypeError, ValueError):
+            return None
+
+    current_max_error = _get_float(mapper_params, 'Mapper.abs_pose_max_error')
+    floor_max_error = _get_float(floor_mapper, 'Mapper.abs_pose_max_error')
+    if floor_max_error is not None and (current_max_error is None or floor_max_error > current_max_error):
+        mapper_params['Mapper.abs_pose_max_error'] = str(floor_max_error)
+        changes.append(f'abs_pose_max_error={current_max_error}->{floor_max_error}')
+
+    current_min_inliers = _get_int(mapper_params, 'Mapper.abs_pose_min_num_inliers')
+    floor_min_inliers = _get_int(floor_mapper, 'Mapper.abs_pose_min_num_inliers')
+    if floor_min_inliers is not None and (current_min_inliers is None or floor_min_inliers < current_min_inliers):
+        mapper_params['Mapper.abs_pose_min_num_inliers'] = str(floor_min_inliers)
+        changes.append(f'abs_pose_min_num_inliers={current_min_inliers}->{floor_min_inliers}')
+
+    current_min_ratio = _get_float(mapper_params, 'Mapper.abs_pose_min_inlier_ratio')
+    floor_min_ratio = _get_float(floor_mapper, 'Mapper.abs_pose_min_inlier_ratio')
+    if floor_min_ratio is not None and (current_min_ratio is None or floor_min_ratio < current_min_ratio):
+        mapper_params['Mapper.abs_pose_min_inlier_ratio'] = str(floor_min_ratio)
+        changes.append(f'abs_pose_min_inlier_ratio={current_min_ratio}->{floor_min_ratio}')
+
+    current_reg_trials = _get_int(mapper_params, 'Mapper.max_reg_trials')
+    floor_reg_trials = _get_int(floor_mapper, 'Mapper.max_reg_trials')
+    if floor_reg_trials is not None and (current_reg_trials is None or floor_reg_trials > current_reg_trials):
+        mapper_params['Mapper.max_reg_trials'] = str(floor_reg_trials)
+        changes.append(f'max_reg_trials={current_reg_trials}->{floor_reg_trials}')
+
+    try:
+        current_min_num_matches = int(colmap_cfg.get('min_num_matches'))
+    except (TypeError, ValueError):
+        current_min_num_matches = None
+    try:
+        floor_min_num_matches = int(floor.get('min_num_matches'))
+    except (TypeError, ValueError):
+        floor_min_num_matches = None
+    if floor_min_num_matches is not None and (
+        current_min_num_matches is None or floor_min_num_matches < current_min_num_matches
+    ):
+        colmap_cfg['min_num_matches'] = floor_min_num_matches
+        changes.append(f'min_num_matches={current_min_num_matches}->{floor_min_num_matches}')
+
+    try:
+        current_init_num_trials = int(colmap_cfg.get('init_num_trials'))
+    except (TypeError, ValueError):
+        current_init_num_trials = None
+    try:
+        floor_init_num_trials = int(floor.get('init_num_trials'))
+    except (TypeError, ValueError):
+        floor_init_num_trials = None
+    if floor_init_num_trials is not None and (
+        current_init_num_trials is None or floor_init_num_trials > current_init_num_trials
+    ):
+        colmap_cfg['init_num_trials'] = floor_init_num_trials
+        changes.append(f'init_num_trials={current_init_num_trials}->{floor_init_num_trials}')
+
+    colmap_cfg['matcher_params'] = matcher_params
+    colmap_cfg['mapper_params'] = mapper_params
+
+    if changes and project_id:
+        prefix = "🧠 No-regression floor applied"
+        if reason:
+            prefix += f" ({reason})"
+        append_log_line(project_id, f"{prefix}: {', '.join(changes)}")
+
+    return colmap_cfg, bool(changes)
+
+
 def make_orbit_safe_policy(profile_name, num_images, bridge_risk_score, capture_pattern, reason):
     settings = get_orbit_safe_profile_settings(profile_name, num_images)
     return {
@@ -498,55 +1029,193 @@ def percentile(values, ratio):
     return float(ordered[index])
 
 
-def build_orbit_safe_bridge_recovery_pass(geometry_stats, matcher_params):
+def summarize_frame_selection_spacing(paths):
+    manifest = load_frame_selection_manifest(paths)
+    if not manifest:
+        return None
+
+    entries = list(manifest.get('entries') or [])
+    if len(entries) < 2:
+        return None
+
+    deltas = []
+    previous_entry = None
+    for entry in entries:
+        source_index = entry.get('source_frame_index')
+        source_video_path = entry.get('source_video_path')
+        if source_index is None:
+            previous_entry = None
+            continue
+
+        if previous_entry and previous_entry.get('source_video_path') == source_video_path:
+            delta = int(source_index) - int(previous_entry['source_frame_index'])
+            if delta > 0:
+                deltas.append(delta)
+
+        previous_entry = {
+            'source_frame_index': int(source_index),
+            'source_video_path': source_video_path,
+        }
+
+    if not deltas:
+        return None
+
+    mean_delta = sum(deltas) / max(1, len(deltas))
+    p50_delta = percentile(deltas, 0.50)
+    p90_delta = percentile(deltas, 0.90)
+
+    return {
+        'count': len(deltas),
+        'mean': round(mean_delta, 3),
+        'p50': round(p50_delta, 3),
+        'p90': round(p90_delta, 3),
+        'max': max(deltas),
+        'irregularity_ratio': round(p90_delta / max(1.0, p50_delta), 3),
+        'max_gap_ratio': round(max(deltas) / max(1.0, p90_delta), 3),
+    }
+
+
+def compute_sequential_overlap_cap(image_count, current_overlap, frame_spacing_stats=None):
+    image_count = max(2, int(image_count or 0))
+    current_overlap = max(1, int(current_overlap or 1))
+
+    sqrt_cap = int(round((image_count ** 0.5) * 3.0))
+    proportional_cap = int(round(image_count * 0.14))
+    dynamic_cap = max(current_overlap + 4, sqrt_cap, proportional_cap)
+
+    if frame_spacing_stats:
+        dynamic_cap += int(
+            round(
+                max(0.0, float(frame_spacing_stats.get('irregularity_ratio') or 0.0) - 1.2) * 4.0
+            )
+        )
+
+    return min(image_count - 1, max(current_overlap, dynamic_cap))
+
+
+def derive_data_driven_overlap_plan(
+    geometry_stats,
+    matcher_params,
+    *,
+    sparse_summary=None,
+    frame_spacing_stats=None,
+):
     if not geometry_stats or not matcher_params:
         return None
 
     try:
-        overlap_value = int(matcher_params.get('SequentialMatching.overlap', '0'))
+        current_overlap = int(matcher_params.get('SequentialMatching.overlap', '0'))
     except (TypeError, ValueError):
         return None
 
+    if current_overlap <= 0:
+        return None
+
+    image_count = int(geometry_stats.get('image_count') or 0)
     weak_boundary_count = int(geometry_stats.get('weak_boundary_count') or 0)
     weak_boundary_ratio = float(geometry_stats.get('weak_boundary_ratio') or 0.0)
     zero_boundary_count = int(geometry_stats.get('zero_boundary_count') or 0)
     bridge_p10 = float(geometry_stats.get('bridge_p10') or 0.0)
     bridge_min = float(geometry_stats.get('bridge_min') or 0.0)
     adjacent_p10 = float(geometry_stats.get('adjacent_p10') or 0.0)
-    image_count = int(geometry_stats.get('image_count') or 0)
 
-    overlap_boost = 0
-    reason = None
+    bridge_floor = min(
+        value for value in (bridge_min, bridge_p10) if value > 0
+    ) if any(value > 0 for value in (bridge_min, bridge_p10)) else 0.0
 
-    if zero_boundary_count > 0 or bridge_min < 12:
-        overlap_boost = 10
-        reason = 'zero-strength boundary detected in ordered frames'
-    elif bridge_min <= 20 or bridge_p10 < 22:
-        overlap_boost = 8
-        reason = 'bridge strength is borderline near at least one frame boundary'
-    elif weak_boundary_count > 0 or weak_boundary_ratio >= 0.015 or adjacent_p10 < 24:
-        overlap_boost = 6
-        reason = 'isolated weak frame boundary needs wider temporal recovery'
-    elif weak_boundary_ratio >= 0.03:
-        overlap_boost = 4
-        reason = 'multiple weak frame boundaries need additional overlap'
+    signal_scores = {
+        'zero_boundary': float(zero_boundary_count) * 4.0,
+        'bridge_floor': max(0.0, (24.0 - bridge_floor) / 2.2),
+        'bridge_p10': max(0.0, (28.0 - bridge_p10) / 3.0),
+        'adjacent_p10': max(0.0, (26.0 - adjacent_p10) / 4.0),
+        'weak_boundary': min(
+            12.0,
+            (weak_boundary_count * 1.4) + (weak_boundary_ratio * max(1, image_count) * 0.35),
+        ),
+        'spacing_irregularity': 0.0,
+        'spacing_gap': 0.0,
+        'sparse_fragmentation': 0.0,
+        'sparse_alternate': 0.0,
+        'sparse_model_count': 0.0,
+    }
 
-    if overlap_boost <= 0:
+    if frame_spacing_stats:
+        irregularity_ratio = float(frame_spacing_stats.get('irregularity_ratio') or 0.0)
+        max_gap_ratio = float(frame_spacing_stats.get('max_gap_ratio') or 0.0)
+        signal_scores['spacing_irregularity'] = max(0.0, irregularity_ratio - 1.15) * 4.0
+        signal_scores['spacing_gap'] = max(0.0, max_gap_ratio - 1.15) * 3.0
+
+    if sparse_summary:
+        registered_ratio = float(sparse_summary.get('registered_ratio') or 0.0)
+        alternate_ratio = float(sparse_summary.get('alternate_registered') or 0) / max(1, image_count)
+        model_count = int(sparse_summary.get('model_count') or 0)
+        signal_scores['sparse_fragmentation'] = max(0.0, 0.72 - registered_ratio) * 22.0
+        signal_scores['sparse_alternate'] = alternate_ratio * 10.0
+        signal_scores['sparse_model_count'] = max(0, model_count - 1) * 0.8
+
+    raw_boost = sum(signal_scores.values())
+    minimum_boost = 0
+    if zero_boundary_count > 0:
+        minimum_boost = 8
+    elif weak_boundary_count > 0 or bridge_min <= 20 or bridge_p10 < 24:
+        minimum_boost = 4
+    elif sparse_summary and sparse_summary.get('has_multiple_models'):
+        minimum_boost = 3
+
+    overlap_cap = compute_sequential_overlap_cap(
+        image_count,
+        current_overlap,
+        frame_spacing_stats=frame_spacing_stats,
+    )
+    overlap_boost = min(max(0, overlap_cap - current_overlap), max(minimum_boost, int(round(raw_boost))))
+    target_overlap = min(overlap_cap, current_overlap + overlap_boost)
+
+    sorted_signals = sorted(
+        (
+            (name, round(score, 3))
+            for name, score in signal_scores.items()
+            if score > 0.0
+        ),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+
+    return {
+        'current_overlap': current_overlap,
+        'target_overlap': target_overlap,
+        'overlap_boost': overlap_boost,
+        'overlap_cap': overlap_cap,
+        'top_signals': sorted_signals[:3],
+    }
+
+
+def build_orbit_safe_bridge_recovery_pass(geometry_stats, matcher_params):
+    overlap_plan = derive_data_driven_overlap_plan(geometry_stats, matcher_params)
+    if not overlap_plan or overlap_plan['target_overlap'] <= overlap_plan['current_overlap']:
         return None
 
-    overlap_cap = 72 if image_count <= 180 else 60
-    refined_overlap = min(overlap_cap, overlap_value + overlap_boost)
     refined_matcher_params = dict(matcher_params)
-    refined_matcher_params['SequentialMatching.overlap'] = str(refined_overlap)
+    refined_matcher_params['SequentialMatching.overlap'] = str(overlap_plan['target_overlap'])
     refined_matcher_params['SequentialMatching.quadratic_overlap'] = '1'
     refined_matcher_params['SequentialMatching.loop_detection'] = '1'
 
     if refined_matcher_params == matcher_params:
         return None
 
+    top_signal_preview = ", ".join(
+        f"{name}={score:g}" for name, score in overlap_plan['top_signals']
+    )
+    reason = (
+        'data-driven bridge recovery '
+        f"(overlap {overlap_plan['current_overlap']}→{overlap_plan['target_overlap']}"
+        + (f"; signals: {top_signal_preview}" if top_signal_preview else "")
+        + ')'
+    )
+
     return {
         'matcher_params': refined_matcher_params,
         'reason': reason,
+        'overlap_plan': overlap_plan,
     }
 
 
@@ -593,7 +1262,9 @@ def build_orbit_safe_policy_from_capture(capture_pattern, config, num_images):
     if not looks_like_video_orbit:
         return None
 
-    if num_images < 24 or num_images > 250:
+    # Keep ordered video/orbit safeguards active beyond 250 images so the
+    # matcher/mapping policy does not abruptly flip for medium-sized captures.
+    if num_images < 24 or num_images > ORDERED_CAPTURE_POLICY_IMAGE_LIMIT:
         return None
 
     if config.get('fast_sfm', False):
@@ -972,6 +1643,89 @@ def analyze_pair_geometry_stats(database_path, bridge_window=6):
     }
 
 
+def build_boundary_recovery_subset(database_path, geometry_stats, overlap, max_images=96):
+    if not Path(database_path).exists():
+        return None
+
+    weak_boundaries = list((geometry_stats or {}).get('weak_boundaries') or [])
+    if not weak_boundaries:
+        return None
+
+    with sqlite3.connect(str(database_path)) as conn:
+        image_rows = conn.execute('SELECT image_id, name FROM images ORDER BY image_id').fetchall()
+
+    if len(image_rows) < 2:
+        return None
+
+    image_ids = [row[0] for row in image_rows]
+    image_names = {image_id: name for image_id, name in image_rows}
+    padding = max(10, min(24, int(overlap // 2) + 6))
+
+    selected_ids = set()
+
+    def add_range(start_index, end_index):
+        for image_id in image_ids[start_index:end_index]:
+            if len(selected_ids) >= max_images:
+                break
+            selected_ids.add(image_id)
+
+    for boundary in weak_boundaries:
+        boundary_index = int(boundary.get('boundary_index') or 0)
+        start_index = max(0, boundary_index - padding)
+        end_index = min(len(image_ids), boundary_index + padding + 2)
+        add_range(start_index, end_index)
+
+        best_bridge_pair = boundary.get('best_bridge_pair') or ()
+        for image_id in best_bridge_pair:
+            if len(selected_ids) >= max_images:
+                break
+            if image_id in image_names:
+                selected_ids.add(int(image_id))
+
+        if len(selected_ids) >= max_images:
+            break
+
+    if not selected_ids:
+        return None
+
+    ordered_image_ids = [image_id for image_id in image_ids if image_id in selected_ids]
+    if len(ordered_image_ids) < 2:
+        return None
+
+    return {
+        'image_ids': ordered_image_ids,
+        'image_names': [image_names[image_id] for image_id in ordered_image_ids],
+        'padding': padding,
+        'weak_boundary_count': len(weak_boundaries),
+    }
+
+
+def create_boundary_subset_database(source_database_path, subset_database_path, subset_image_ids):
+    subset_ids = [int(image_id) for image_id in subset_image_ids]
+    if not subset_ids:
+        raise ValueError('boundary subset database requires at least one image id')
+
+    shutil.copy2(source_database_path, subset_database_path)
+
+    placeholders = ', '.join('?' for _ in subset_ids)
+    with sqlite3.connect(str(subset_database_path)) as conn:
+        conn.execute('PRAGMA foreign_keys=ON')
+        conn.execute(f'DELETE FROM images WHERE image_id NOT IN ({placeholders})', subset_ids)
+        conn.execute('DELETE FROM matches')
+        conn.execute('DELETE FROM two_view_geometries')
+        conn.commit()
+
+
+def merge_boundary_subset_matches(source_database_path, target_database_path):
+    with sqlite3.connect(str(target_database_path)) as conn:
+        conn.execute('ATTACH DATABASE ? AS subset_db', (str(source_database_path),))
+        conn.execute('BEGIN')
+        conn.execute('INSERT OR REPLACE INTO matches SELECT * FROM subset_db.matches')
+        conn.execute('INSERT OR REPLACE INTO two_view_geometries SELECT * FROM subset_db.two_view_geometries')
+        conn.commit()
+        conn.execute('DETACH DATABASE subset_db')
+
+
 def refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id=None):
     if not colmap_cfg.get('orbit_safe_mode'):
         return colmap_cfg
@@ -1034,6 +1788,11 @@ def refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id=None):
     )
     colmap_cfg['min_num_matches'] = min(colmap_cfg['min_num_matches'], refined_policy['min_num_matches_cap'])
     colmap_cfg['init_num_trials'] = max(colmap_cfg['init_num_trials'], refined_policy['init_num_trials_floor'])
+    colmap_cfg, floor_applied = apply_no_regression_floor(
+        colmap_cfg,
+        project_id=project_id,
+        reason='preserving round-1-or-better permissiveness',
+    )
 
     weak_boundary_count = geometry_stats.get('weak_boundary_count', 0)
     weak_boundary_ratio = float(geometry_stats.get('weak_boundary_ratio') or 0.0)
@@ -1042,24 +1801,18 @@ def refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id=None):
     adjacent_p10 = float(geometry_stats.get('adjacent_p10') or 0.0)
     zero_boundary_count = int(geometry_stats.get('zero_boundary_count') or 0)
 
-    overlap_value = int(colmap_cfg['matcher_params'].get('SequentialMatching.overlap', '20'))
+    overlap_plan = derive_data_driven_overlap_plan(
+        geometry_stats,
+        colmap_cfg['matcher_params'],
+        frame_spacing_stats=(
+            summarize_frame_selection_spacing(paths)
+            if colmap_cfg.get('boundary_frame_densification_attempted')
+            else None
+        ),
+    )
     if weak_boundary_count > 0:
-        overlap_boost = 0
-        if zero_boundary_count > 0 or bridge_min < 12:
-            overlap_boost += 10
-        elif bridge_min <= 20:
-            overlap_boost += 8
-        elif bridge_p10 < 22:
-            overlap_boost += 6
-        elif weak_boundary_count > 0 or adjacent_p10 < 24:
-            overlap_boost += 6
-        elif weak_boundary_ratio >= 0.03:
-            overlap_boost += 4
-
-        overlap_cap = 72 if geometry_stats['image_count'] <= 180 else 60
-        if overlap_boost > 0:
-            overlap_value = min(overlap_cap, overlap_value + overlap_boost)
-            colmap_cfg['matcher_params']['SequentialMatching.overlap'] = str(overlap_value)
+        if overlap_plan and overlap_plan['target_overlap'] > overlap_plan['current_overlap']:
+            colmap_cfg['matcher_params']['SequentialMatching.overlap'] = str(overlap_plan['target_overlap'])
 
         if weak_boundary_ratio >= 0.03 or zero_boundary_count > 0:
             colmap_cfg['matcher_params']['SequentialMatching.quadratic_overlap'] = '1'
@@ -1137,9 +1890,30 @@ def refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id=None):
                 'matcher_params': non_loop_matcher_params,
                 'reason': f'{base_reason}; widening overlap before loop detection fallback',
             }
+            boundary_subset = build_boundary_recovery_subset(
+                paths['database_path'],
+                geometry_stats,
+                int(refined_matcher_params.get('SequentialMatching.overlap', '40')),
+            )
+            final_recovery_matcher_params = dict(refined_matcher_params)
+            subset_size = len((boundary_subset or {}).get('image_ids') or [])
+            if subset_size > 0:
+                loop_detection_num_images = min(20, max(8, subset_size // 2))
+                loop_detection_images_after_verification = min(10, loop_detection_num_images)
+                final_recovery_matcher_params['SequentialMatching.loop_detection_num_images'] = str(
+                    loop_detection_num_images
+                )
+                final_recovery_matcher_params[
+                    'SequentialMatching.loop_detection_num_nearest_neighbors'
+                ] = '1'
+                final_recovery_matcher_params['SequentialMatching.loop_detection_num_checks'] = '32'
+                final_recovery_matcher_params[
+                    'SequentialMatching.loop_detection_num_images_after_verification'
+                ] = str(loop_detection_images_after_verification)
             colmap_cfg['final_recovery_matching_pass'] = {
-                'matcher_params': refined_matcher_params,
+                'matcher_params': final_recovery_matcher_params,
                 'reason': f'{base_reason}; final loop-detection fallback after split sparse reconstruction',
+                'boundary_subset': boundary_subset,
             }
         else:
             recovery_matching_pass = {
@@ -1147,10 +1921,18 @@ def refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id=None):
                 'reason': base_reason,
             }
     else:
-        recovery_matching_pass = build_orbit_safe_bridge_recovery_pass(
-            geometry_stats,
-            refined_matcher_params,
-        )
+        if (
+            colmap_cfg.get('boundary_frame_densification_attempted')
+            and weak_boundary_count == 0
+            and zero_boundary_count == 0
+            and not floor_applied
+        ):
+            recovery_matching_pass = None
+        else:
+            recovery_matching_pass = build_orbit_safe_bridge_recovery_pass(
+                geometry_stats,
+                refined_matcher_params,
+            )
     if recovery_matching_pass:
         colmap_cfg['recovery_matching_pass'] = recovery_matching_pass
 
@@ -1183,6 +1965,25 @@ def refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id=None):
                 project_id,
                 "🧠 Bridge-aware tuning applied before sparse reconstruction to preserve borderline frames",
             )
+            if overlap_plan and overlap_plan['target_overlap'] > overlap_plan['current_overlap']:
+                signal_preview = ", ".join(
+                    f"{name}={score:g}" for name, score in overlap_plan['top_signals']
+                )
+                append_log_line(
+                    project_id,
+                    "🧠 Data-driven overlap tuning: "
+                    f"{overlap_plan['current_overlap']}→{overlap_plan['target_overlap']}"
+                    + (f" | signals={signal_preview}" if signal_preview else ""),
+                )
+        elif (
+            colmap_cfg.get('boundary_frame_densification_attempted')
+            and weak_boundary_count == 0
+            and zero_boundary_count == 0
+        ):
+            append_log_line(
+                project_id,
+                "🧠 Densified image set no longer shows weak boundaries; skipping extra recovery matching",
+            )
         if recovery_matching_pass:
             append_log_line(
                 project_id,
@@ -1192,11 +1993,20 @@ def refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id=None):
             )
         final_recovery_matching_pass = colmap_cfg.get('final_recovery_matching_pass')
         if final_recovery_matching_pass:
+            boundary_subset = final_recovery_matching_pass.get('boundary_subset') or {}
             append_log_line(
                 project_id,
                 "🧠 Final loop-detection fallback armed for post-reconstruction recovery: "
                 f"overlap={final_recovery_matching_pass['matcher_params']['SequentialMatching.overlap']}",
             )
+            if boundary_subset.get('image_ids'):
+                append_log_line(
+                    project_id,
+                    "🧠 Final loop-detection boundary subset: "
+                    f"{len(boundary_subset['image_ids'])} images | "
+                    f"weak_boundaries={boundary_subset.get('weak_boundary_count', 0)} | "
+                    f"padding={boundary_subset.get('padding', 0)}",
+                )
 
     return colmap_cfg
 
@@ -1218,7 +2028,18 @@ def run_orbit_safe_bridge_recovery_matching_pass(
 
     matcher_params = dict(recovery_matching_pass['matcher_params'])
     loop_detection_enabled = matcher_params.get('SequentialMatching.loop_detection') == '1'
-    use_gpu_matching = has_cuda and not loop_detection_enabled
+    prefer_gpu_matching = has_cuda
+    boundary_subset = recovery_matching_pass.get('boundary_subset') or {}
+    recovery_database_path = paths['database_path']
+    subset_image_ids = list(boundary_subset.get('image_ids') or [])
+    matching_health = {
+        'gpu_issue_detected': False,
+        'last_gpu_issue': None,
+    }
+    runtime_state = {
+        'used_gpu': False,
+        'cpu_fallback_used': False,
+    }
 
     append_log_line(
         project_id,
@@ -1229,21 +2050,97 @@ def run_orbit_safe_bridge_recovery_matching_pass(
     if loop_detection_enabled and has_cuda:
         append_log_line(
             project_id,
-            "🧠 Bridge recovery pass uses CPU matcher because loop detection is enabled",
+            "🧠 Loop-detection recovery pass will try GPU matching first with automatic CPU fallback",
+        )
+    if loop_detection_enabled and subset_image_ids:
+        append_log_line(
+            project_id,
+            "🧠 Final loop-detection fallback is constrained to a boundary subset: "
+            f"{len(subset_image_ids)} images",
         )
 
-    cmd = [
-        colmap_exe,
-        'sequential_matcher',
-        '--database_path', str(paths['database_path']),
-        '--FeatureMatching.max_num_matches', str(colmap_cfg['max_num_matches']),
-        '--FeatureMatching.use_gpu', '1' if use_gpu_matching else '0',
-    ]
+    def recovery_line_handler(line):
+        if line_handler:
+            line_handler(line)
+        if runtime_state['used_gpu'] and is_gpu_matching_error_text(line):
+            matching_health['gpu_issue_detected'] = True
+            matching_health['last_gpu_issue'] = line.strip()
+            append_log_line(project_id, f"⚠️ GPU bridge-recovery matching issue detected: {line.strip()}")
 
-    for param, value in matcher_params.items():
-        cmd.extend([f'--{param}', value])
+    def build_recovery_command(database_path, use_gpu):
+        cmd = [
+            colmap_exe,
+            'sequential_matcher',
+            '--database_path', str(database_path),
+            '--FeatureMatching.max_num_matches', str(colmap_cfg['max_num_matches']),
+            '--FeatureMatching.use_gpu', '1' if use_gpu else '0',
+        ]
 
-    run_command_with_logs(project_id, cmd, line_handler=line_handler)
+        for param, value in matcher_params.items():
+            cmd.extend([f'--{param}', value])
+
+        return cmd
+
+    def run_recovery_command(use_gpu):
+        runtime_state['used_gpu'] = use_gpu
+        matching_health['gpu_issue_detected'] = False
+        matching_health['last_gpu_issue'] = None
+
+        if loop_detection_enabled and subset_image_ids:
+            with tempfile.TemporaryDirectory(prefix='colmap-loop-subset-') as temp_dir:
+                subset_database_path = Path(temp_dir) / 'subset.db'
+                create_boundary_subset_database(
+                    paths['database_path'],
+                    subset_database_path,
+                    subset_image_ids,
+                )
+                cmd = build_recovery_command(subset_database_path, use_gpu)
+                run_command_with_logs(project_id, cmd, line_handler=recovery_line_handler)
+                merge_boundary_subset_matches(subset_database_path, paths['database_path'])
+        else:
+            cmd = build_recovery_command(recovery_database_path, use_gpu)
+            run_command_with_logs(project_id, cmd, line_handler=recovery_line_handler)
+
+    try:
+        run_recovery_command(prefer_gpu_matching)
+    except subprocess.CalledProcessError as exc:
+        if prefer_gpu_matching and (matching_health['gpu_issue_detected'] or is_gpu_matching_error_text(str(exc))):
+            runtime_state['cpu_fallback_used'] = True
+            append_log_line(
+                project_id,
+                "⚠️ GPU bridge-recovery matching failed; retrying on CPU automatically"
+                + (
+                    f" ({matching_health['last_gpu_issue']})"
+                    if matching_health['last_gpu_issue']
+                    else ""
+                ),
+            )
+            run_recovery_command(False)
+        else:
+            raise
+
+    if prefer_gpu_matching and matching_health['gpu_issue_detected'] and not runtime_state['cpu_fallback_used']:
+        runtime_state['cpu_fallback_used'] = True
+        append_log_line(
+            project_id,
+            "⚠️ GPU bridge-recovery matching reported compatibility issues; retrying on CPU automatically"
+            + (
+                f" ({matching_health['last_gpu_issue']})"
+                if matching_health['last_gpu_issue']
+                else ""
+            ),
+        )
+        run_recovery_command(False)
+
+    if runtime_state['cpu_fallback_used']:
+        append_log_line(project_id, "✅ Bridge-recovery matching completed on CPU after GPU fallback")
+    elif runtime_state['used_gpu']:
+        if loop_detection_enabled:
+            append_log_line(project_id, "✅ Loop-detection recovery matching completed on GPU")
+        else:
+            append_log_line(project_id, "✅ Bridge-recovery matching completed on GPU")
+    else:
+        append_log_line(project_id, "✅ Bridge-recovery matching completed on CPU")
 
     colmap_cfg['matcher_params'] = matcher_params
     colmap_cfg['recovery_matching_pass'] = None
@@ -1368,7 +2265,7 @@ def should_prefer_incremental_sfm(config, paths, num_images):
     if matcher_type == 'exhaustive' and num_images <= 250:
         return True, 'Exhaustive matching on small/medium datasets is usually more stable with incremental COLMAP SfM'
 
-    if looks_like_video_orbit and num_images <= 250:
+    if looks_like_video_orbit and num_images <= ORDERED_CAPTURE_POLICY_IMAGE_LIMIT:
         return True, 'Ordered video/orbit frames are reconstructed more robustly with incremental COLMAP SfM'
 
     return False, None
@@ -1507,6 +2404,7 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
                         'oversample_factor': config.get('oversample_factor', 10),
                         'replacement_search_radius': config.get('replacement_search_radius', 4),
                         'ffmpeg_cpu_workers': config.get('ffmpeg_cpu_workers', 4),
+                        'source_video_path': str(video_path),
                     }
                     
                     if config.get('extraction_mode') == 'fps':
@@ -1638,6 +2536,8 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
                             **extraction_stats,
                             'filename': Path(video_path).name,
                         }
+                        if total_videos == 1:
+                            persist_frame_selection_manifest(paths, extraction_stats)
                         with project_store.status_lock:
                             project_entry = project_store.processing_status.get(project_id)
                             if project_entry is not None:
@@ -2049,6 +2949,121 @@ def clear_sparse_reconstruction_outputs(sparse_path):
             item.unlink()
 
 
+def build_densified_overlap_retry_pass(paths, colmap_cfg, sparse_summary):
+    if not sparse_summary or not sparse_summary.get('has_multiple_models'):
+        return None
+
+    if not colmap_cfg.get('boundary_frame_densification_attempted'):
+        return None
+
+    if colmap_cfg.get('densified_overlap_retry_attempted'):
+        return None
+
+    if colmap_cfg.get('matcher_type') != 'sequential':
+        return None
+
+    matcher_params = dict(colmap_cfg.get('matcher_params') or {})
+    if not matcher_params:
+        return None
+
+    geometry_stats = colmap_cfg.get('pair_geometry_stats') or analyze_pair_geometry_stats(paths['database_path'])
+    if not geometry_stats:
+        return None
+
+    overlap_plan = derive_data_driven_overlap_plan(
+        geometry_stats,
+        matcher_params,
+        sparse_summary=sparse_summary,
+        frame_spacing_stats=summarize_frame_selection_spacing(paths),
+    )
+    if not overlap_plan or overlap_plan['target_overlap'] <= overlap_plan['current_overlap']:
+        return None
+
+    retry_matcher_params = dict(matcher_params)
+    retry_matcher_params['SequentialMatching.overlap'] = str(overlap_plan['target_overlap'])
+    retry_matcher_params['SequentialMatching.quadratic_overlap'] = '1'
+    retry_matcher_params['SequentialMatching.loop_detection'] = '0'
+
+    top_signal_preview = ", ".join(
+        f"{name}={score:g}" for name, score in overlap_plan['top_signals']
+    )
+
+    return {
+        'matcher_params': retry_matcher_params,
+        'reason': (
+            'data-driven densified-set overlap retry before any heavier fallback '
+            f"(overlap {overlap_plan['current_overlap']}→{overlap_plan['target_overlap']}"
+            + (f"; signals: {top_signal_preview}" if top_signal_preview else "")
+            + ')'
+        ),
+        'overlap_plan': overlap_plan,
+    }
+
+
+def run_boundary_frame_densification_recovery(project_id, paths, config, colmap_cfg):
+    densification_plan = build_boundary_frame_densification_plan(paths, colmap_cfg, config)
+    if not densification_plan or densification_plan.get('inserted_count', 0) <= 0:
+        return None
+
+    planned_boundaries = densification_plan.get('planned_boundaries') or []
+    append_log_line(
+        project_id,
+        "🧠 Rebuilding the image set with denser coverage at weak boundaries: "
+        f"+{densification_plan['inserted_count']} frames across {len(planned_boundaries)} gap(s)",
+    )
+    for boundary in planned_boundaries[:4]:
+        append_log_line(
+            project_id,
+            "   ↳ densify "
+            f"{boundary['left_image_name']}→{boundary['right_image_name']} with "
+            f"{len(boundary['inserted_frame_indices'])} inserted frame(s)",
+        )
+
+    current_manifest = densification_plan['manifest']
+    rebuild_images_from_frame_manifest(
+        project_id,
+        paths,
+        current_manifest,
+        densification_plan['entries'],
+        resolution=config.get('colmap_resolution', '2K'),
+    )
+
+    clear_sparse_reconstruction_outputs(paths['sparse_path'])
+    clear_colmap_database(paths['database_path'])
+
+    previous_floor = merge_no_regression_floors(
+        colmap_cfg.get('no_regression_floor'),
+        capture_no_regression_floor(colmap_cfg),
+    )
+
+    # After densifying the image set, recompute the baseline config for the new
+    # image count, then clamp it so round 2 cannot become stricter than round 1.
+    _, rerun_colmap_cfg, _, _ = get_colmap_config_for_pipeline(paths, config)
+    rerun_colmap_cfg['boundary_frame_densification_attempted'] = True
+    rerun_colmap_cfg['recovery_matching_pass'] = None
+    rerun_colmap_cfg['final_recovery_matching_pass'] = None
+    rerun_colmap_cfg['densified_overlap_retry_attempted'] = False
+    rerun_colmap_cfg['loop_detection_fallback_attempted'] = True
+    rerun_colmap_cfg['pair_geometry_stats'] = None
+    rerun_colmap_cfg['pre_densification_sparse_summary'] = dict(colmap_cfg.get('last_sparse_summary') or {})
+    if previous_floor:
+        rerun_colmap_cfg['no_regression_floor'] = previous_floor
+        rerun_colmap_cfg, _ = apply_no_regression_floor(
+            rerun_colmap_cfg,
+            project_id=project_id,
+            reason='round-2 baseline after boundary densification',
+        )
+
+    append_log_line(
+        project_id,
+        "🔁 Rerunning feature extraction, feature matching, and sparse reconstruction "
+        "after boundary frame densification with a no-regression matcher floor",
+    )
+    rerun_colmap_cfg = run_feature_extraction_stage(project_id, paths, config, rerun_colmap_cfg)
+    rerun_colmap_cfg = run_feature_matching_stage(project_id, paths, config, rerun_colmap_cfg)
+    return run_sparse_reconstruction_stage(project_id, paths, config, rerun_colmap_cfg)
+
+
 def should_run_final_loop_detection_recovery(colmap_cfg, sparse_summary, num_images):
     if not sparse_summary:
         return False
@@ -2068,7 +3083,7 @@ def should_run_final_loop_detection_recovery(colmap_cfg, sparse_summary, num_ima
     if best_registered >= num_images:
         return False
 
-    return alternate_registered >= max(5, int(num_images * 0.08))
+    return alternate_registered >= max(5, int(num_images * 0.05))
 
 
 def get_colmap_config(num_images, project_id=None, quality_mode='balanced', custom_params=None, preferred_matcher_type=None, orbit_safe_mode=False, orbit_safe_policy=None):
@@ -2729,9 +3744,17 @@ def run_hloc_feature_matching_stage(project_id, paths, config, hloc_data=None):
         if hloc_data and 'features_path' in hloc_data:
             features_path = Path(hloc_data['features_path'])
             feature_conf = hloc_data.get('feature_conf', {})
+            if hloc_data.get('colmap_config'):
+                colmap_cfg = hloc_data['colmap_config']
         else:
             features_path = output_path / 'features.h5'
             feature_conf = {}
+
+        colmap_cfg, _ = apply_no_regression_floor(
+            colmap_cfg,
+            project_id=project_id,
+            reason='before hloc feature matching',
+        )
         
         if not features_path.exists():
             raise FileNotFoundError(f"Features file not found: {features_path}")
@@ -3013,9 +4036,14 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None):
     num_images, colmap_cfg, colmap_exe, has_cuda = get_colmap_config_for_pipeline(paths, config, project_id)
     if colmap_config:
         colmap_cfg = colmap_config
+    colmap_cfg, _ = apply_no_regression_floor(
+        colmap_cfg,
+        project_id=project_id,
+        reason='before COLMAP feature matching',
+    )
 
     loop_detection_enabled = colmap_cfg['matcher_params'].get('SequentialMatching.loop_detection') == '1'
-    use_gpu_matching = has_cuda and not loop_detection_enabled
+    use_gpu_matching = has_cuda
     peak_feature_count = get_peak_feature_count(paths['database_path'])
     gpu_total_vram_mb = get_gpu_total_vram_mb() if use_gpu_matching else None
 
@@ -3038,9 +4066,10 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None):
     append_log_line(project_id, "🔄 Running COLMAP Feature Matching...")
     
     if use_gpu_matching:
-        append_log_line(project_id, "🚀 Using GPU-accelerated COLMAP for feature matching")
-    elif has_cuda and loop_detection_enabled:
-        append_log_line(project_id, "🧠 Loop-closure matching enabled; using CPU matcher for compatibility with this COLMAP/CUDA build")
+        if loop_detection_enabled:
+            append_log_line(project_id, "🧠 Loop-closure matching enabled; attempting GPU matcher first with automatic CPU fallback")
+        else:
+            append_log_line(project_id, "🚀 Using GPU-accelerated COLMAP for feature matching")
     else:
         append_log_line(project_id, "⚠️ COLMAP CUDA support not detected; falling back to CPU mode for matching")
     
@@ -3050,6 +4079,10 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None):
     matching_health = {
         'gpu_issue_detected': False,
         'last_gpu_issue': None,
+    }
+    matching_runtime = {
+        'last_use_gpu': use_gpu_matching,
+        'cpu_fallback_used': False,
     }
     
     matcher_cmd = f'{colmap_cfg["matcher_type"]}_matcher'
@@ -3070,10 +4103,8 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None):
             append_log_line(project_id, f"[DEBUG] Feature matching: {line.strip()}")
         
         if (
-            'not enough gpu memory' in line.lower()
-            or 'failed to create feature matcher' in line.lower()
-            or 'cuda error' in line.lower()
-            or 'cuda driver version is insufficient' in line.lower()
+            matching_runtime['last_use_gpu']
+            and is_gpu_matching_error_text(line)
         ):
             matching_health['gpu_issue_detected'] = True
             matching_health['last_gpu_issue'] = line.strip()
@@ -3115,15 +4146,6 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None):
     def run_matching_command(command):
         run_command_with_logs(project_id, command, line_handler=matching_line_handler)
 
-    def is_gpu_matching_error_text(text):
-        normalized = (text or '').lower()
-        return (
-            'not enough gpu memory' in normalized
-            or 'failed to create feature matcher' in normalized
-            or 'cuda error' in normalized
-            or 'cuda driver version is insufficient' in normalized
-        )
-
     def reset_matching_health():
         matching_health['gpu_issue_detected'] = False
         matching_health['last_gpu_issue'] = None
@@ -3158,12 +4180,13 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None):
                 f"🔄 Retrying with GPU-based matching at reduced max_matches={retry_matches}...",
             )
             gpu_cmd = build_matching_cmd(retry_matches, True)
+            matching_runtime['last_use_gpu'] = True
             reset_matching_health()
 
             try:
                 run_matching_command(gpu_cmd)
             except subprocess.CalledProcessError as retry_error:
-                if is_gpu_matching_error_text(str(retry_error)) or matching_health['gpu_issue_detected']:
+                if matching_health['gpu_issue_detected'] or is_gpu_matching_error_text(str(retry_error)):
                     append_log_line(
                         project_id,
                         f"⚠️ Reduced GPU matching attempt failed at max_matches={retry_matches}",
@@ -3198,22 +4221,31 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None):
         append_log_line(project_id, f"⚠️ {reason}")
         append_log_line(project_id, f"🔄 Retrying with CPU-based matching (max_matches={retry_matches})...")
         cpu_cmd = build_matching_cmd(retry_matches, False)
+        matching_runtime['last_use_gpu'] = False
+        matching_runtime['cpu_fallback_used'] = True
         run_matching_command(cpu_cmd)
         colmap_cfg['max_num_matches'] = retry_matches
         append_log_line(project_id, "✅ CPU-based matching completed successfully")
 
+    matching_runtime['last_use_gpu'] = use_gpu_matching
     try:
         run_matching_command(cmd)
     except subprocess.CalledProcessError as e:
-        if use_gpu_matching and is_gpu_matching_error_text(str(e)):
-            if not retry_matching_on_gpu_with_backoff("GPU feature matching failed"):
+        if use_gpu_matching and (matching_health['gpu_issue_detected'] or is_gpu_matching_error_text(str(e))):
+            if loop_detection_enabled:
+                retry_matching_on_cpu("GPU loop-closure matching failed")
+            elif not retry_matching_on_gpu_with_backoff("GPU feature matching failed"):
                 retry_matching_on_cpu("GPU feature matching failed after reduced-match retries")
         else:
             raise
 
     verified_pairs = count_verified_matching_pairs(paths['database_path'])
     if use_gpu_matching and verified_pairs == 0 and matching_health['gpu_issue_detected']:
-        if not retry_matching_on_gpu_with_backoff(
+        if loop_detection_enabled:
+            retry_matching_on_cpu(
+                "GPU loop-closure matching produced 0 verified pairs after a matcher initialization failure"
+            )
+        elif not retry_matching_on_gpu_with_backoff(
             "GPU feature matching produced 0 verified pairs after a matcher initialization failure"
         ):
             retry_matching_on_cpu(
@@ -3224,6 +4256,12 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None):
     if verified_pairs == 0:
         append_log_line(project_id, "❌ COLMAP Feature Matching produced 0 verified pairs")
         raise RuntimeError("COLMAP feature matching produced 0 verified pairs")
+
+    if loop_detection_enabled and use_gpu_matching:
+        if matching_runtime['cpu_fallback_used']:
+            append_log_line(project_id, "🧠 Loop-closure matching final mode: CPU fallback")
+        elif matching_runtime['last_use_gpu']:
+            append_log_line(project_id, "🧠 Loop-closure matching final mode: GPU")
     
     update_state(project_id, 'feature_matching', status='completed', progress=100)
     current = matching_progress['current'] or matching_progress['total']
@@ -3351,6 +4389,11 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
     num_images, colmap_cfg, colmap_exe, has_cuda = get_colmap_config_for_pipeline(paths, config, project_id)
     if colmap_config:
         colmap_cfg = colmap_config
+    colmap_cfg, _ = apply_no_regression_floor(
+        colmap_cfg,
+        project_id=project_id,
+        reason='before sparse reconstruction',
+    )
     colmap_cfg = refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id)
     sync_reconstruction_framework(project_id, config, colmap_cfg, phase='sparse_reconstruction')
     
@@ -3804,6 +4847,48 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
     update_stage_detail(project_id, 'sparse_reconstruction', text=f'Images registered: {min(registered, num_images)}/{num_images}', subtext=f'{engine_name} reconstruction complete')
     append_log_line(project_id, f"✅ Sparse Reconstruction completed using {engine_name}")
     sparse_summary = report_sparse_model_coverage(project_id, paths, config, colmap_cfg, num_images)
+    if sparse_summary:
+        colmap_cfg['last_sparse_summary'] = dict(sparse_summary)
+        colmap_cfg['no_regression_floor'] = merge_no_regression_floors(
+            colmap_cfg.get('no_regression_floor'),
+            capture_no_regression_floor(colmap_cfg),
+        )
+
+    if should_run_boundary_frame_densification(config, colmap_cfg, sparse_summary, paths):
+        densified_result = run_boundary_frame_densification_recovery(
+            project_id,
+            paths,
+            config,
+            colmap_cfg,
+        )
+        if densified_result is not None:
+            return densified_result
+
+    densified_overlap_retry_pass = build_densified_overlap_retry_pass(paths, colmap_cfg, sparse_summary)
+    if densified_overlap_retry_pass:
+        overlap_plan = densified_overlap_retry_pass.get('overlap_plan') or {}
+        colmap_cfg['densified_overlap_retry_attempted'] = True
+        colmap_cfg['recovery_matching_pass'] = densified_overlap_retry_pass
+        append_log_line(
+            project_id,
+            "🧠 Sparse reconstruction is still split after boundary densification; "
+            "running a data-driven overlap retry with the standard sequential matcher",
+        )
+        append_log_line(
+            project_id,
+            "🧠 Densified-set overlap retry: "
+            f"{overlap_plan.get('current_overlap', '?')}→{overlap_plan.get('target_overlap', '?')} "
+            f"(cap={overlap_plan.get('overlap_cap', '?')}, boost={overlap_plan.get('overlap_boost', '?')})",
+        )
+        clear_sparse_reconstruction_outputs(paths['sparse_path'])
+        colmap_cfg = run_orbit_safe_bridge_recovery_matching_pass(
+            project_id,
+            paths,
+            colmap_exe,
+            colmap_cfg,
+            has_cuda,
+        )
+        return run_sparse_reconstruction_stage(project_id, paths, config, colmap_cfg)
 
     if should_run_final_loop_detection_recovery(colmap_cfg, sparse_summary, num_images):
         final_recovery_matching_pass = colmap_cfg.get('final_recovery_matching_pass')

@@ -38,7 +38,7 @@ export default function UploadPage() {
     ffmpeg_cpu_workers: 4,
     sfm_engine: 'glomap',  // Legacy alias kept for backend compatibility; UI shows COLMAP Global SfM
     sfm_backend: 'cli' as SfmBackendMode,
-    feature_method: 'sift',  // 'sift' (COLMAP), 'aliked' (hloc), 'superpoint' (hloc) - neural features are 10-20x faster
+    feature_method: 'sift',  // 'sift' (classic COLMAP), 'aliked' (native COLMAP neural), 'superpoint' (hloc)
     use_gpu_extraction: true,  // GPU-accelerated video frame extraction (5-10x faster)
     mixed_precision: false,
     // New resolution-based extraction settings
@@ -1021,7 +1021,7 @@ export default function UploadPage() {
                   </h4>
                 </div>
                 <p className="text-sm text-gray-600 mb-4">
-                  Neural features (ALIKED/SuperPoint) are <strong>10-20x faster</strong> than traditional SIFT for high-resolution images
+                  Neural features (ALIKED/SuperPoint) can substantially reduce matching cost versus traditional SIFT on high-resolution images
                 </p>
                 <div className="space-y-3">
                   <div className="flex flex-wrap gap-3">
@@ -1040,8 +1040,8 @@ export default function UploadPage() {
                         <div>
                           <span className="font-bold text-cyan-700 text-lg">⚡ ALIKED</span>
                           <span className="ml-2 text-xs bg-cyan-200 text-cyan-800 px-2 py-0.5 rounded">Fastest</span>
-                          <p className="text-xs text-gray-500 mt-1">Neural features @ 125+ FPS</p>
-                          <p className="text-xs text-cyan-600 mt-1">+ LightGlue matching (10-20x faster)</p>
+                          <p className="text-xs text-gray-500 mt-1">Native neural features inside COLMAP</p>
+                          <p className="text-xs text-cyan-600 mt-1">+ Native COLMAP LightGlue matching</p>
                         </div>
                       </div>
                     </label>
@@ -1089,8 +1089,10 @@ export default function UploadPage() {
                   {(config.feature_method === 'aliked' || config.feature_method === 'superpoint') && (
                     <div className="mt-3 p-3 bg-cyan-50 border border-cyan-200 rounded-lg">
                       <p className="text-sm text-cyan-800">
-                        <strong>🚀 Neural Features:</strong> Using hloc with {config.feature_method === 'aliked' ? 'ALIKED' : 'SuperPoint'} + LightGlue. 
-                        Dramatically faster for high-resolution images (4K/8K). Results are imported into COLMAP database for SfM reconstruction.
+                        <strong>🚀 Neural Features:</strong> {config.feature_method === 'aliked'
+                          ? 'Using native COLMAP ALIKED + LightGlue inside the standard reconstruction pipeline.'
+                          : 'Using hloc SuperPoint + LightGlue, then importing the results into the COLMAP database.'}
+                        {' '}This is aimed at stronger high-resolution matching coverage than the classic SIFT path.
                       </p>
                     </div>
                   )}

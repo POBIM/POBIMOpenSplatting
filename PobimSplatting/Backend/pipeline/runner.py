@@ -90,6 +90,17 @@ def check_hloc_available():
 HLOC_AVAILABLE = check_hloc_available()
 
 
+def normalize_feature_method(feature_method):
+    if feature_method is None:
+        return 'sift'
+
+    normalized = str(feature_method).strip().lower()
+    if normalized in {'sift', 'aliked', 'superpoint'}:
+        return normalized
+
+    return 'sift'
+
+
 def normalize_matcher_type(matcher_type):
     if matcher_type is None:
         return None
@@ -182,6 +193,112 @@ def get_colmap_feature_extraction_max_image_size_flag(colmap_exe):
     return '--FeatureExtraction.max_image_size'
 
 
+@lru_cache(maxsize=4)
+def get_colmap_native_feature_capabilities(colmap_exe):
+    def _run_help(command):
+        try:
+            result = subprocess.run(
+                [colmap_exe, command, '-h'],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except Exception:
+            return ''
+
+        return f"{result.stdout}\n{result.stderr}"
+
+    extraction_output = _run_help('feature_extractor')
+    matching_output = _run_help('exhaustive_matcher')
+    extraction_lower = extraction_output.lower()
+    matching_lower = matching_output.lower()
+
+    return {
+        'supports_feature_extraction_type': 'featureextraction.type' in extraction_lower,
+        'supports_aliked_extraction': 'alikedextraction.max_num_features' in extraction_lower,
+        'supports_feature_matching_type': 'featurematching.type' in matching_lower,
+        'supports_aliked_bruteforce': (
+            'alikedmatching.bruteforce_model_path' in matching_lower
+            or 'alikedmatching.brute_force_min_cossim' in matching_lower
+        ),
+        'supports_aliked_lightglue': 'alikedmatching.lightglue_model_path' in matching_lower,
+    }
+
+
+def get_native_aliked_max_num_features(quality_mode, fallback_max_num_features):
+    caps = {
+        'fast': 2048,
+        'balanced': 4096,
+        'high': 4096,
+        'ultra': 6144,
+        'hard': 8192,
+        'professional': 8192,
+        'ultra_professional': 12288,
+        'robust': 8192,
+        'custom': 4096,
+    }
+    default_cap = caps.get(str(quality_mode or 'balanced').strip().lower(), 4096)
+    return min(int(fallback_max_num_features), default_cap)
+
+
+def resolve_colmap_feature_pipeline_profile(config, colmap_cfg, colmap_exe):
+    feature_method = normalize_feature_method(config.get('feature_method', 'sift'))
+    capabilities = get_colmap_native_feature_capabilities(colmap_exe)
+
+    profile = {
+        'feature_method': feature_method,
+        'extractor_type': 'SIFT',
+        'matcher_type': 'SIFT_BRUTEFORCE',
+        'is_native_neural': False,
+        'uses_lightglue': False,
+        'extractor_args': [],
+        'matcher_args': [],
+        'description': 'classic SIFT + brute-force matching',
+    }
+
+    if feature_method != 'aliked':
+        return profile
+
+    if not (
+        capabilities['supports_feature_extraction_type']
+        and capabilities['supports_aliked_extraction']
+        and capabilities['supports_feature_matching_type']
+        and capabilities['supports_aliked_bruteforce']
+    ):
+        return profile
+
+    matcher_type = (
+        'ALIKED_LIGHTGLUE'
+        if capabilities['supports_aliked_lightglue']
+        else 'ALIKED_BRUTEFORCE'
+    )
+    uses_lightglue = matcher_type == 'ALIKED_LIGHTGLUE'
+    max_num_features = get_native_aliked_max_num_features(
+        config.get('quality_mode', 'balanced'),
+        colmap_cfg.get('max_num_features', 4096),
+    )
+
+    return {
+        'feature_method': feature_method,
+        'extractor_type': 'ALIKED_N16ROT',
+        'matcher_type': matcher_type,
+        'is_native_neural': True,
+        'uses_lightglue': uses_lightglue,
+        'extractor_args': [
+            '--FeatureExtraction.type', 'ALIKED_N16ROT',
+            '--AlikedExtraction.max_num_features', str(max_num_features),
+        ],
+        'matcher_args': [
+            '--FeatureMatching.type', matcher_type,
+        ],
+        'description': (
+            'native COLMAP ALIKED + LightGlue'
+            if uses_lightglue
+            else 'native COLMAP ALIKED + brute-force matching'
+        ),
+    }
+
+
 @lru_cache(maxsize=1)
 def get_gpu_total_vram_mb():
     try:
@@ -243,7 +360,45 @@ def is_gpu_matching_error_text(text):
         or 'cuda error' in normalized
         or 'cuda driver version is insufficient' in normalized
         or 'cannot use gpu feature matching without cuda or opengl support' in normalized
+        or 'failed to load shared library' in normalized
+        or 'onnx runtime error' in normalized
+        or 'ortsessionoptionsappendexecutionprovider_cuda' in normalized
+        or 'libcudnn.so' in normalized
     )
+
+
+def should_log_subprocess_line(line):
+    normalized = (line or '').strip().lower()
+    if not normalized:
+        return False
+
+    important_keywords = (
+        'error',
+        'warning',
+        'failed',
+        'fatal',
+        'exception',
+        'traceback',
+        'downloading file',
+        'caching file',
+        'retrying',
+        'abort',
+        'terminate called',
+    )
+    return any(keyword in normalized for keyword in important_keywords)
+
+
+def should_emit_progress_milestone(progress_state, current, total, *, percent_step=10):
+    total = max(int(total or 0), 1)
+    current = max(0, min(int(current or 0), total))
+    percent = int((current / total) * 100)
+    milestone = 100 if current >= total else (percent // percent_step) * percent_step
+    last_milestone = int(progress_state.get('last_milestone', -1))
+    if milestone <= last_milestone and current not in {1, total}:
+        return False, percent
+
+    progress_state['last_milestone'] = milestone
+    return True, percent
 
 
 def clear_colmap_database(database_path):
@@ -2014,6 +2169,7 @@ def refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id=None):
 def run_orbit_safe_bridge_recovery_matching_pass(
     project_id,
     paths,
+    config,
     colmap_exe,
     colmap_cfg,
     has_cuda,
@@ -2036,6 +2192,7 @@ def run_orbit_safe_bridge_recovery_matching_pass(
         'gpu_issue_detected': False,
         'last_gpu_issue': None,
     }
+    feature_profile = resolve_colmap_feature_pipeline_profile(config, colmap_cfg, colmap_exe)
     runtime_state = {
         'used_gpu': False,
         'cpu_fallback_used': False,
@@ -2076,6 +2233,9 @@ def run_orbit_safe_bridge_recovery_matching_pass(
             '--FeatureMatching.use_gpu', '1' if use_gpu else '0',
         ]
 
+        if feature_profile['matcher_args']:
+            cmd.extend(feature_profile['matcher_args'])
+
         for param, value in matcher_params.items():
             cmd.extend([f'--{param}', value])
 
@@ -2095,11 +2255,21 @@ def run_orbit_safe_bridge_recovery_matching_pass(
                     subset_image_ids,
                 )
                 cmd = build_recovery_command(subset_database_path, use_gpu)
-                run_command_with_logs(project_id, cmd, line_handler=recovery_line_handler)
+                run_command_with_logs(
+                    project_id,
+                    cmd,
+                    line_handler=recovery_line_handler,
+                    raw_line_filter=should_log_subprocess_line,
+                )
                 merge_boundary_subset_matches(subset_database_path, paths['database_path'])
         else:
             cmd = build_recovery_command(recovery_database_path, use_gpu)
-            run_command_with_logs(project_id, cmd, line_handler=recovery_line_handler)
+            run_command_with_logs(
+                project_id,
+                cmd,
+                line_handler=recovery_line_handler,
+                raw_line_filter=should_log_subprocess_line,
+            )
 
     try:
         run_recovery_command(prefer_gpu_matching)
@@ -2571,17 +2741,39 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
                             f"oversample={extraction_stats.get('oversample_factor', '--')}x | "
                             f"window=±{extraction_stats.get('search_radius', 0)}",
                         )
-                        for selection in extraction_stats.get('selections', []):
-                            offset = int(selection.get('offset', 0))
-                            if offset == 0:
-                                continue
+                        selection_samples = [
+                            selection
+                            for selection in extraction_stats.get('selections', [])
+                            if int(selection.get('offset', 0)) != 0
+                        ]
+                        if selection_samples:
+                            fallback_count = sum(
+                                1 for selection in selection_samples if selection.get('fallback_used')
+                            )
+                            avg_abs_offset = sum(
+                                abs(int(selection.get('offset', 0))) for selection in selection_samples
+                            ) / max(len(selection_samples), 1)
                             append_log_line(
                                 project_id,
-                                "   ↳ target "
-                                f"{selection.get('target_index')} -> selected {selection.get('selected_index')} "
-                                f"(offset {offset:+d}, sharpness={selection.get('sharpness')}, "
-                                f"{'fallback' if selection.get('fallback_used') else 'quality-pass'})",
+                                "🧠 Selection offsets: "
+                                f"adjusted={len(selection_samples)} | "
+                                f"fallbacks={fallback_count} | "
+                                f"avg_abs_offset={avg_abs_offset:.1f}",
                             )
+                            preview_samples = sorted(
+                                selection_samples,
+                                key=lambda selection: abs(int(selection.get('offset', 0))),
+                                reverse=True,
+                            )[:3]
+                            for selection in preview_samples:
+                                offset = int(selection.get('offset', 0))
+                                append_log_line(
+                                    project_id,
+                                    "   ↳ sample "
+                                    f"target {selection.get('target_index')} -> {selection.get('selected_index')} "
+                                    f"(offset {offset:+d}, "
+                                    f"{'fallback' if selection.get('fallback_used') else 'quality-pass'})",
+                                )
                     
                     # Extract high-resolution training images if enabled
                     # Use extract_matching_frames to ensure EXACT same frames as COLMAP
@@ -3860,6 +4052,7 @@ def run_feature_extraction_stage(project_id, paths, config, colmap_config=None):
     if colmap_config:
         colmap_cfg = colmap_config
     max_image_size_flag = get_colmap_feature_extraction_max_image_size_flag(colmap_exe)
+    feature_profile = resolve_colmap_feature_pipeline_profile(config, colmap_cfg, colmap_exe)
     
     update_state(project_id, 'feature_extraction', status='running')
     update_stage_detail(project_id, 'feature_extraction', text=f'Images processed: 0/{num_images}', subtext=None)
@@ -3875,6 +4068,9 @@ def run_feature_extraction_stage(project_id, paths, config, colmap_config=None):
         append_log_line(project_id, "ℹ️ Detected legacy COLMAP feature_extractor option layout")
     else:
         append_log_line(project_id, "ℹ️ Detected modern COLMAP feature_extractor option layout")
+
+    if feature_profile['is_native_neural']:
+        append_log_line(project_id, f"⚡ Using {feature_profile['description']} for feature extraction")
     
     cmd = [
         colmap_exe, 'feature_extractor',
@@ -3884,21 +4080,35 @@ def run_feature_extraction_stage(project_id, paths, config, colmap_config=None):
         '--ImageReader.single_camera', '1',
         '--FeatureExtraction.use_gpu', '1' if has_cuda else '0',
         max_image_size_flag, str(colmap_cfg['max_image_size']),
-        '--SiftExtraction.max_num_features', str(colmap_cfg['max_num_features']),
-        '--SiftExtraction.first_octave', str(colmap_cfg['first_octave']),
-        '--SiftExtraction.num_octaves', str(colmap_cfg['num_octaves'])
     ]
-    
-    # Add enhanced SIFT parameters for high quality modes
-    sift_params = colmap_cfg.get('sift_params', {})
-    for param, value in sift_params.items():
-        if value is not None:
-            cmd.extend([f'--SiftExtraction.{param}', str(value)])
+
+    if feature_profile['extractor_args']:
+        cmd.extend(feature_profile['extractor_args'])
+
+    if feature_profile['extractor_type'] == 'SIFT':
+        cmd.extend([
+            '--SiftExtraction.max_num_features', str(colmap_cfg['max_num_features']),
+            '--SiftExtraction.first_octave', str(colmap_cfg['first_octave']),
+            '--SiftExtraction.num_octaves', str(colmap_cfg['num_octaves']),
+        ])
+
+        # Add enhanced SIFT parameters for high quality modes
+        sift_params = colmap_cfg.get('sift_params', {})
+        for param, value in sift_params.items():
+            if value is not None:
+                cmd.extend([f'--SiftExtraction.{param}', str(value)])
     
     progress_tracker = {'count': 0}
+    extraction_progress_log = {'last_milestone': -1}
     extraction_health = {
         'gpu_instability': False,
         'failed_images': 0,
+    }
+    extraction_metrics = {
+        'feature_sum': 0,
+        'feature_min': None,
+        'feature_max': 0,
+        'feature_samples': 0,
     }
 
     def count_featured_images(database_path):
@@ -3944,9 +4154,15 @@ def run_feature_extraction_stage(project_id, paths, config, colmap_config=None):
             extraction_health['gpu_instability'] = True
         if 'failed to process the image' in line_lower:
             extraction_health['failed_images'] += 1
-        
-        if any(keyword in line.lower() for keyword in ['processing', 'processed', 'image', 'file', 'features']):
-            append_log_line(project_id, f"[DEBUG] Feature extraction: {line.strip()}")
+
+        feature_count_match = re.search(r'Features:\s+(\d+)', line, re.IGNORECASE)
+        if feature_count_match:
+            feature_count = int(feature_count_match.group(1))
+            extraction_metrics['feature_sum'] += feature_count
+            extraction_metrics['feature_samples'] += 1
+            extraction_metrics['feature_max'] = max(extraction_metrics['feature_max'], feature_count)
+            current_min = extraction_metrics['feature_min']
+            extraction_metrics['feature_min'] = feature_count if current_min is None else min(current_min, feature_count)
         
         patterns = [
             r'Processing image \[(\d+)/(\d+)\]',
@@ -3979,6 +4195,23 @@ def run_feature_extraction_stage(project_id, paths, config, colmap_config=None):
                 emit_stage_progress(project_id, 'feature_extraction', percent, details)
                 update_state(project_id, 'feature_extraction', progress=min(percent, 99), details=details)
                 update_stage_detail(project_id, 'feature_extraction', text=f'Images processed: {current}/{total}', subtext=None)
+                should_log, progress_percent = should_emit_progress_milestone(
+                    extraction_progress_log,
+                    current,
+                    total,
+                )
+                if should_log:
+                    avg_features = (
+                        extraction_metrics['feature_sum'] // extraction_metrics['feature_samples']
+                        if extraction_metrics['feature_samples']
+                        else 0
+                    )
+                    append_log_line(
+                        project_id,
+                        "🧩 Feature extraction progress: "
+                        f"{current}/{total} images ({progress_percent}%) | "
+                        f"avg_features={avg_features:,}",
+                    )
                 return
         
         if any(keyword in line.lower() for keyword in ['processed', 'processing']):
@@ -3994,14 +4227,41 @@ def run_feature_extraction_stage(project_id, paths, config, colmap_config=None):
             emit_stage_progress(project_id, 'feature_extraction', percent, details)
             update_state(project_id, 'feature_extraction', progress=min(percent, 99), details=details)
             update_stage_detail(project_id, 'feature_extraction', text=f'Images processed: {processed}/{num_images}', subtext=None)
+            should_log, progress_percent = should_emit_progress_milestone(
+                extraction_progress_log,
+                processed,
+                num_images,
+            )
+            if should_log:
+                avg_features = (
+                    extraction_metrics['feature_sum'] // extraction_metrics['feature_samples']
+                    if extraction_metrics['feature_samples']
+                    else 0
+                )
+                append_log_line(
+                    project_id,
+                    "🧩 Feature extraction progress: "
+                    f"{processed}/{num_images} images ({progress_percent}%) | "
+                    f"avg_features={avg_features:,}",
+                )
     
     try:
-        run_command_with_logs(project_id, cmd, line_handler=feature_line_handler)
+        run_command_with_logs(
+            project_id,
+            cmd,
+            line_handler=feature_line_handler,
+            raw_line_filter=should_log_subprocess_line,
+        )
     except subprocess.CalledProcessError:
         if has_cuda:
             append_log_line(project_id, "⚠️ GPU feature extraction exited with an error; resetting COLMAP database and retrying on CPU")
             reset_colmap_database(paths['database_path'])
-            run_command_with_logs(project_id, build_feature_extractor_cmd(False), line_handler=feature_line_handler)
+            run_command_with_logs(
+                project_id,
+                build_feature_extractor_cmd(False),
+                line_handler=feature_line_handler,
+                raw_line_filter=should_log_subprocess_line,
+            )
         else:
             raise
 
@@ -4020,12 +4280,27 @@ def run_feature_extraction_stage(project_id, paths, config, colmap_config=None):
         extraction_health['gpu_instability'] = False
         extraction_health['failed_images'] = 0
         progress_tracker['count'] = 0
-        run_command_with_logs(project_id, build_feature_extractor_cmd(False), line_handler=feature_line_handler)
+        run_command_with_logs(
+            project_id,
+            build_feature_extractor_cmd(False),
+            line_handler=feature_line_handler,
+            raw_line_filter=should_log_subprocess_line,
+        )
         extracted_image_count = count_featured_images(paths['database_path'])
         append_log_line(project_id, f"✅ CPU feature extraction retry completed with {extracted_image_count}/{num_images} images in database")
     
     update_state(project_id, 'feature_extraction', status='completed', progress=100)
     update_stage_detail(project_id, 'feature_extraction', text=f'Images processed: {num_images}/{num_images}', subtext='Feature extraction complete')
+    if extraction_metrics['feature_samples']:
+        avg_features = extraction_metrics['feature_sum'] // extraction_metrics['feature_samples']
+        append_log_line(
+            project_id,
+            "📈 Feature extraction summary: "
+            f"images={extraction_metrics['feature_samples']}/{num_images} | "
+            f"avg={avg_features:,} | "
+            f"min={int(extraction_metrics['feature_min'] or 0):,} | "
+            f"max={extraction_metrics['feature_max']:,}",
+        )
     append_log_line(project_id, "✅ COLMAP Feature Extraction completed")
     
     return colmap_cfg
@@ -4041,6 +4316,7 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None):
         project_id=project_id,
         reason='before COLMAP feature matching',
     )
+    feature_profile = resolve_colmap_feature_pipeline_profile(config, colmap_cfg, colmap_exe)
 
     loop_detection_enabled = colmap_cfg['matcher_params'].get('SequentialMatching.loop_detection') == '1'
     use_gpu_matching = has_cuda
@@ -4072,10 +4348,13 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None):
             append_log_line(project_id, "🚀 Using GPU-accelerated COLMAP for feature matching")
     else:
         append_log_line(project_id, "⚠️ COLMAP CUDA support not detected; falling back to CPU mode for matching")
-    
+
     append_log_line(project_id, f"🔗 Using {colmap_cfg['matcher_type']} matcher")
+    if feature_profile['is_native_neural']:
+        append_log_line(project_id, f"⚡ Native matcher profile: {feature_profile['description']}")
     
     matching_progress = {'current': 0, 'total': 0}
+    matching_progress_log = {'last_milestone': -1}
     matching_health = {
         'gpu_issue_detected': False,
         'last_gpu_issue': None,
@@ -4094,14 +4373,14 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None):
         '--FeatureMatching.max_num_matches', str(colmap_cfg['max_num_matches']),
         '--FeatureMatching.use_gpu', '1' if use_gpu_matching else '0'
     ]
+
+    if feature_profile['matcher_args']:
+        cmd.extend(feature_profile['matcher_args'])
     
     for param, value in colmap_cfg['matcher_params'].items():
         cmd.extend([f'--{param}', value])
     
     def matching_line_handler(line):
-        if any(keyword in line.lower() for keyword in ['matching', 'match', 'pair', 'block']):
-            append_log_line(project_id, f"[DEBUG] Feature matching: {line.strip()}")
-        
         if (
             matching_runtime['last_use_gpu']
             and is_gpu_matching_error_text(line)
@@ -4141,10 +4420,28 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None):
                     emit_stage_progress(project_id, 'feature_matching', percent, details)
                     update_state(project_id, 'feature_matching', progress=min(percent, 99), details=details)
                     update_stage_detail(project_id, 'feature_matching', text=f'Matching pairs: {current}/{total}', subtext=None)
+                    should_log, progress_percent = should_emit_progress_milestone(
+                        matching_progress_log,
+                        current,
+                        total,
+                    )
+                    if should_log:
+                        runtime_mode = 'GPU' if matching_runtime['last_use_gpu'] else 'CPU'
+                        append_log_line(
+                            project_id,
+                            "🔗 Feature matching progress: "
+                            f"{current}/{total} units ({progress_percent}%) | "
+                            f"mode={runtime_mode}",
+                        )
                 return
     
     def run_matching_command(command):
-        run_command_with_logs(project_id, command, line_handler=matching_line_handler)
+        run_command_with_logs(
+            project_id,
+            command,
+            line_handler=matching_line_handler,
+            raw_line_filter=should_log_subprocess_line,
+        )
 
     def reset_matching_health():
         matching_health['gpu_issue_detected'] = False
@@ -4158,6 +4455,8 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None):
             '--FeatureMatching.max_num_matches', str(max_num_matches),
             '--FeatureMatching.use_gpu', '1' if use_gpu else '0',
         ]
+        if feature_profile['matcher_args']:
+            rebuilt.extend(feature_profile['matcher_args'])
         for param, value in colmap_cfg['matcher_params'].items():
             rebuilt.extend([f'--{param}', value])
         return rebuilt
@@ -4270,6 +4569,7 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None):
     colmap_cfg = run_orbit_safe_bridge_recovery_matching_pass(
         project_id,
         paths,
+        config,
         colmap_exe,
         colmap_cfg,
         has_cuda,
@@ -4540,6 +4840,8 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
         'last_progress': 0,
         'ba_iteration': 0,
         'ba_total': 3,  # Default BA iterations
+        'last_registration_milestone': -1,
+        'last_ba_milestone': -1,
     }
     
     fastmap_stages = {
@@ -4596,9 +4898,6 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
                                       subtext=f'FastMap - {num_images} images')
                     return
             
-            important_keywords = ['error', 'warning', 'failed', 'done', 'finished', 'seconds', 'images', 'cameras', 'iter', 'loss']
-            if any(kw in line_lower for kw in important_keywords):
-                append_log_line(project_id, f"[FastMap] {line_stripped}")
             return
         
         if use_global_sfm:
@@ -4618,12 +4917,14 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
             
             for stage_key, pattern in stage_patterns:
                 if re.search(pattern, line_lower):
+                    previous_stage = sparse_tracker.get('current_glomap_stage')
                     sparse_tracker['current_glomap_stage'] = stage_key
                     stage_info = glomap_stages[stage_key]
                     progress = stage_info['progress']
                     
                     # Log the stage transition
-                    append_log_line(project_id, f"[GLOMAP] {stage_info['label']}")
+                    if previous_stage != stage_key:
+                        append_log_line(project_id, f"[GLOMAP] {stage_info['label']}")
                     
                     details = {
                         'text': stage_info['label'],
@@ -4708,7 +5009,16 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
                 update_stage_detail(project_id, 'sparse_reconstruction', 
                                   text=f'⚡ Bundle Adjustment: Iteration {ba_current}/{ba_total}', 
                                   subtext=f'GLOMAP - {ba_percent}%')
-                append_log_line(project_id, f"[GLOMAP] Bundle Adjustment iteration {ba_current}/{ba_total}")
+                ba_log_state = {'last_milestone': sparse_tracker.get('last_ba_milestone', -1)}
+                should_log, _ = should_emit_progress_milestone(
+                    ba_log_state,
+                    ba_current,
+                    ba_total,
+                    percent_step=25,
+                )
+                sparse_tracker['last_ba_milestone'] = ba_log_state['last_milestone']
+                if should_log:
+                    append_log_line(project_id, f"[GLOMAP] Bundle Adjustment {ba_current}/{ba_total}")
                 return
             
             # Parse Loading Image Pair progress
@@ -4734,19 +5044,8 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
                                       subtext=f'GLOMAP - Preprocessing')
                 return
             
-            # Log important GLOMAP messages
-            important_keywords = ['error', 'warning', 'failed', 'done', 'finished', 'seconds', 'images', 'tracks', 'cameras']
-            if any(kw in line_lower for kw in important_keywords):
-                prefix = "[GLOMAP]" if use_legacy_glomap else "[COLMAP Global]"
-                append_log_line(project_id, f"{prefix} {line_stripped}")
-        
         # === COLMAP-specific patterns (fallback) ===
         else:
-            # Log relevant lines for debugging
-            keywords = ['registering', 'registered', 'reconstruction', 'bundle', 'mapper', 'image', 'track', 'camera']
-            if any(keyword in line_lower for keyword in keywords):
-                append_log_line(project_id, f"[COLMAP] {line_stripped}")
-            
             # Patterns for COLMAP progress tracking
             patterns = [
                 r'Registering image #(\d+)',
@@ -4787,6 +5086,20 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
                     update_stage_detail(project_id, 'sparse_reconstruction', 
                                       text=f'Images registered: {current}/{total}', 
                                       subtext='COLMAP')
+                    registration_log_state = {
+                        'last_milestone': sparse_tracker.get('last_registration_milestone', -1)
+                    }
+                    should_log, progress_percent = should_emit_progress_milestone(
+                        registration_log_state,
+                        current,
+                        total,
+                    )
+                    sparse_tracker['last_registration_milestone'] = registration_log_state['last_milestone']
+                    if should_log:
+                        append_log_line(
+                            project_id,
+                            f"[COLMAP] Registration progress: {current}/{total} images ({progress_percent}%)",
+                        )
                     return
     
     pycolmap_completed = False
@@ -4800,7 +5113,12 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
         )
 
     if not pycolmap_completed:
-        run_command_with_logs(project_id, cmd, line_handler=sparse_line_handler)
+        run_command_with_logs(
+            project_id,
+            cmd,
+            line_handler=sparse_line_handler,
+            raw_line_filter=should_log_subprocess_line,
+        )
     
     # FastMap outputs to temp dir - move to sparse_path/0/
     if use_fastmap and fastmap_temp_dir is not None:
@@ -4884,6 +5202,7 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
         colmap_cfg = run_orbit_safe_bridge_recovery_matching_pass(
             project_id,
             paths,
+            config,
             colmap_exe,
             colmap_cfg,
             has_cuda,
@@ -4905,6 +5224,7 @@ def run_sparse_reconstruction_stage(project_id, paths, config, colmap_config=Non
         colmap_cfg = run_orbit_safe_bridge_recovery_matching_pass(
             project_id,
             paths,
+            config,
             colmap_exe,
             colmap_cfg,
             has_cuda,
@@ -4989,19 +5309,41 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
         colmap_stages = ['feature_extraction', 'feature_matching', 'sparse_reconstruction', 'model_conversion']
         start_index = colmap_stages.index(from_stage) if from_stage in colmap_stages else 0
 
-        # Check if using hloc neural features (ALIKED/SuperPoint + LightGlue)
-        feature_method = config.get('feature_method', 'sift')
+        # Decide whether neural features should run via native COLMAP or hloc.
+        feature_method = normalize_feature_method(config.get('feature_method', 'sift'))
         requested_matcher_type = normalize_matcher_type(config.get('matcher_type'))
-        use_hloc = (
-            feature_method in ['aliked', 'superpoint']
-            and HLOC_AVAILABLE
-            and requested_matcher_type != 'vocab_tree'
+        native_feature_profile = resolve_colmap_feature_pipeline_profile(
+            config,
+            colmap_config,
+            get_colmap_executable(),
         )
-        if feature_method in ['aliked', 'superpoint'] and requested_matcher_type == 'vocab_tree':
-            append_log_line(
-                project_id,
-                "ℹ️ hloc neural matching is disabled for vocab-tree retrieval mode; using native COLMAP feature extraction/matching instead",
-            )
+        use_native_colmap_neural = native_feature_profile['is_native_neural']
+        use_hloc = False
+
+        if feature_method == 'superpoint':
+            use_hloc = HLOC_AVAILABLE and requested_matcher_type != 'vocab_tree'
+            if requested_matcher_type == 'vocab_tree':
+                append_log_line(
+                    project_id,
+                    "ℹ️ SuperPoint stays on native COLMAP fallback for vocab-tree mode because hloc pair generation does not support retrieval yet",
+                )
+        elif feature_method == 'aliked':
+            if use_native_colmap_neural:
+                append_log_line(
+                    project_id,
+                    f"⚡ Using {native_feature_profile['description']} in the native COLMAP pipeline",
+                )
+            elif HLOC_AVAILABLE and requested_matcher_type != 'vocab_tree':
+                use_hloc = True
+                append_log_line(
+                    project_id,
+                    "ℹ️ Native COLMAP ALIKED/LightGlue is unavailable in this environment; falling back to hloc",
+                )
+            else:
+                append_log_line(
+                    project_id,
+                    "ℹ️ Native COLMAP ALIKED support is unavailable; falling back to classic COLMAP SIFT settings",
+                )
         
         hloc_data = None  # Will store hloc feature data for matching stage
 
@@ -5262,12 +5604,9 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
         iteration_total = enhanced_iterations
 
         training_progress = {'current': 0, 'total': iteration_total}
+        training_progress_log = {'last_milestone': -1}
 
         def training_line_handler(line):
-            # Debug logging for training
-            if any(keyword in line.lower() for keyword in ['iteration', 'step', 'epoch', 'training', 'iter']):
-                append_log_line(project_id, f"[DEBUG] Training: {line.strip()}")
-
             # Enhanced patterns for training progress - OpenSplat specific patterns
             patterns = [
                 r'Iteration\s+(\d+)/(\d+)',                     # Standard iteration
@@ -5310,6 +5649,16 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
 
                         update_state(project_id, 'gaussian_splatting', progress=min(percent, 99), details=details)
                         update_stage_detail(project_id, 'gaussian_splatting', text=f'Training iterations: {current}/{total}', subtext=None)
+                        should_log, progress_percent = should_emit_progress_milestone(
+                            training_progress_log,
+                            current,
+                            total,
+                        )
+                        if should_log:
+                            append_log_line(
+                                project_id,
+                                f"🏋️ Training progress: {current}/{total} iterations ({progress_percent}%)",
+                            )
                     return
 
             # Fallback for simple iteration counting
@@ -5339,8 +5688,24 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
                             text=f'Training iterations: {current}/{iteration_total}',
                             subtext=None
                         )
+                        should_log, progress_percent = should_emit_progress_milestone(
+                            training_progress_log,
+                            current,
+                            iteration_total,
+                        )
+                        if should_log:
+                            append_log_line(
+                                project_id,
+                                f"🏋️ Training progress: {current}/{iteration_total} iterations ({progress_percent}%)",
+                            )
 
-        run_command_with_logs(project_id, cmd, cwd=opensplat_working_dir, line_handler=training_line_handler)
+        run_command_with_logs(
+            project_id,
+            cmd,
+            cwd=opensplat_working_dir,
+            line_handler=training_line_handler,
+            raw_line_filter=should_log_subprocess_line,
+        )
 
         update_state(project_id, 'gaussian_splatting', status='completed', progress=100)
         current = training_progress['current'] or iteration_total or 0
@@ -5543,6 +5908,7 @@ def run_opensplat_training(project_id, paths, config, processing_start_time, tim
 
         iteration_total = enhanced_iterations
         training_progress = {'current': 0, 'total': iteration_total}
+        training_progress_log = {'last_milestone': -1}
 
         def training_line_handler(line):
             patterns = [
@@ -5573,9 +5939,25 @@ def run_opensplat_training(project_id, paths, config, processing_start_time, tim
                         emit_stage_progress(project_id, 'gaussian_splatting', percent, details)
                         update_state(project_id, 'gaussian_splatting', progress=min(percent, 99), details=details)
                         update_stage_detail(project_id, 'gaussian_splatting', text=f'Training iterations: {current}/{total}', subtext=None)
+                        should_log, progress_percent = should_emit_progress_milestone(
+                            training_progress_log,
+                            current,
+                            total,
+                        )
+                        if should_log:
+                            append_log_line(
+                                project_id,
+                                f"🏋️ Training progress: {current}/{total} iterations ({progress_percent}%)",
+                            )
                     return
 
-        run_command_with_logs(project_id, cmd, cwd=opensplat_working_dir, line_handler=training_line_handler)
+        run_command_with_logs(
+            project_id,
+            cmd,
+            cwd=opensplat_working_dir,
+            line_handler=training_line_handler,
+            raw_line_filter=should_log_subprocess_line,
+        )
 
         update_state(project_id, 'gaussian_splatting', status='completed', progress=100)
         append_log_line(project_id, "✅ PobimSplats Training completed")

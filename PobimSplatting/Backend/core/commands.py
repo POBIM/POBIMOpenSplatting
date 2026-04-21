@@ -18,6 +18,7 @@ def run_command_with_logs(
     *,
     cwd: Optional[Path] = None,
     line_handler: Optional[Callable[[str], None]] = None,
+    raw_line_filter: Optional[Callable[[str], bool | str | None]] = None,
 ) -> None:
     """Execute a shell command while streaming logs into the project log."""
     pretty_cmd = " ".join(str(part) for part in cmd)
@@ -63,7 +64,15 @@ def run_command_with_logs(
                 except Exception as handler_error:  # pragma: no cover - defensive log only
                     append_log_line(project_id, f"[line_handler error] {handler_error}")
 
-            append_log_line(project_id, line.rstrip())
+            if raw_line_filter is None:
+                append_log_line(project_id, line.rstrip())
+                continue
+
+            filtered = raw_line_filter(line)
+            if isinstance(filtered, str):
+                append_log_line(project_id, filtered.rstrip())
+            elif filtered:
+                append_log_line(project_id, line.rstrip())
 
         returncode = process.wait()
         if returncode != 0:
@@ -71,4 +80,3 @@ def run_command_with_logs(
     finally:
         # Always unregister the process when done
         unregister_process(project_id)
-

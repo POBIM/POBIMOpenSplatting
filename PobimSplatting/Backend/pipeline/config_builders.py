@@ -24,6 +24,7 @@ from .runtime_support import (
     normalize_sfm_backend,
     normalize_sfm_engine,
 )
+from .resource_contract import build_resource_aware_contract
 
 
 def get_colmap_executable():
@@ -65,6 +66,71 @@ def estimate_preview_image_count(config, media_summary):
     return image_count + (per_video * max(video_count, 1))
 
 
+def _build_upload_adaptive_policy_state(
+    preview_config: Dict[str, Any], input_profile: str, resolved_matcher_type: str | None
+) -> Dict[str, Dict[str, Any]]:
+    smart_frame_selection = bool(preview_config.get("smart_frame_selection", True))
+    frame_budget_available = (
+        input_profile in {"video", "mixed"} and smart_frame_selection
+    )
+    frame_budget_enabled = frame_budget_available and bool(
+        preview_config.get("adaptive_frame_budget", True)
+    )
+
+    pair_scheduling_available = (
+        input_profile in {"video", "mixed"} and resolved_matcher_type == "sequential"
+    )
+    pair_scheduling_enabled = pair_scheduling_available and bool(
+        preview_config.get("adaptive_pair_scheduling", True)
+    )
+
+    return {
+        "frame_budget": {
+            "enabled": frame_budget_enabled,
+            "available": frame_budget_available,
+            "label": "Adaptive Frame Budget",
+            "effect": "Content-aware candidate extraction for ordered video",
+            "current_summary": (
+                "Adaptive frame budgeting is active, so the backend can trim duplicate-heavy frame windows before COLMAP."
+                if frame_budget_enabled
+                else (
+                    "Frame extraction is using a fixed oversample budget. This is simpler, but it can waste candidate density on redundant video spans."
+                    if frame_budget_available
+                    else "Adaptive frame budgeting only applies when smart frame selection is enabled on video-like input."
+                )
+            ),
+            "disabled_summary": "Fixed oversample budget with no video-aware adjustment.",
+            "gate": (
+                "Enable smart frame selection first to unlock adaptive frame budgeting."
+                if input_profile in {"video", "mixed"} and not smart_frame_selection
+                else None
+            ),
+        },
+        "pair_scheduling": {
+            "enabled": pair_scheduling_enabled,
+            "available": pair_scheduling_available,
+            "label": "Adaptive Pair Scheduling",
+            "effect": "Progressive sequential matching passes with staged expansion",
+            "current_summary": (
+                "Progressive pair scheduling is active, so sequential matching can expand in stages instead of paying the full overlap cost immediately."
+                if pair_scheduling_enabled
+                else (
+                    "Sequential matching will run as one fixed pass. This is predictable, but it usually wastes pair budget on easier video spans."
+                    if pair_scheduling_available
+                    else "Progressive pair scheduling only becomes active when the preview resolves to sequential matching."
+                )
+            ),
+            "disabled_summary": "Single-pass sequential matching without staged expansion.",
+            "gate": (
+                "The current preview does not resolve to sequential matching, so staged pair expansion is not active yet."
+                if input_profile in {"video", "mixed"}
+                and resolved_matcher_type != "sequential"
+                else None
+            ),
+        },
+    }
+
+
 def build_upload_policy_preview(config, media_summary):
     preview_config = dict(config or {})
     preview_config["input_type"] = (
@@ -104,6 +170,10 @@ def build_upload_policy_preview(config, media_summary):
         tone_key = "mixed"
     elif input_profile == "images":
         tone_key = "images"
+
+    adaptive_policy = _build_upload_adaptive_policy_state(
+        preview_config, input_profile, colmap_cfg.get("matcher_type")
+    )
 
     signals: List[Dict[str, Any]] = []
 
@@ -241,6 +311,50 @@ def build_upload_policy_preview(config, media_summary):
                 f"{max_frames} frames may be too sparse for stable bridge recovery",
             )
 
+    frame_budget_state = adaptive_policy["frame_budget"]
+    if frame_budget_state["enabled"]:
+        score += 5
+        add_signal(
+            "adaptive-frame-budget",
+            "Adaptive frame budget",
+            5,
+            "Video frame extraction can reduce duplicate-heavy candidate pools before COLMAP.",
+        )
+    elif frame_budget_state["available"]:
+        score -= 4
+        add_signal(
+            "fixed-frame-budget",
+            "Fixed frame budget",
+            -4,
+            "Smart frame selection is on, but adaptive frame budgeting is disabled so oversampling stays static.",
+        )
+    elif input_profile in {"video", "mixed"}:
+        score -= 9
+        add_signal(
+            "smart-selection-off",
+            "Static frame extraction",
+            -9,
+            "Smart frame selection is disabled, so ordered-video extraction cannot adapt to redundant windows.",
+        )
+
+    pair_scheduling_state = adaptive_policy["pair_scheduling"]
+    if pair_scheduling_state["enabled"]:
+        score += 6
+        add_signal(
+            "adaptive-pair-scheduling",
+            "Adaptive pair schedule",
+            6,
+            "Sequential matching can expand in staged passes instead of paying the full pair budget up front.",
+        )
+    elif pair_scheduling_state["available"]:
+        score -= 6
+        add_signal(
+            "single-pass-sequential",
+            "Single-pass schedule",
+            -6,
+            "Sequential matching is active, but adaptive staged expansion is disabled.",
+        )
+
     if input_profile in {"video", "mixed"} and preview_config.get(
         "use_separate_training_images"
     ):
@@ -292,6 +406,33 @@ def build_upload_policy_preview(config, media_summary):
         add_rule(
             "info",
             "Matcher is on Auto, so the backend can still adapt from capture ordering and pair geometry.",
+        )
+
+    if frame_budget_state["enabled"]:
+        add_rule(
+            "info",
+            "Adaptive frame budget is active. The backend will keep smart frame selection but spend candidate density more selectively across the video.",
+        )
+    elif frame_budget_state["available"]:
+        add_rule(
+            "warning",
+            "Adaptive frame budget is off. The extractor will keep a fixed oversample budget even if the video contains long redundant spans.",
+        )
+    elif input_profile in {"video", "mixed"}:
+        add_rule(
+            "warning",
+            "Smart frame selection is off, so the ordered-video extractor cannot adapt frame density before matching.",
+        )
+
+    if pair_scheduling_state["enabled"]:
+        add_rule(
+            "info",
+            "Adaptive pair scheduling is active. Sequential matching can bootstrap locally, then expand bridge and loop pairs only when geometry needs it.",
+        )
+    elif pair_scheduling_state["available"]:
+        add_rule(
+            "warning",
+            "Adaptive pair scheduling is off. Sequential matching will pay its overlap budget in one pass instead of expanding progressively.",
         )
 
     if input_profile == "images" and sfm_engine == "fastmap":
@@ -386,6 +527,22 @@ def build_upload_policy_preview(config, media_summary):
         )
 
     if input_profile == "video":
+        if frame_budget_state["enabled"] and pair_scheduling_state["enabled"]:
+            policy_summary = (
+                "Ordered frames will start with adaptive extraction and staged sequential matching, so the backend can spend frame and pair budget where bridge geometry actually needs it."
+            )
+        elif frame_budget_state["enabled"]:
+            policy_summary = (
+                "Ordered frames will start with adaptive extraction, but matching is still closer to a fixed sequential pass."
+            )
+        elif pair_scheduling_state["enabled"]:
+            policy_summary = (
+                "Ordered frames will keep a fixed extraction budget, but sequential matching can still expand progressively from local to bridge-heavy passes."
+            )
+        else:
+            policy_summary = (
+                "Ordered frames will follow a more static orbit-safe policy with fixed extraction and matching budgets."
+            )
         expected_policy = {
             "title": "Orbit-Safe Video Policy",
             "tone": "border-emerald-200 bg-emerald-50 text-emerald-900",
@@ -395,7 +552,7 @@ def build_upload_policy_preview(config, media_summary):
             "engineBadge": "global sfm + safe fallback"
             if sfm_engine == "glomap"
             else f"{sfm_engine} preferred",
-            "summary": "Ordered frames usually start with sequential matching, then the backend can tighten sparse reconstruction and bridge weak transitions with geometry-aware rules.",
+            "summary": policy_summary,
             "toneKey": tone_key,
         }
     elif input_profile == "mixed":
@@ -433,6 +590,7 @@ def build_upload_policy_preview(config, media_summary):
         }
 
     return {
+        "resource_contract": build_resource_aware_contract(),
         "heuristic_source": "backend",
         "input_profile": input_profile,
         "estimated_num_images": estimated_num_images,
@@ -444,7 +602,74 @@ def build_upload_policy_preview(config, media_summary):
         "orbit_safe_mode": orbit_safe_mode,
         "orbit_safe_profile": colmap_cfg.get("orbit_safe_profile"),
         "bridge_risk_score": colmap_cfg.get("bridge_risk_score"),
+        "adaptive_policy": adaptive_policy,
     }
+
+
+def build_upload_adaptive_policy_comparisons(
+    config: Dict[str, Any],
+    media_summary: Dict[str, Any],
+    current_preview: Dict[str, Any] | None = None,
+) -> List[Dict[str, Any]]:
+    preview = current_preview or build_upload_policy_preview(config, media_summary)
+    current_policy = preview.get("adaptive_policy") or {}
+    comparisons: List[Dict[str, Any]] = []
+
+    for key, config_key in (
+        ("frame_budget", "adaptive_frame_budget"),
+        ("pair_scheduling", "adaptive_pair_scheduling"),
+    ):
+        current_state = current_policy.get(key) or {}
+        enabled_config = dict(config)
+        enabled_config[config_key] = True
+        disabled_config = dict(config)
+        disabled_config[config_key] = False
+
+        enabled_preview = build_upload_policy_preview(enabled_config, media_summary)
+        disabled_preview = build_upload_policy_preview(disabled_config, media_summary)
+        enabled_state = (enabled_preview.get("adaptive_policy") or {}).get(key) or {}
+        disabled_state = (disabled_preview.get("adaptive_policy") or {}).get(key) or {}
+
+        enabled_score = int(enabled_preview.get("confidence", {}).get("score") or 0)
+        disabled_score = int(disabled_preview.get("confidence", {}).get("score") or 0)
+        current_enabled = bool(current_state.get("enabled"))
+        available = bool(
+            current_state.get("available")
+            or enabled_state.get("available")
+            or disabled_state.get("available")
+        )
+        current_score = enabled_score if current_enabled else disabled_score
+        alternative_score = disabled_score if current_enabled else enabled_score
+
+        comparisons.append(
+            {
+                "key": key,
+                "label": current_state.get("label") or enabled_state.get("label") or key,
+                "effect": current_state.get("effect")
+                or enabled_state.get("effect")
+                or "",
+                "available": available,
+                "current_enabled": current_enabled,
+                "recommended_enabled": available and enabled_score >= disabled_score,
+                "score_delta_enabled_vs_disabled": enabled_score - disabled_score,
+                "current_score": current_score,
+                "alternative_score": alternative_score,
+                "current_summary": current_state.get("current_summary")
+                or enabled_state.get("current_summary")
+                or "",
+                "alternative_summary": (
+                    disabled_state.get("current_summary")
+                    if current_enabled
+                    else enabled_state.get("current_summary")
+                )
+                or "",
+                "gate": current_state.get("gate")
+                or enabled_state.get("gate")
+                or disabled_state.get("gate"),
+            }
+        )
+
+    return comparisons
 
 
 def get_sequential_matcher_params(

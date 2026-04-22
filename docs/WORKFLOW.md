@@ -1,362 +1,122 @@
-# POBIMOpenSplat Installation Workflow
+# POBIMOpenSplat Processing Workflow
 
-> Documentation scope note: this file is the visual workflow companion. For primary navigation across docs, use [DOCS_INDEX.md](DOCS_INDEX.md).
+This file explains the actual product workflow, not just the installer.
 
+The pipeline is organized so the user can start from raw captures and end with:
+
+- a sparse reconstruction,
+- a trained gaussian splat,
+- review pages for cameras and outputs,
+- and optional textured mesh exports.
+
+## Operator View
+
+```text
+Upload or create project
+        |
+        v
+Ingest images / videos / mixed inputs
+        |
+        v
+Extract frames when needed
+        |
+        v
+Choose feature + matcher strategy
+        |
+        v
+Run sparse SfM
+        |
+        v
+Convert sparse model for training
+        |
+        v
+Train gaussian splats with opensplat
+        |
+        +--> Inspect in viewer
+        |
+        +--> Inspect camera poses
+        |
+        +--> Open COLMAP GUI when available
+        |
+        +--> Export textured mesh
 ```
-╔═══════════════════════════════════════════════════════════════════════════╗
-║                   POBIMOpenSplat Installation System                      ║
-║                        Complete Workflow Diagram                          ║
-╚═══════════════════════════════════════════════════════════════════════════╝
 
-┌─────────────────────────────────────────────────────────────────────────┐
-│  STEP 0: Pre-Installation Check (Optional)                             │
-│  ./check-system.sh                                                      │
-└─────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-                    ┌───────────────────────────┐
-                    │   System Requirements     │
-                    │   ✓ GPU: NVIDIA           │
-                    │   ✓ CUDA: 11.8/12.1/12.6  │
-                    │   ✓ RAM: 16GB+            │
-                    │   ✓ Disk: 50GB+           │
-                    └───────────────────────────┘
-                                    │
-                            ┌───────┴───────┐
-                            │               │
-                         PASS            FAIL
-                            │               │
-                            ▼               ▼
-                         Continue     Fix Issues First
-                            │
-                            │
-┌───────────────────────────┴──────────────────────────────────────────────┐
-│  STEP 1: Run Installation Script                                        │
-│  ./install.sh                                                            │
-└──────────────────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│  Phase 1: System Detection                                              │
-│  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │ ✓ Detect OS & Architecture                                        │  │
-│  │ ✓ Detect GPU & CUDA Version                                       │  │
-│  │ ✓ Check RAM, Disk, CPU                                            │  │
-│  │ ✓ Determine LibTorch variant needed                               │  │
-│  └───────────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│  Phase 2: Install System Dependencies                                   │
-│  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │ sudo apt update                                                    │  │
-│  │ sudo apt install:                                                  │  │
-│  │   • build-essential, cmake, git                                    │  │
-│  │   • python3, python3-pip, python3-venv                             │  │
-│  │   • Node.js (from NodeSource)                                      │  │
-│  │   • libopencv-dev                                                  │  │
-│  │   • COLMAP dependencies (Boost, Eigen, CGAL, Ceres, etc.)         │  │
-│  │   • Qt5, GLEW, SQLite                                              │  │
-│  └───────────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│  Phase 3: Setup LibTorch                                                │
-│  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │ CUDA 12.x → Download libtorch-cuda121                             │  │
-│  │ CUDA 11.8 → Download libtorch-cuda118                             │  │
-│  │ No CUDA   → Download libtorch-cpu                                 │  │
-│  │                                                                    │  │
-│  │ wget pytorch.org/libtorch/...                                      │  │
-│  │ unzip → libtorch-cuda126/                                          │  │
-│  │ export LD_LIBRARY_PATH                                             │  │
-│  └───────────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│  Phase 4: Build COLMAP                                                   │
-│  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │ git clone colmap                                                   │  │
-│  │ mkdir colmap-build && cd colmap-build                              │  │
-│  │ cmake ../colmap                                                    │  │
-│  │   -DCMAKE_BUILD_TYPE=Release                                       │  │
-│  │   -DCMAKE_CUDA_ARCHITECTURES="75;80;86;89;90"                      │  │
-│  │   -DGUI_ENABLED=OFF                                                │  │
-│  │ make -j$(nproc)                                                    │  │
-│  │ cp src/exe/colmap → colmap-build/colmap                            │  │
-│  └───────────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────┘
+## Stage Breakdown
 
-> Operational note: this project treats COLMAP's global mapper as the preferred global SfM path. Standalone GLOMAP is legacy fallback only, and `vocab_tree` matching can be enabled experimentally for large unordered photo collections.
+| Stage | What happens | Main tools | Main outputs |
+|------|------|------|------|
+| `ingest` | Create project, validate uploads, classify input type | Next.js UI, Flask API | Project metadata, uploaded media |
+| `video_extraction` | Extract frames from video or mixed input | `ffmpeg`, OpenCV utilities | `Backend/frames/`, `Backend/uploads/<project>/images` |
+| `feature_extraction` | Build local or neural features | COLMAP SIFT, `hloc` ALIKED, `hloc` SuperPoint | COLMAP DB or neural feature artifacts |
+| `feature_matching` | Match image pairs | COLMAP matchers, LightGlue, vocabulary tree | Matched pairs in DB / hloc artifacts |
+| `sparse_reconstruction` | Build sparse camera graph and points | COLMAP `global_mapper`, `pycolmap`, FastMap, COLMAP mapper, legacy GLOMAP | `sparse/0` model |
+| `model_conversion` | Prepare sparse results for downstream training and inspection | COLMAP model conversion helpers | text/bin camera model outputs |
+| `gaussian_splatting` | Train the final splat representation | `build/opensplat` | `.ply` or `.splat` result |
+| `review` | Inspect result quality and geometry | Viewer, camera poses page, COLMAP GUI | Human validation |
+| `mesh_export` | Build dense and textured mesh outputs | COLMAP dense tools, `MVSMesher`, `MeshConverter` | `glb`, `gltf`, `dae`, mesh files |
 
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│  Phase 5: Build OpenSplat                                                │
-│  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │ mkdir build && cd build                                            │  │
-│  │ cmake ..                                                           │  │
-│  │   -DCMAKE_BUILD_TYPE=Release                                       │  │
-│  │   -DCMAKE_PREFIX_PATH=/path/to/libtorch-cuda126                    │  │
-│  │   -DOPENSPLAT_BUILD_SIMPLE_TRAINER=ON                              │  │
-│  │ make -j$(nproc)                                                    │  │
-│  │ ./opensplat --version  # Test                                      │  │
-│  └───────────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│  Phase 6: Setup Python Backend                                          │
-│  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │ cd PobimSplatting/Backend                                          │  │
-│  │ python3 -m venv venv                                               │  │
-│  │ source venv/bin/activate                                           │  │
-│  │ pip install --upgrade pip                                          │  │
-│  │ pip install -r requirements.txt                                    │  │
-│  │   • Flask, Flask-CORS                                              │  │
-│  │   • OpenCV, Pillow                                                 │  │
-│  │   • NumPy, etc.                                                    │  │
-│  └───────────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│  Phase 7: Setup Node.js Frontend                                        │
-│  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │ cd PobimSplatting/Frontend                                         │  │
-│  │ npm install                                                        │  │
-│  │   • Next.js, React                                                 │  │
-│  │   • Tailwind CSS                                                   │  │
-│  │   • UI components                                                  │  │
-│  │ (Optional) npm run build                                           │  │
-│  └───────────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│  Phase 8: Create Quick Start Script                                     │
-│  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │ Generate: quick-start.sh                                           │  │
-│  │ #!/bin/bash                                                        │  │
-│  │ # Auto-detect LibTorch path                                        │  │
-│  │ # Export LD_LIBRARY_PATH                                           │  │
-│  │ # Set CUDA environment                                             │  │
-│  │ # Set Qt offscreen mode                                            │  │
-│  │ # Execute PobimSplatting/start.sh                                  │  │
-│  │ chmod +x quick-start.sh                                            │  │
-│  └───────────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│  Phase 9: Final Configuration                                           │
-│  ┌───────────────────────────────────────────────────────────────────┐  │
-│  │ Create .env.local with configuration                               │  │
-│  │ Save installation log → PobimSplatting/logs/install.log            │  │
-│  │ Display summary and access URLs                                    │  │
-│  └───────────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-                ┌───────────────────────────┐
-                │  Installation Complete!   │
-                └───────────────────────────┘
-                            │
-                            ▼
+## Tool Selection Rules
 
-╔═══════════════════════════════════════════════════════════════════════════╗
-║  STEP 2: Start the Server                                                ║
-║  ./quick-start.sh                                                         ║
-╚═══════════════════════════════════════════════════════════════════════════╝
-                            │
-                            ▼
-                ┌───────────────────────────┐
-                │  Check Installation       │
-                │  ✓ opensplat exists       │
-                │  ✓ libtorch exists        │
-                │  ✓ Environment set        │
-                └───────────────────────────┘
-                            │
-                            ▼
-                ┌───────────────────────────┐
-                │  Execute                  │
-                │  PobimSplatting/start.sh  │
-                └───────────────────────────┘
-                            │
-                            ▼
-        ┌───────────────────┴───────────────────┐
-        │                                       │
-        ▼                                       ▼
-┌───────────────┐                     ┌───────────────┐
-│ Start Backend │                     │Start Frontend │
-│ (Flask)       │                     │ (Next.js)     │
-│ Port 5000     │                     │ Port 3000     │
-└───────────────┘                     └───────────────┘
-        │                                       │
-        │                                       │
-        └───────────────────┬───────────────────┘
-                            ▼
-                ┌───────────────────────────┐
-                │  Server Running           │
-                │  Frontend: :3000          │
-                │  Backend : :5000          │
-                └───────────────────────────┘
+### Feature stage
 
+- `feature_method=sift`: classic COLMAP path
+- `feature_method=aliked`: prefer native COLMAP support when available, otherwise fall back to `hloc`
+- `feature_method=superpoint`: use `hloc` when available unless the matcher choice forces native fallback
 
-╔═══════════════════════════════════════════════════════════════════════════╗
-║  STEP 3: Access & Use                                                     ║
-╚═══════════════════════════════════════════════════════════════════════════╝
+### Matcher stage
 
-    Browser: http://localhost:3000
-                    │
-                    ▼
-        ┌───────────────────────┐
-        │  POBIMOpenSplat       │
-        │  Web Interface        │
-        │                       │
-        │  • Upload Images      │
-        │  • Run COLMAP         │
-        │  • Train Model        │
-        │  • View Results       │
-        │  • Export Splat       │
-        └───────────────────────┘
-                    │
-                    │ API Calls
-                    ▼
-        ┌───────────────────────┐
-        │  Flask Backend        │
-        │  :5000                │
-        └───────────────────────┘
-                    │
-        ┌───────────┴────────────┐
-        │                        │
-        ▼                        ▼
-┌──────────────┐        ┌─────────────────┐
-│  COLMAP      │        │  OpenSplat      │
-│  colmap-     │        │  build/         │
-│  build/      │        │  opensplat      │
-│  colmap      │        │                 │
-└──────────────┘        └─────────────────┘
-        │                        │
-        └───────────┬────────────┘
-                    ▼
-            ┌───────────────┐
-            │  Results      │
-            │  .ply / .splat│
-            └───────────────┘
+- `matcher_type=sequential`: best for ordered capture such as orbit/video
+- `matcher_type=exhaustive`: good default for smaller unordered image sets
+- `matcher_type=vocab_tree`: experimental path for large unordered image sets
+- `matcher_type=auto`: let the backend infer the best option from the input pattern
 
+### Sparse SfM stage
 
-═══════════════════════════════════════════════════════════════════════════
-  File Structure After Installation
-═══════════════════════════════════════════════════════════════════════════
+- Default global path: COLMAP `global_mapper`
+- Experimental Python-native path: `pycolmap.global_mapping`
+- GPU-native alternative: FastMap
+- Fallback path: COLMAP incremental mapper
+- Legacy compatibility only: standalone GLOMAP
 
-POBIMOpenSplat/
-├── install.sh ..................... Main installation script
-├── quick-start.sh ................. Quick start (auto-generated)
-├── check-system.sh ................ System checker
-├── .env.local ..................... Environment config
-│
-├── build/
-│   └── opensplat .................. ✓ Main binary
-│
-├── colmap-build/
-│   └── colmap ..................... ✓ COLMAP binary
-│
-├── libtorch-cuda126/ .............. ✓ PyTorch C++ library
-│   ├── lib/
-│   ├── include/
-│   └── ...
-│
-├── PobimSplatting/
-│   ├── start.sh ................... Server manager
-│   ├── logs/install.log ........... Installation log
-│   │
-│   ├── logs/
-│   │   ├── backend.log ............ Runtime log
-│   │   └── frontend.log ........... Runtime log
-│   │
-│   ├── runtime/
-│   │   ├── backend.pid ............ Backend PID file
-│   │   └── frontend.pid ........... Frontend PID file
-│   │
-│   ├── Backend/
-│   │   ├── venv/ .................. ✓ Python environment
-│   │   ├── requirements.txt ....... Python deps
-│   │   ├── app.py ................. Flask app
-│   │
-│   └── Frontend/
-│       ├── node_modules/ .......... ✓ Node.js deps
-│       ├── package.json ........... Node.js deps
-│       └── ...
-│
-├── datasets/ ...................... Input datasets
-├── uploads/ ....................... Uploaded files
-├── results/ ....................... Generated models
-│
-└── Documentation/
-    ├── README.md .................. Updated with install guide
-    ├── INSTALLATION.md ............ English guide
-    ├── INSTALLATION_TH.md ......... Thai guide
-    ├── QUICK_REFERENCE.md ......... Quick commands
-    ├── INSTALLATION_SYSTEM.md ..... System overview
-    └── WORKFLOW.md ................ This file
+## Review Surfaces
 
+After training or sparse reconstruction you can use:
 
-═══════════════════════════════════════════════════════════════════════════
-  Command Reference
-═══════════════════════════════════════════════════════════════════════════
+- Project detail page: stage state, live logs, retry, export actions
+- Camera poses page: inspect sparse reconstruction and camera coverage
+- Viewer page: inspect gaussian splat output
+- COLMAP GUI bridge: open the active project in desktop COLMAP when GUI support is built
 
-┌─────────────────────────────────────────────────────────────────────────┐
-│  First Time Installation                                                │
-├─────────────────────────────────────────────────────────────────────────┤
-│  ./check-system.sh          # Optional: Check requirements             │
-│  ./install.sh               # Main installation (30-60 min)            │
-│  ./quick-start.sh           # Start server                             │
-└─────────────────────────────────────────────────────────────────────────┘
+## Retry Model
 
-┌─────────────────────────────────────────────────────────────────────────┐
-│  Daily Usage                                                            │
-├─────────────────────────────────────────────────────────────────────────┤
-│  ./quick-start.sh           # Start server                             │
-│  cd PobimSplatting          # Or navigate to folder                    │
-│  ./start.sh start           # Start server                             │
-│  ./start.sh stop            # Stop server                              │
-│  ./start.sh status          # Check status                             │
-└─────────────────────────────────────────────────────────────────────────┘
+The backend supports restart from a chosen stage.
+When you retry, it clears only the downstream artifacts needed for that restart point.
 
-┌─────────────────────────────────────────────────────────────────────────┐
-│  Troubleshooting                                                        │
-├─────────────────────────────────────────────────────────────────────────┤
-│  ./check-system.sh          # Re-check system                          │
-│  tail -f PobimSplatting/logs/install.log  # View installation log      │
-│  cd PobimSplatting          #                                           │
-│  ./start.sh                 # Interactive menu                          │
-│    → 5) View logs           # Check runtime logs                       │
-│    → 8) Force clear ports   # Clear stuck ports                        │
-└─────────────────────────────────────────────────────────────────────────┘
+Typical restart points:
 
+- `feature_extraction`: rebuild features, matches, sparse model, and downstream outputs
+- `feature_matching`: keep features, rebuild matches and later stages
+- `sparse_reconstruction`: keep features and matches, rebuild sparse/training outputs
+- `gaussian_splatting`: keep sparse outputs, rerun training only
 
-═══════════════════════════════════════════════════════════════════════════
-  Advantages of This System
-═══════════════════════════════════════════════════════════════════════════
+## Output Locations
 
-✓ One-Command Installation      → ./install.sh
-✓ Smart CUDA Detection          → Auto-selects correct LibTorch
-✓ Comprehensive Error Checking  → Validates at each step
-✓ Detailed Logging              → Full PobimSplatting/logs/install.log for debugging
-✓ Interactive Prompts           → User-friendly installation
-✓ Quick Start Script            → ./quick-start.sh for future use
-✓ System Validation             → check-system.sh before install
-✓ Complete Documentation        → Multiple guides in EN/TH
-✓ Portable Setup                → Works on any compatible Linux
-✓ Resume Capability             → Can continue if interrupted
+| Path | Purpose |
+|------|------|
+| `PobimSplatting/Backend/uploads/` | Raw uploads |
+| `PobimSplatting/Backend/frames/` | Extracted frames |
+| `PobimSplatting/Backend/results/` | Splats, mesh exports, derived outputs |
+| `PobimSplatting/Backend/projects_db.json` | Project index and metadata |
+| `PobimSplatting/logs/` | Install/backend/frontend logs |
 
+## Installation And Runtime Relationship
 
-═══════════════════════════════════════════════════════════════════════════
-  Created: November 7, 2025
-  Author: POBIM Development Team
-═══════════════════════════════════════════════════════════════════════════
-```
+The installer is still important, but it supports this runtime workflow rather than defining it.
+
+- `install.sh` prepares the toolchain
+- `quick-start.sh` launches the platform
+- `PobimSplatting/start.sh` manages backend/frontend runtime
+- the user-facing pipeline then runs inside the web UI and backend stages above
+
+For installation details, use [INSTALLATION.md](INSTALLATION.md).
+For daily commands, use [QUICK_REFERENCE.md](QUICK_REFERENCE.md).

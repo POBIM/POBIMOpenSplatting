@@ -1,25 +1,86 @@
-# 💦 OpenSplat
+# POBIMOpenSplat
 
-A free and open source implementation of 3D [gaussian splatting](https://www.youtube.com/watch?v=HVv_IQKlafQ) written in C++, focused on being portable, lean and fast.
+POBIMOpenSplat is now primarily a reconstruction pipeline platform, not just a thin wrapper around `opensplat`.
+The repo combines capture ingestion, feature extraction, matching, sparse reconstruction, gaussian training, review tools, and mesh export in one flow across a Flask backend, a Next.js frontend, and a local native toolchain.
 
-<img src="https://github.com/pierotofy/OpenSplat/assets/1951843/c9327c7c-31ad-402d-a5a5-04f7602ca5f5" width="49%" />
-<img src="https://github.com/pierotofy/OpenSplat/assets/1951843/eba4ae75-2c88-4c9e-a66b-608b574d085f" width="49%" />
+`opensplat` is still part of the stack, but it is one stage inside the pipeline rather than the main product surface.
 
-OpenSplat takes camera poses + sparse points in [COLMAP](https://colmap.github.io/), [OpenSfM](https://github.com/mapillary/OpenSfM), [ODM](https://github.com/OpenDroneMap/ODM),  [OpenMVG](https://github.com/OpenMVG/OpenMVG) or [nerfstudio](https://docs.nerf.studio/quickstart/custom_dataset.html) project format and computes a [scene file](https://drive.google.com/file/d/12lmvVWpFlFPL6nxl2e2d-4u4a31RCSKT/view?usp=sharing) (.ply or .splat) that can be later imported for [viewing](https://antimatter15.com/splat/?url=https://splat.uav4geo.com/banana.splat), editing and rendering in other [software](https://github.com/MrNeRF/awesome-3D-gaussian-splatting?tab=readme-ov-file#open-source-implementations).
+## What This Repo Does
 
-Graphics card recommended, but not required! OpenSplat runs the fastest on NVIDIA, AMD and Apple (Metal) GPUs, but can also run entirely on the CPU (~100x slower).
+The main product flow is:
 
-Commercial use allowed and encouraged under the terms of the [AGPLv3](https://www.tldrlegal.com/license/gnu-affero-general-public-license-v3-agpl-3-0). ✅
+1. Upload images, videos, or mixed captures.
+2. Extract frames when video is present.
+3. Choose a feature and matcher strategy.
+4. Run sparse SfM with the best available engine.
+5. Convert the sparse model into training-ready inputs.
+6. Train gaussian splats with `opensplat`.
+7. Inspect the result in the web viewer, camera-pose view, or COLMAP GUI.
+8. Export splat outputs or build textured meshes from the reconstruction.
 
-We even have a [song](https://youtu.be/1bma7XJkoDM) 🎵
+The recommended user entrypoint is the web platform:
 
-## Getting Started
+- Frontend: `http://localhost:3000`
+- Backend API: `http://localhost:5000`
 
-### 🚀 POBIMOpenSplat Platform (Recommended for Web Interface)
+## Pipeline And Tools
 
-**POBIMOpenSplat** is an enhanced version that includes a complete web-based platform with Next.js frontend and Flask backend for easy project management and visualization.
+| Stage | Primary tools | Notes |
+|------|------|------|
+| Launch and orchestration | `install.sh`, `quick-start.sh`, `PobimSplatting/start.sh` | Install, boot, stop, inspect logs, clear ports |
+| Upload and ingestion | Next.js UI, Flask API, Socket.IO | Project creation, upload, live progress |
+| Video frame extraction | `ffmpeg`, OpenCV helpers | Handles `video`, `images`, and `mixed` inputs |
+| Feature extraction | COLMAP SIFT, `hloc` ALIKED, `hloc` SuperPoint | Neural features are used when available and appropriate |
+| Feature matching | COLMAP matchers, LightGlue, vocabulary tree | `sequential`, `exhaustive`, and experimental `vocab_tree` paths |
+| Sparse SfM | COLMAP `global_mapper`, `pycolmap.global_mapping`, FastMap, COLMAP mapper, legacy GLOMAP | Backend chooses among global, incremental, and fallback paths |
+| Training | `build/opensplat` | Trains gaussian splats from the prepared sparse model |
+| Inspection | Web viewer, camera poses page, COLMAP GUI | Review coverage, cameras, and outputs |
+| Mesh export | COLMAP dense reconstruction, `MVSMesher`, `MeshConverter`, `PyMeshLab`, `trimesh` | Builds textured or converted mesh outputs |
 
-#### Quick Installation (Automated)
+## Default Decision Rules
+
+- Default global SfM path: `COLMAP global_mapper`
+- Experimental Python-native global SfM: `pycolmap.global_mapping` when the backend reports it as ready
+- Dense-coverage GPU SfM option: `FastMap`
+- Legacy fallback only: standalone `GLOMAP`
+- Ordered video/orbit captures: `sequential` matcher
+- Small unordered image sets: `exhaustive` matcher
+- Large unordered photo sets: experimental `vocab_tree`
+- Neural feature path: `hloc` with `ALIKED` or `SuperPoint` plus LightGlue when supported
+
+## Repository Map
+
+```text
+.
+├── apps/                     # Native CLI entrypoints (opensplat, simple_trainer, visualizer)
+├── src/                      # Native engine implementation
+├── include/opensplat/        # Native engine headers
+├── rasterizer/               # CPU/CUDA/HIP/Metal raster backends
+├── PobimSplatting/
+│   ├── Backend/              # Flask API, pipeline runner, mesh services
+│   ├── Frontend/             # Next.js 16 app router UI
+│   ├── start.sh              # Server manager
+│   └── README.md             # Platform-specific guide
+├── scripts/                  # Focused build and operator helpers
+├── docs/                     # Canonical docs hub and workflows
+├── colmap/                   # Vendored upstream COLMAP source
+├── hloc/                     # Neural features and LightGlue toolbox
+├── fastmap/                  # GPU-native SfM path
+└── README.md                 # This overview
+```
+
+## Important Runtime Paths
+
+- Uploads: `PobimSplatting/Backend/uploads/`
+- Frames: `PobimSplatting/Backend/frames/`
+- Results: `PobimSplatting/Backend/results/`
+- Project index: `PobimSplatting/Backend/projects_db.json`
+- Logs: `PobimSplatting/logs/`
+- PIDs and runtime state: `PobimSplatting/runtime/`
+
+## Quick Start
+
+### Install once
 
 ```bash
 git clone https://github.com/POBIM/POBIMOpenSplat.git
@@ -28,319 +89,66 @@ chmod +x install.sh
 ./install.sh
 ```
 
-The installation script will:
-- ✅ Check GPU, CUDA, and system requirements
-- ✅ Install all dependencies automatically
-- ✅ Download and setup LibTorch
-- ✅ Build COLMAP and OpenSplat
-- ✅ Setup Python backend and Node.js frontend
-- ✅ Create a quick-start script for future use
-
-After installation, start the platform:
+### Run the platform
 
 ```bash
 ./quick-start.sh
 ```
 
-Then access the web interface at:
-- **Frontend**: http://localhost:3000
-- **Backend API**: http://localhost:5000
-
-📖 **Full Installation Guide**: See [INSTALLATION.md](docs/INSTALLATION.md) (English) or [INSTALLATION_TH.md](docs/INSTALLATION_TH.md) (ภาษาไทย)
-
-📋 **Quick Reference**: See [QUICK_REFERENCE.md](docs/QUICK_REFERENCE.md)
-
-📚 **Documentation Hub**: Start from [docs/DOCS_INDEX.md](docs/DOCS_INDEX.md) for the canonical docs map and navigation
-
-> Note: `install.sh` now writes the installer log to `PobimSplatting/logs/install.log`. The root `.env.local` still remains at the repository root for now as an installer-owned artifact.
-
-> Layout note: the local C++ engine layout now uses `apps/` for entrypoints, `src/` for engine implementation, and `include/opensplat/` for public/internal engine headers, while `rasterizer/` remains in place and the built binaries still land in `build/`.
-
----
-
-### Original OpenSplat (Command Line)
-
-> Note: the build instructions in this section describe the original upstream OpenSplat CLI flow. This POBIM fork keeps the same binary outputs, but the local source layout now uses `apps/`, `src/`, and `include/opensplat/`.
-
-If you're on Windows, you can [buy](http://sites.fastspring.com/masseranolabs/product/opensplatforwindows) the pre-built program. This saves you time and helps support the project ❤️. Then jump directly to the [run](#run) section. As an alternative, check the [build](#build) section below.
-
-If you're on macOS or Linux check the [build](#build) section below. 
-
-## Build
-
-You can build OpenSplat with or without GPU support.
-
-Requirements for all builds:
-
- * **OpenCV**: `sudo apt install libopencv-dev` should do it.
- * **libtorch**: See instructions below.
-
-### CPU
-
-For libtorch visit https://pytorch.org/get-started/locally/ and select your OS, for package select "LibTorch". For compute platform you can select "CPU".
-
- Then:
-
- ```bash
- git clone https://github.com/pierotofy/OpenSplat OpenSplat
- cd OpenSplat
- mkdir build && cd build
- cmake -DCMAKE_PREFIX_PATH=/path/to/libtorch/ .. && make -j$(nproc)
- ```
-
-### CUDA
-
-Additional requirement:
-
- * **CUDA**: Make sure you have the CUDA compiler (`nvcc`) in your PATH and that `nvidia-smi` is working. https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html 
- 
- For libtorch visit https://pytorch.org/get-started/locally/ and select your OS, for package select "LibTorch". Make sure to match your version of CUDA if you want to leverage GPU support in libtorch.
- 
- Then:
-
- ```bash
- git clone https://github.com/pierotofy/OpenSplat OpenSplat
- cd OpenSplat
- mkdir build && cd build
- cmake -DCMAKE_PREFIX_PATH=/path/to/libtorch/ .. && make -j$(nproc)
- ```
-
-### ROCm via HIP
-
-Additional requirement:
-
-* **ROCm**: Make sure you have the ROCm installed at /opt/rocm. https://rocm.docs.amd.com/projects/install-on-linux/en/latest/tutorial/quick-start.html
-
-For libtorch visit https://pytorch.org/get-started/locally/ and select your OS, for package select "LibTorch". Make sure to match your version of ROCm (5.7) if you want to leverage AMD GPU support in libtorch.
-
-Then:
-
- ```bash
- git clone https://github.com/pierotofy/OpenSplat OpenSplat
- cd OpenSplat
- mkdir build && cd build
- export PYTORCH_ROCM_ARCH=gfx906
- cmake -DCMAKE_PREFIX_PATH=/path/to/libtorch/ -DGPU_RUNTIME="HIP" -DHIP_ROOT_DIR=/opt/rocm -DOPENSPLAT_BUILD_SIMPLE_TRAINER=ON ..
- make
- ```
-
-In addition, you can leverage Jinja to build the project
+### Daily operations
 
 ```bash
-cmake -GNinja -DCMAKE_PREFIX_PATH=/path/to/libtorch/ -DGPU_RUNTIME="HIP" -DHIP_ROOT_DIR=/opt/rocm -DOPENSPLAT_BUILD_SIMPLE_TRAINER=ON ..
-jinja
+cd PobimSplatting
+./start.sh start
+./start.sh status
+./start.sh stop
 ```
 
-### Windows
+## Focused Helpers
 
-There's several ways to build on Windows, but this particular configuration has been confirmed to work:
+The `scripts/` directory is for targeted maintenance and advanced flows:
 
-* Visual Studio 2022 C++
-* https://github.com/Kitware/CMake/releases/download/v3.28.3/cmake-3.28.3-windows-x86_64.msi
-* https://developer.download.nvidia.com/compute/cuda/11.8.0/network_installers/cuda_11.8.0_windows_network.exe
-* https://download.pytorch.org/libtorch/cu118/libtorch-win-shared-with-deps-2.1.2%2Bcu118.zip
-* https://github.com/opencv/opencv/releases/download/4.9.0/opencv-4.9.0-windows.exe
+- `scripts/rebuild-colmap-cloud.sh`: rebuild COLMAP with the current cloud/global workflow expectations
+- `scripts/rebuild-colmap-with-gui.sh`: rebuild COLMAP with GUI enabled for manual inspection
+- `scripts/rebuild-colmap-with-cuda.sh`: rebuild COLMAP with CUDA support
+- `scripts/run_sparse_reconstruction.sh`: run sparse reconstruction outside the full web flow
+- `scripts/package_prebuilt_runtime.sh`: stage a reusable runtime bundle
+- `scripts/simple_gpu_test.sh`: quick GPU sanity check
+- `scripts/monitor.sh`: runtime monitoring helper
+- `scripts/compile-opensplat-cuda126.sh`: focused native training-binary rebuild
 
-Then run:
+## Documentation
 
-```console
-"C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Auxiliary/Build/vcvars64.bat"
-git clone https://github.com/pierotofy/OpenSplat OpenSplat
-cd OpenSplat
-md build
-cd build
-cmake -DCMAKE_PREFIX_PATH=C:/path_to/libtorch_2.1.2_cu11.8/libtorch -DOPENCV_DIR=C:/path_to/OpenCV_4.9.0/build -DCMAKE_BUILD_TYPE=Release ..
-cmake --build . --config Release
-```
+- [docs/DOCS_INDEX.md](docs/DOCS_INDEX.md): main docs hub
+- [docs/WORKFLOW.md](docs/WORKFLOW.md): end-to-end processing workflow
+- [docs/QUICK_REFERENCE.md](docs/QUICK_REFERENCE.md): daily commands and checks
+- [docs/INSTALLATION.md](docs/INSTALLATION.md): installation guide
+- [PobimSplatting/README.md](PobimSplatting/README.md): platform-specific guide
+- [PobimSplatting/Frontend/README.md](PobimSplatting/Frontend/README.md): frontend-specific guide
 
-Optional: Edit cuda target (only if required) before `cmake --build .`
+## Native Engine Reference
 
-C:/path_to/OpenSplat/build/gsplat.vcxproj
-for example: arch=compute_75,code=sm_75
-
-### macOS
-
-If you're using [Homebrew](https://brew.sh), you can install Cmake/OpenCV/Pytorch by running:
+The native fork is still important when you need to rebuild or debug training:
 
 ```bash
-brew install cmake
-brew install opencv
-brew install pytorch
+mkdir -p build && cd build
+cmake -DCMAKE_PREFIX_PATH=/path/to/libtorch ..
+cmake --build .
 ```
 
-You will also need to install Xcode and the Xcode command line tools to compile with metal support (otherwise, OpenSplat will build with CPU acceleration only):
-1. Install Xcode from the Apple App Store.
-2. Install the command line tools with `xcode-select --install`. This might do nothing on your machine.
-3. If `xcode-select --print-path` prints `/Library/Developer/CommandLineTools`,then run `sudo xcode-select --switch /Applications/Xcode.app/Contents/Developer`.
+Key native locations:
 
-Then run:
+- Entry points: `apps/`
+- Engine code: `src/`
+- Headers: `include/opensplat/`
+- Output binary: `build/opensplat`
 
-```
-git clone https://github.com/pierotofy/OpenSplat OpenSplat
-cd OpenSplat
-mkdir build && cd build
-cmake -DCMAKE_PREFIX_PATH=/path/to/libtorch/ -DGPU_RUNTIME=MPS .. && make -j$(sysctl -n hw.logicalcpu)
-./opensplat
-```
-
-If building CPU-only, remove `-DGPU_RUNTIME=MPS`.
-
-:warning: You will probably get a *libc10.dylib can’t be opened because Apple cannot check it for malicious software* error on first run. Open **System Settings** and go to **Privacy & Security** and find the **Allow** button. You might need to repeat this several times until all torch libraries are loaded.
-
-:warning: If you get a *Library not loaded: @rpath/libomp.dylib* error, try running `brew link libomp --force` before running OpenSplat.
-
-## Docker Build
-
-### CUDA
-
-Navigate to the root directory of OpenSplat repo that has Dockerfile and run the following command to build the Docker image:
-
-```bash
-docker build -t opensplat .
-```
-
-The `-t` flag and other `--build-arg` let you tag and further customize your image across different ubuntu versions, CUDA/libtorch stacks, and hardware accelerators. 
-For example, to build an image with Ubuntu 22.04, CUDA 12.1.1, libtorch 2.2.1, and support for CUDA architectures 7.0 and 7.5, run the following command:
-
-```bash
-docker build \
-  -t opensplat:ubuntu-22.04-cuda-12.1.1-torch-2.2.1 \
-  --build-arg UBUNTU_VERSION=22.04 \
-  --build-arg CUDA_VERSION=12.1.1 \
-  --build-arg TORCH_VERSION=2.2.1 \
-  --build-arg CMAKE_CUDA_ARCHITECTURES="70;75;80" \
-  --build-arg CMAKE_BUILD_TYPE=Release .
-```
-
-If your toolchain supports newer NVIDIA architectures such as Blackwell, you can append them explicitly (for example `120`). The default CMake configuration only adds newer architectures when the installed `nvcc` reports support for them.
-
-### ROCm via HIP
-
-Navigate to the root directory of OpenSplat repo that has Dockerfile and run the following command to build the Docker image:
-```bash
-docker build \
-  -t opensplat \
-  -f Dockerfile.rocm .
-```
-
-The `-t` flag and other `--build-arg` let you tag and further customize your image across different ubuntu versions, CUDA/libtorch stacks, and hardware accelerators.
-For example, to build an image with Ubuntu 22.04, CUDA 12.1.1, libtorch 2.2.1, ROCm 5.7.1, and support for ROCm architectures gfx906, run the following command:
-
-```bash
-docker build \
-  -t opensplat:ubuntu-22.04-cuda-12.1.1-libtorch-2.2.1-rocm-5.7.1-llvm-16 \
-  --build-arg UBUNTU_VERSION=22.04 \
-  --build-arg CUDA_VERSION=12.1.1 \
-  --build-arg TORCH_VERSION=2.2.1 \
-  --build-arg ROCM_VERSION=5.7.1 \
-  --build-arg PYTORCH_ROCM_ARCH="gfx906" \
-  --build-arg CMAKE_BUILD_TYPE=Release .
-```
-Note: If you want to use ROCm 6.x, you need to switch to AMD version of pytorch docker as a base layer to build:
-```bash
-docker build \
-  -t opensplat:ubuntu-22.04-libtorch-2.1.2-rocm-6.0.2 \
-  -f Dockerfile.rocm6 .
-```
-
-## Run
-
-To get started, download a dataset and extract it to a folder: [ [banana](https://drive.google.com/file/d/1mUUZFDo2swd6CE5vwPPkjN63Hyf4XyEv/view?usp=sharing) ]  [ [truck](https://drive.google.com/file/d/1WWXo-GKo6d-yf-K1T1CswIdkdZrBNZ_e/view?usp=sharing) ] 
-
-Then run from a command line prompt:
-
-### Windows
-
-```bash
-cd c:\path\to\opensplat
-opensplat.exe c:\path\to\banana -n 2000
-```
-
-### macOS / Linux
-
-```bash
-cd build
-./opensplat /path/to/banana -n 2000
-```
-
-The program will generate an output `splat.ply` file which can then be dragged and dropped in one of the many [viewers](https://github.com/MrNeRF/awesome-3D-gaussian-splatting?tab=readme-ov-file#viewers) such as  https://playcanvas.com/viewer. You can also edit/cleanup the scene using https://playcanvas.com/supersplat/editor. The program will also output a `cameras.json` file in the same directory which can be used by some viewers.
-
-To run on your own data, choose the path to an existing [COLMAP](https://colmap.github.io/), [OpenSfM](https://github.com/mapillary/OpenSfM), [ODM](https://github.com/OpenDroneMap/ODM) or [nerfstudio](https://docs.nerf.studio/quickstart/custom_dataset.html) project. The project must have sparse points included (random initialization is not supported, see https://github.com/pierotofy/OpenSplat/issues/7).
-
-There's several parameters you can tune. To view the full list:
-
-
-```bash
-./opensplat --help
-```
-
-If OpenSplat was built with `OPENSPLAT_BUILD_VISUALIZER=ON`, the Pangolin window now stays disabled unless you opt in with:
-
-```bash
-./opensplat /path/to/banana --has-visualization
-```
-
-### Google Colab
-
-To run OpenSplat in Google Colab follow this [example notebook](https://colab.research.google.com/drive/1USqQsIBcqdOP6Fy0aVAyoXzTdpaEoTL_).
-
-### Compression
-
-To generate compressed splats (.splat files), use the `-o` option:
-
-```bash
-./opensplat /path/to/banana -o banana.splat
-```
-
-### Resume
-
-You can resume training of a .PLY file by using the `--resume` option:
-
-```bash
-./opensplat /path/to/banana --resume ./splat.ply
-```
-
-### AMD GPU Notes
-
-To train a model with AMD GPU using docker container, you can use the following command as a reference:
-1. Launch the docker container with the following command:
-```bash
-docker run -it -v ~/data:/data --device=/dev/kfd --device=/dev/dri opensplat:ubuntu-22.04-libtorch-2.1.2-rocm-6.0.2 bash
-```
-2. Inside the docker container, run the following command to train the model:
-```bash
-export HIP_VISIBLE_DEVICES=0
-export HSA_OVERRIDE_GFX_VERSION=10.3.0  # AMD RX 6700 XT workaround 
-cd /code/build
-./opensplat /data/banana -n 2000
-```
-## Project Goals
-
-We recently released OpenSplat, so there's lots of work to do.
-
- * Support for running on AMD cards (more testing needed)
- * Improve speed / reduce memory usage
- * Distributed computation using multiple machines
- * Real-time training viewer output
- * Automatic filtering
- * Your ideas?
-
- https://github.com/pierotofy/OpenSplat/issues?q=is%3Aopen+is%3Aissue+label%3Aenhancement
-
-## Contributing
-
-We welcome contributions! Pull requests are welcome.
-
-## GPU Memory Notes
-
-A single gaussian takes ~2000 bytes of memory, so currenly you need ~2GB of GPU memory for each million gaussians.
-
-## Credits
-
-The methods used in OpenSplat are originally based on [splatfacto](https://docs.nerf.studio/nerfology/methods/splat.html).
+Use the native layer when working on training/runtime internals. Use the web platform when operating the full capture-to-result pipeline.
 
 ## License
 
-The code in this repository, unless otherwise noted, is licensed under the AGPLv3.
+See the repository license files for the applicable terms:
 
-The code from [splatfacto](https://docs.nerf.studio/nerfology/methods/splat.html) is originally licensed under the Apache 2.0 license and is © 2023 The Nerfstudio Team.
+- `LICENSE.txt`
+- `PobimSplatting/LICENSE.txt`
+- `PobimSplatting/POBIMOpenSplatting_LICENSE.txt`

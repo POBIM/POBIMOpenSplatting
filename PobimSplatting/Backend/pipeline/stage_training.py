@@ -17,6 +17,7 @@ from ..core.projects import (
     emit_stage_progress,
     save_projects_db,
     update_stage_detail,
+    update_reconstruction_framework,
     update_state,
 )
 from ..utils.video_processor import VideoProcessor
@@ -73,6 +74,30 @@ def run_opensplat_training(
         )
 
         update_state(project_id, "gaussian_splatting", status="running")
+        project_entry = project_store.processing_status.get(project_id, {})
+        framework = project_entry.get("reconstruction_framework") or {}
+        resource_coordination = project_entry.get("resource_coordination") or {}
+        recovery_history = framework.get("recovery_history") or []
+        training_budget_summary = {
+            'resource_profile_class': (
+                (framework.get('resource_profile') or {}).get('profile_class')
+                or resource_coordination.get('profile_class')
+            ),
+            'resource_lane': framework.get('resource_lane') or resource_coordination.get('resource_lane'),
+            'training_resolution': config.get('training_resolution', '4K'),
+            'colmap_resolution': config.get('colmap_resolution', '2K'),
+            'use_separate_training_images': bool(config.get('use_separate_training_images', False)),
+            'adaptive_frame_budget': bool(config.get('adaptive_frame_budget', True)),
+            'adaptive_pair_scheduling': bool(config.get('adaptive_pair_scheduling', True)),
+            'repair_step_count': len(recovery_history),
+            'uses_repaired_capture': len(recovery_history) > 0,
+        }
+        update_reconstruction_framework(
+            project_id,
+            {
+                'training_budget_summary': training_budget_summary,
+            },
+        )
 
         quality_mode = config.get("quality_mode", "balanced")
         custom_params = config if quality_mode == "custom" else None
@@ -108,6 +133,14 @@ def run_opensplat_training(
         )
         append_log_line(
             project_id, "🔄 Running High-Quality Gaussian Splatting Training..."
+        )
+        append_log_line(
+            project_id,
+            "🧠 Training budget context: "
+            f"profile={training_budget_summary.get('resource_profile_class', '--')} | "
+            f"lane={training_budget_summary.get('resource_lane', '--')} | "
+            f"repair_steps={training_budget_summary.get('repair_step_count', 0)} | "
+            f"separate_training={'yes' if training_budget_summary.get('use_separate_training_images') else 'no'}",
         )
 
         opensplat_binary = app_config.OPENSPLAT_BINARY_PATH

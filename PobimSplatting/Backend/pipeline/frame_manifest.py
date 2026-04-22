@@ -82,6 +82,107 @@ def _build_dense_boundary_indices(left_source_index, right_source_index, desired
     return dense_indices
 
 
+def _resolve_boundary_densification_severity(boundary, *, base_target_segment_frames, max_target_segment_frames):
+    bridge_strength = float(boundary.get('bridge_strength') or 0.0)
+    adjacent_inliers = float(boundary.get('adjacent_inliers') or 0.0)
+    multiplier = 1.0
+    label = 'light'
+    reasons = []
+
+    if bridge_strength <= 0:
+        multiplier += 1.0
+        label = 'critical'
+        reasons.append('zero bridge')
+    elif bridge_strength <= 6:
+        multiplier += 0.8
+        label = 'severe'
+        reasons.append('bridge <= 6')
+    elif bridge_strength <= 12:
+        multiplier += 0.55
+        label = 'elevated'
+        reasons.append('bridge <= 12')
+    elif bridge_strength <= 18:
+        multiplier += 0.3
+        label = 'moderate'
+        reasons.append('bridge <= 18')
+
+    if adjacent_inliers <= 0:
+        multiplier += 0.35
+        reasons.append('adjacent == 0')
+        if label == 'light':
+            label = 'moderate'
+    elif adjacent_inliers < 10:
+        multiplier += 0.25
+        reasons.append('adjacent < 10')
+    elif adjacent_inliers < 18:
+        multiplier += 0.15
+        reasons.append('adjacent < 18')
+
+    target_segment_frames = max(
+        3,
+        min(
+            int(max_target_segment_frames),
+            int(round(float(base_target_segment_frames) * multiplier)),
+        ),
+    )
+    target_segment_frames = max(int(base_target_segment_frames), target_segment_frames)
+
+    return {
+        'label': label,
+        'multiplier': round(multiplier, 2),
+        'target_segment_frames': target_segment_frames,
+        'bridge_strength': bridge_strength,
+        'adjacent_inliers': adjacent_inliers,
+        'reason': ', '.join(reasons) if reasons else 'baseline weak boundary',
+    }
+
+
+def _make_boundary_key(boundary):
+    left_name = boundary.get('left_image_name')
+    right_name = boundary.get('right_image_name')
+    if not left_name or not right_name:
+        return None
+    return f"{left_name}→{right_name}"
+
+
+def _select_densification_boundaries(colmap_cfg):
+    weak_boundaries = list(
+        ((colmap_cfg.get('pair_geometry_stats') or {}).get('weak_boundaries')) or []
+    )
+    if not weak_boundaries:
+        return [], None
+
+    recovery_history = list(colmap_cfg.get('recovery_history') or [])
+    latest_subset_recovery = next(
+        (
+            step
+            for step in reversed(recovery_history)
+            if step.get('kind') == 'weak_window_subset'
+        ),
+        None,
+    )
+    if not latest_subset_recovery:
+        return weak_boundaries, None
+
+    surviving_target_boundaries = list(
+        latest_subset_recovery.get('surviving_target_boundaries') or []
+    )
+    surviving_keys = {
+        item.get('key')
+        for item in surviving_target_boundaries
+        if item.get('key')
+    }
+    if not surviving_keys:
+        return [], latest_subset_recovery
+
+    filtered = [
+        boundary
+        for boundary in weak_boundaries
+        if _make_boundary_key(boundary) in surviving_keys
+    ]
+    return filtered, latest_subset_recovery
+
+
 def build_boundary_frame_densification_plan(paths, colmap_cfg, config):
     manifest = load_frame_selection_manifest(paths)
     if not manifest:
@@ -91,7 +192,7 @@ def build_boundary_frame_densification_plan(paths, colmap_cfg, config):
     if not entries:
         return None
 
-    weak_boundaries = list(((colmap_cfg.get('pair_geometry_stats') or {}).get('weak_boundaries')) or [])
+    weak_boundaries, densification_source = _select_densification_boundaries(colmap_cfg)
     if not weak_boundaries:
         return None
 
@@ -104,6 +205,10 @@ def build_boundary_frame_densification_plan(paths, colmap_cfg, config):
     inserted_after = {}
     inserted_keys = set()
     target_segment_frames = int(config.get('boundary_target_segment_frames') or 8)
+    max_target_segment_frames = int(
+        config.get('boundary_max_segment_frames')
+        or max(target_segment_frames + 8, target_segment_frames * 2)
+    )
     planned_boundaries = []
 
     for boundary in weak_boundaries:
@@ -124,10 +229,15 @@ def build_boundary_frame_densification_plan(paths, colmap_cfg, config):
         if left_source_index is None or right_source_index is None:
             continue
 
+        severity = _resolve_boundary_densification_severity(
+            boundary,
+            base_target_segment_frames=target_segment_frames,
+            max_target_segment_frames=max_target_segment_frames,
+        )
         dense_indices = _build_dense_boundary_indices(
             int(left_source_index),
             int(right_source_index),
-            target_segment_frames,
+            severity['target_segment_frames'],
         )
         if not dense_indices:
             continue
@@ -153,6 +263,12 @@ def build_boundary_frame_densification_plan(paths, colmap_cfg, config):
             'left_image_name': left_name,
             'right_image_name': right_name,
             'inserted_frame_indices': [item['source_frame_index'] for item in planned_entries],
+            'bridge_strength': boundary.get('bridge_strength'),
+            'adjacent_inliers': boundary.get('adjacent_inliers'),
+            'severity_label': severity['label'],
+            'severity_multiplier': severity['multiplier'],
+            'severity_reason': severity['reason'],
+            'target_segment_frames': severity['target_segment_frames'],
         })
 
     if not inserted_after:
@@ -177,6 +293,10 @@ def build_boundary_frame_densification_plan(paths, colmap_cfg, config):
         'entries': updated_entries,
         'inserted_count': len(updated_entries) - len(entries),
         'planned_boundaries': planned_boundaries,
+        'densification_source': densification_source,
+        'selected_boundary_count': len(weak_boundaries),
+        'base_target_segment_frames': target_segment_frames,
+        'max_target_segment_frames': max_target_segment_frames,
     }
 
 
@@ -194,8 +314,8 @@ def should_run_boundary_frame_densification(config, colmap_cfg, sparse_summary, 
     if not manifest or not (manifest.get('entries') or []):
         return False
 
-    pair_geometry_stats = colmap_cfg.get('pair_geometry_stats') or {}
-    return bool(pair_geometry_stats.get('weak_boundaries'))
+    weak_boundaries, _densification_source = _select_densification_boundaries(colmap_cfg)
+    return bool(weak_boundaries)
 
 
 def rebuild_images_from_frame_manifest(project_id, paths, current_manifest, updated_entries, *, resolution):

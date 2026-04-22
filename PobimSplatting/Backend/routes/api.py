@@ -32,6 +32,7 @@ from ..core.projects import (
     update_stage_detail,
     update_state,
 )
+from ..pipeline.config_builders import build_upload_adaptive_policy_comparisons
 from ..pipeline.runner import (
     build_upload_policy_preview,
     finalize_project,
@@ -592,6 +593,9 @@ def upload_policy_preview():
         "quality": parse_int(payload.get("quality"), 100),
         "preview_count": parse_int(payload.get("preview_count"), 10),
         "smart_frame_selection": parse_bool(payload.get("smart_frame_selection"), True),
+        "adaptive_frame_budget": parse_bool(
+            payload.get("adaptive_frame_budget"), True
+        ),
         "oversample_factor": parse_int(payload.get("oversample_factor"), 10),
         "replacement_search_radius": parse_int(payload.get("replacement_search_radius"), 4),
         "ffmpeg_cpu_workers": parse_int(payload.get("ffmpeg_cpu_workers"), 4),
@@ -601,7 +605,11 @@ def upload_policy_preview():
         "use_separate_training_images": parse_bool(payload.get("use_separate_training_images"), False),
         "crop_size": parse_int(payload.get("crop_size"), 0),
         "mixed_precision": parse_bool(payload.get("mixed_precision"), False),
+        "adaptive_pair_scheduling": parse_bool(
+            payload.get("adaptive_pair_scheduling"), True
+        ),
         "input_type": input_type,
+        "resource_override_source": "automatic",
     }
 
     for key in (
@@ -649,6 +657,18 @@ def upload_policy_preview():
             "video_count": video_count,
         },
     )
+    if input_type in {"video", "mixed"}:
+        preview["adaptive_comparisons"] = build_upload_adaptive_policy_comparisons(
+            config,
+            {
+                "input_type": input_type,
+                "file_names": file_names,
+                "image_names": image_names,
+                "image_count": image_count,
+                "video_count": video_count,
+            },
+            current_preview=preview,
+        )
     return jsonify(preview)
 
 
@@ -733,6 +753,10 @@ def upload_files():
         "preview_count": int(request.form.get("preview_count", 10)),
         "smart_frame_selection": request.form.get("smart_frame_selection", "true").lower()
         == "true",
+        "adaptive_frame_budget": request.form.get(
+            "adaptive_frame_budget", "true"
+        ).lower()
+        == "true",
         "oversample_factor": int(request.form.get("oversample_factor", 10)),
         "replacement_search_radius": int(request.form.get("replacement_search_radius", 4)),
         "ffmpeg_cpu_workers": int(request.form.get("ffmpeg_cpu_workers", 4)),
@@ -755,6 +779,11 @@ def upload_files():
         # Mixed Precision (FP16) training for reduced VRAM usage
         "mixed_precision": request.form.get("mixed_precision", "false").lower()
         == "true",
+        "adaptive_pair_scheduling": request.form.get(
+            "adaptive_pair_scheduling", "true"
+        ).lower()
+        == "true",
+        "resource_override_source": "automatic",
     }
 
     # Add custom parameters if in custom mode
@@ -850,6 +879,12 @@ def upload_files():
         project_id, f"Videos: {len(video_files)}, Images: {len(image_files)}"
     )
     if video_files:
+        append_log_line(
+            project_id,
+            "Adaptive policy: "
+            f"frame_budget={'on' if config.get('adaptive_frame_budget', True) else 'off'} | "
+            f"pair_scheduling={'on' if config.get('adaptive_pair_scheduling', True) else 'off'}",
+        )
         if config["extraction_mode"] == "fps":
             append_log_line(
                 project_id,
@@ -1358,6 +1393,7 @@ def retry_project(project_id):
         new_params = data.get("params", {})
         if new_params:
             append_log_line(project_id, "🔧 Updating configuration with new parameters")
+            config["resource_override_source"] = "manual_retry"
 
             # Update OpenSplat training parameters if provided
             for param_key in [
@@ -1420,9 +1456,11 @@ def retry_project(project_id):
                 "training_resolution",
                 "use_separate_training_images",
                 "smart_frame_selection",
+                "adaptive_frame_budget",
                 "oversample_factor",
                 "replacement_search_radius",
                 "ffmpeg_cpu_workers",
+                "adaptive_pair_scheduling",
             ]:
                 if param_key in new_params and new_params[param_key] is not None:
                     config[param_key] = new_params[param_key]
@@ -1441,6 +1479,8 @@ def retry_project(project_id):
             with project_store.status_lock:
                 project_store.processing_status[project_id]["config"] = config
                 save_projects_db()
+        else:
+            config["resource_override_source"] = "manual_retry"
 
         # Determine video and image files
         video_files = []

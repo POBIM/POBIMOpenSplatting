@@ -761,6 +761,56 @@ def run_sparse_reconstruction_stage(
             capture_no_regression_floor(colmap_cfg),
         )
 
+    weak_window_subset_recovery_pass = helpers[
+        "build_weak_window_subset_recovery_pass"
+    ](paths, colmap_cfg, sparse_summary)
+    if weak_window_subset_recovery_pass:
+        overlap_plan = weak_window_subset_recovery_pass.get("overlap_plan") or {}
+        boundary_subset = weak_window_subset_recovery_pass.get("boundary_subset") or {}
+        if weak_window_subset_recovery_pass.get("kind") == "stubborn_boundary_subset":
+            colmap_cfg["stubborn_boundary_recovery_attempted"] = True
+        else:
+            colmap_cfg["weak_window_recovery_attempted"] = True
+        colmap_cfg["recovery_matching_pass"] = weak_window_subset_recovery_pass
+        if weak_window_subset_recovery_pass.get("kind") == "stubborn_boundary_subset":
+            pair_plan = weak_window_subset_recovery_pass.get("pair_plan") or {}
+            append_log_line(
+                project_id,
+                "🧠 Some heavily densified boundaries are still failing; "
+                "escalating to a stubborn-boundary subset rematch instead of adding more frames first",
+            )
+            append_log_line(
+                project_id,
+                "🧠 Stubborn-boundary subset rematch: "
+                f"subset={len(boundary_subset.get('image_ids') or [])} images | "
+                f"stubborn_boundaries={len(boundary_subset.get('target_boundaries') or [])} | "
+                f"padding={boundary_subset.get('padding', 0)} | "
+                f"overlap={overlap_plan.get('current_overlap', '?')}→{overlap_plan.get('target_overlap', weak_window_subset_recovery_pass['matcher_params'].get('SequentialMatching.overlap', '?'))} | "
+                f"loop={weak_window_subset_recovery_pass['matcher_params'].get('SequentialMatching.loop_detection', '0')} | "
+                f"pairs={pair_plan.get('pair_count', 0)}",
+            )
+        else:
+            append_log_line(
+                project_id,
+                "🧠 Sparse reconstruction is split across weak temporal windows; "
+                "running a targeted subset rematch before frame densification",
+            )
+            append_log_line(
+                project_id,
+                "🧠 Weak-window subset rematch: "
+                f"subset={len(boundary_subset.get('image_ids') or [])} images | "
+                f"weak_boundaries={boundary_subset.get('weak_boundary_count', 0)} | "
+                f"padding={boundary_subset.get('padding', 0)} | "
+                f"overlap={overlap_plan.get('current_overlap', '?')}→{overlap_plan.get('target_overlap', weak_window_subset_recovery_pass['matcher_params'].get('SequentialMatching.overlap', '?'))}",
+            )
+        helpers["clear_sparse_reconstruction_outputs"](paths["sparse_path"])
+        colmap_cfg = helpers["run_orbit_safe_bridge_recovery_matching_pass"](
+            project_id, paths, config, colmap_exe, colmap_cfg, has_cuda
+        )
+        return run_sparse_reconstruction_stage(
+            project_id, paths, config, colmap_cfg, helpers=helpers
+        )
+
     if helpers["should_run_boundary_frame_densification"](
         config, colmap_cfg, sparse_summary, paths
     ):

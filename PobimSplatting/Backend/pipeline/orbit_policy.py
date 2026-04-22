@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 
 from ..core.projects import append_log_line, update_reconstruction_framework
+from .resource_contract import RECOVERY_PRECEDENCE, RESOURCE_AWARE_SCHEMA_VERSION
 from .frame_manifest import load_frame_selection_manifest
 
 logger = logging.getLogger(__name__)
@@ -654,9 +655,63 @@ def build_orbit_safe_bridge_recovery_pass(geometry_stats, matcher_params):
     )
 
     return {
+        'kind': 'bridge_recovery',
+        'label': 'Bridge recovery rematch',
         'matcher_params': refined_matcher_params,
+        'reason_code': 'weak_bridge',
         'reason': reason,
         'overlap_plan': overlap_plan,
+    }
+
+
+def _summarize_recovery_loop(colmap_cfg):
+    recovery_history = list(colmap_cfg.get('recovery_history') or [])
+    pair_geometry_stats = dict(colmap_cfg.get('pair_geometry_stats') or {})
+    sparse_summary = dict(colmap_cfg.get('last_sparse_summary') or {})
+
+    final_path = 'baseline'
+    broad_fallback_used = False
+    local_repair_count = len(recovery_history)
+    final_reason_code = None
+
+    for step in recovery_history:
+        kind = step.get('kind')
+        if kind == 'final_loop_detection_subset':
+            final_path = 'broad_fallback'
+            broad_fallback_used = True
+        elif step.get('pair_targeted'):
+            final_path = 'stubborn_targeted_pairs'
+        elif kind == 'boundary_frame_densification':
+            final_path = 'densification'
+        elif kind in {'weak_window_subset', 'stubborn_boundary_subset'}:
+            final_path = 'subset_repair'
+        elif kind and kind.startswith('bridge_recovery'):
+            final_path = 'bridge_recovery'
+        if step.get('reason_code'):
+            final_reason_code = step.get('reason_code')
+
+    unresolved_weak_boundaries = int(pair_geometry_stats.get('weak_boundary_count') or 0)
+    unresolved_split = bool(sparse_summary.get('has_multiple_models'))
+
+    if broad_fallback_used:
+        state = 'fallback_used'
+    elif local_repair_count > 0 and (unresolved_weak_boundaries == 0 and not unresolved_split):
+        state = 'local_repair'
+    elif local_repair_count == 0 and unresolved_weak_boundaries == 0 and not unresolved_split:
+        state = 'clean'
+    else:
+        state = 'unresolved'
+
+    return {
+        'schema_version': RESOURCE_AWARE_SCHEMA_VERSION,
+        'precedence': list(RECOVERY_PRECEDENCE),
+        'final_path': final_path,
+        'state': state,
+        'local_repair_count': local_repair_count,
+        'broad_fallback_used': broad_fallback_used,
+        'final_reason_code': final_reason_code,
+        'unresolved_weak_boundary_count': unresolved_weak_boundaries,
+        'unresolved_split_model': unresolved_split,
     }
 
 
@@ -677,7 +732,25 @@ def sync_reconstruction_framework(project_id, config, colmap_cfg, *, phase, extr
         'matcher_params': dict(colmap_cfg.get('matcher_params', {})),
         'mapper_params': dict(colmap_cfg.get('mapper_params', {})),
         'capture_pattern': colmap_cfg.get('capture_pattern'),
+        'progressive_matching_plan': colmap_cfg.get('progressive_matching_plan'),
+        'progressive_matching_checkpoints': colmap_cfg.get(
+            'progressive_matching_checkpoints'
+        ),
+        'recovery_history': colmap_cfg.get('recovery_history'),
+        'resource_contract_version': RESOURCE_AWARE_SCHEMA_VERSION,
+        'recovery_loop_summary': _summarize_recovery_loop(colmap_cfg),
     }
+
+    for key in (
+        'resource_profile',
+        'resource_lane',
+        'admission_reason',
+        'downgrade_reason',
+        'estimated_start_delay',
+        'capture_budget_summary',
+    ):
+        if key in colmap_cfg:
+            framework_state[key] = colmap_cfg.get(key)
 
     if extra:
         framework_state.update(extra)

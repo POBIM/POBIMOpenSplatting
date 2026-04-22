@@ -122,6 +122,13 @@ const formatPercent = (value?: number | null) => {
   return `${Math.round(value * 100)}%`;
 };
 
+const formatMetric = (value?: number | null, digits = 1) => {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return '--';
+  }
+  return value.toFixed(digits);
+};
+
 const extractLogTimestamp = (line: string): number | null => {
   const match = line.match(/^\[([^\]]+)\]/);
   if (!match) {
@@ -220,6 +227,8 @@ export default function ProjectDetailPage() {
     training_resolution: '',
     use_separate_training_images: false,
     smart_frame_selection: true,
+    adaptive_frame_budget: true,
+    adaptive_pair_scheduling: true,
     oversample_factor: '',
     replacement_search_radius: '',
     ffmpeg_cpu_workers: '',
@@ -233,9 +242,22 @@ export default function ProjectDetailPage() {
   const [plyFiles, setPlyFiles] = useState<PlyFile[]>([]);
   const [loadingPlyFiles, setLoadingPlyFiles] = useState(false);
   const framework = project?.reconstruction_framework;
+  const resourceCoordination = project?.resource_coordination;
   const videoDiagnostics = project?.video_extraction_diagnostics;
+  const progressivePlan = framework?.progressive_matching_plan;
+  const progressiveCheckpoints = framework?.progressive_matching_checkpoints || [];
+  const recoveryHistory = framework?.recovery_history || [];
+  const finalProgressiveCheckpoint = progressiveCheckpoints.length > 0
+    ? progressiveCheckpoints[progressiveCheckpoints.length - 1]
+    : null;
+  const adaptiveFrameBudget = videoDiagnostics?.adaptive_frame_budget;
+  const candidateQualitySummary = videoDiagnostics?.candidate_quality_summary;
   const smartFrameSelectionEnabled = project?.config?.smart_frame_selection !== false;
+  const adaptiveFrameBudgetEnabled = smartFrameSelectionEnabled && project?.config?.adaptive_frame_budget !== false;
+  const adaptivePairSchedulingEnabled = project?.config?.adaptive_pair_scheduling !== false;
   const oversampleFactor = videoDiagnostics?.oversample_factor ?? project?.config?.oversample_factor ?? null;
+  const requestedOversampleFactor = videoDiagnostics?.requested_oversample_factor ?? project?.config?.oversample_factor ?? null;
+  const candidateDensityRatio = videoDiagnostics?.candidate_density_ratio ?? null;
   const effectiveSearchWindow = videoDiagnostics?.search_radius ?? project?.config?.replacement_search_radius ?? null;
   const extractionSummary = project?.config?.extraction_mode === 'fps'
     ? `${project?.config?.target_fps ?? '--'} FPS`
@@ -245,6 +267,13 @@ export default function ProjectDetailPage() {
   const videoExtractionDetail = stageDetails['video_extraction'];
   const videoExtractionFramesDone = videoExtractionDetail?.current_item ?? videoDiagnostics?.candidate_count ?? videoDiagnostics?.saved_frames ?? null;
   const videoExtractionFramesTotal = videoExtractionDetail?.total_items ?? videoDiagnostics?.candidate_count ?? videoDiagnostics?.requested_targets ?? null;
+  const recoveryLoopSummary = framework?.recovery_loop_summary;
+  const effectiveResourceProfile = framework?.resource_profile ?? resourceCoordination;
+  const effectiveResourceLane = framework?.resource_lane ?? resourceCoordination?.resource_lane;
+  const effectiveAdmissionReason = framework?.admission_reason ?? resourceCoordination?.admission_reason;
+  const effectiveDowngradeReason = framework?.downgrade_reason ?? resourceCoordination?.downgrade_reason;
+  const effectiveStartDelay = framework?.estimated_start_delay ?? resourceCoordination?.estimated_start_delay;
+  const sparseModelSummary = framework?.sparse_model_summary;
   const logGroups = useMemo(() => groupLogsByStage(logs, stages), [logs, stages]);
   const stageLogs = useMemo(() => {
     if (!expandedStage) {
@@ -597,6 +626,8 @@ export default function ProjectDetailPage() {
           params.colmap_resolution = retryParams.colmap_resolution;
         }
         params.smart_frame_selection = retryParams.smart_frame_selection;
+        params.adaptive_frame_budget = retryParams.adaptive_frame_budget;
+        params.adaptive_pair_scheduling = retryParams.adaptive_pair_scheduling;
         if (retryParams.oversample_factor) {
           params.oversample_factor = parseInt(retryParams.oversample_factor);
         }
@@ -626,6 +657,7 @@ export default function ProjectDetailPage() {
 
       // Add parameters if retrying from COLMAP Feature Matching stage
       if (fromStage === 'feature_matching') {
+        params.adaptive_pair_scheduling = retryParams.adaptive_pair_scheduling;
         if (retryParams.max_num_matches) {
           params.max_num_matches = parseInt(retryParams.max_num_matches);
         }
@@ -681,6 +713,8 @@ export default function ProjectDetailPage() {
         training_resolution: '',
         use_separate_training_images: false,
         smart_frame_selection: true,
+        adaptive_frame_budget: true,
+        adaptive_pair_scheduling: true,
         oversample_factor: '',
         replacement_search_radius: '',
         ffmpeg_cpu_workers: '',
@@ -733,6 +767,8 @@ export default function ProjectDetailPage() {
         training_resolution: '',
         use_separate_training_images: false,
         smart_frame_selection: project?.config?.smart_frame_selection !== false,
+        adaptive_frame_budget: project?.config?.adaptive_frame_budget !== false,
+        adaptive_pair_scheduling: project?.config?.adaptive_pair_scheduling !== false,
         oversample_factor: project?.config?.oversample_factor?.toString() || '',
         replacement_search_radius: project?.config?.replacement_search_radius?.toString() || '',
         ffmpeg_cpu_workers: project?.config?.ffmpeg_cpu_workers?.toString() || '',
@@ -1090,7 +1126,9 @@ export default function ProjectDetailPage() {
                       <div className="brutal-card p-4">
                         <p className="brutal-label mb-2">Matching Policy</p>
                         <p className="text-sm font-bold uppercase text-[var(--ink)]">{getMatcherLabelWithMode(framework.matcher_type) || '--'}</p>
-                        <p className="mt-2 text-xs text-[var(--text-secondary)]">overlap {framework.matcher_params?.['SequentialMatching.overlap'] || '--'} • quadratic {framework.matcher_params?.['SequentialMatching.quadratic_overlap'] || '--'}</p>
+                        <p className="mt-2 text-xs text-[var(--text-secondary)]">
+                          overlap {framework.matcher_params?.['SequentialMatching.overlap'] || '--'} • quadratic {framework.matcher_params?.['SequentialMatching.quadratic_overlap'] || '--'} • adaptive {adaptivePairSchedulingEnabled ? 'on' : 'off'}
+                        </p>
                       </div>
                       <div className="brutal-card-muted p-4">
                         <p className="brutal-label mb-2">Bridge Risk</p>
@@ -1126,6 +1164,240 @@ export default function ProjectDetailPage() {
                 </div>
               )}
 
+              {(progressivePlan || progressiveCheckpoints.length > 0) && (
+                <div className="grid gap-4 xl:grid-cols-[0.92fr_1.08fr]">
+                  <div className="brutal-card p-4 md:p-5">
+                    <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                      <div>
+                        <p className="brutal-label mb-1">Adaptive Matching</p>
+                        <h2 className="brutal-h3">Progressive Pair Schedule</h2>
+                        <p className="mt-2 text-sm text-[var(--text-secondary)]">Sequential matching now expands in checkpoints instead of jumping straight to the heaviest ordered-video pass.</p>
+                      </div>
+                      {progressivePlan?.resource_tier && <span className="brutal-badge brutal-badge-info">{progressivePlan.resource_tier}</span>}
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                      {[
+                        ['Passes', progressivePlan?.passes?.length ?? '--'],
+                        ['Completed', progressiveCheckpoints.length || '--'],
+                        ['Final overlap', progressivePlan?.final_overlap ?? framework?.matcher_params?.['SequentialMatching.overlap'] ?? '--'],
+                        ['Verified pairs', finalProgressiveCheckpoint?.verified_pairs ?? '--'],
+                      ].map(([label, value]) => (
+                        <div key={label} className="brutal-card-muted p-4">
+                          <p className="brutal-label mb-2">{label}</p>
+                          <p className="text-sm font-black uppercase tracking-tight text-[var(--ink)]">{value}</p>
+                        </div>
+                      ))}
+                    </div>
+
+                    {progressivePlan?.reason && (
+                      <div className="mt-3 border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-muted)] p-4 text-sm text-[var(--text-secondary)]">
+                        {progressivePlan.reason}
+                      </div>
+                    )}
+
+                    {!!progressivePlan?.passes?.length && (
+                      <div className="mt-3 space-y-2">
+                        {progressivePlan.passes.map((pass, index) => (
+                          <div key={pass.key || `${pass.label}-${index}`} className="flex items-center justify-between gap-3 border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-card)] px-3 py-2 text-sm">
+                            <div>
+                              <p className="font-black uppercase tracking-tight text-[var(--ink)]">{index + 1}. {pass.label || pass.key || 'pass'}</p>
+                              <p className="text-xs text-[var(--text-secondary)]">{pass.checkpoint_note || 'No note'}</p>
+                            </div>
+                            <div className="text-right text-xs text-[var(--text-secondary)]">
+                              <p>overlap {pass.matcher_params?.['SequentialMatching.overlap'] || '--'}</p>
+                              <p>matches {pass.max_num_matches ?? '--'}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="brutal-card-muted p-4 md:p-5">
+                    <p className="brutal-label mb-3">Checkpoint Outcomes</p>
+                    <div className="space-y-2">
+                      {progressiveCheckpoints.map((checkpoint, index) => (
+                        <div key={`${checkpoint.key || checkpoint.label || 'checkpoint'}-${index}`} className="border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-card)] p-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-black uppercase tracking-tight text-[var(--ink)]">{checkpoint.label || checkpoint.key || `pass ${index + 1}`}</p>
+                              <p className="mt-1 text-xs text-[var(--text-secondary)]">max matches {checkpoint.max_num_matches ?? '--'} • verified {checkpoint.verified_pairs ?? '--'}</p>
+                            </div>
+                            <span className="brutal-badge">{index + 1}/{progressiveCheckpoints.length}</span>
+                          </div>
+                          <div className="mt-3 grid gap-2 sm:grid-cols-4 text-sm text-[var(--text-secondary)]">
+                            <div className="flex items-center justify-between gap-2"><span>Bridge p10</span><span className="font-bold text-[var(--ink)]">{checkpoint.geometry_stats?.bridge_p10 ?? '--'}</span></div>
+                            <div className="flex items-center justify-between gap-2"><span>Bridge min</span><span className="font-bold text-[var(--ink)]">{checkpoint.geometry_stats?.bridge_min ?? '--'}</span></div>
+                            <div className="flex items-center justify-between gap-2"><span>Weak</span><span className="font-bold text-[var(--ink)]">{checkpoint.geometry_stats?.weak_boundary_count ?? '--'}</span></div>
+                            <div className="flex items-center justify-between gap-2"><span>Weak ratio</span><span className="font-bold text-[var(--ink)]">{formatPercent(checkpoint.geometry_stats?.weak_boundary_ratio)}</span></div>
+                          </div>
+                        </div>
+                      ))}
+                      {progressiveCheckpoints.length === 0 && (
+                        <div className="brutal-card p-4 text-sm text-[var(--text-secondary)]">No progressive matching checkpoints were persisted for this run.</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {(effectiveResourceProfile || recoveryLoopSummary) && (
+                <div className="grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
+                  {effectiveResourceProfile && (
+                    <div className="brutal-card p-4 md:p-5">
+                      <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                        <div>
+                          <p className="brutal-label mb-1">Resource Lane</p>
+                          <h2 className="brutal-h3">Project Resource Profile</h2>
+                          <p className="mt-2 text-sm text-[var(--text-secondary)]">
+                            Machine-aware lane selection for ordered-video heavy stages.
+                          </p>
+                        </div>
+                        {effectiveResourceLane && <span className="brutal-badge brutal-badge-info">{effectiveResourceLane}</span>}
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                        {[
+                          ['Profile', effectiveResourceProfile.profile_class ?? '--'],
+                          ['GPU', effectiveResourceProfile.gpu_model ?? '--'],
+                          ['VRAM', effectiveResourceProfile.gpu_vram_mb ? `${effectiveResourceProfile.gpu_vram_mb} MB` : '--'],
+                          ['Delay', effectiveStartDelay ? `${effectiveStartDelay}s` : '--'],
+                        ].map(([label, value]) => (
+                          <div key={label} className="brutal-card-muted p-4">
+                            <p className="brutal-label mb-2">{label}</p>
+                            <p className="text-sm font-black uppercase tracking-tight text-[var(--ink)]">{value}</p>
+                          </div>
+                        ))}
+                      </div>
+
+                      {(effectiveAdmissionReason || effectiveDowngradeReason) && (
+                        <div className="mt-3 border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-muted)] p-4 text-sm text-[var(--text-secondary)]">
+                          {effectiveAdmissionReason || 'No admission note'}
+                          {effectiveDowngradeReason ? ` • downgrade=${effectiveDowngradeReason}` : ''}
+                        </div>
+                      )}
+
+                      {framework?.training_budget_summary && (
+                        <div className="mt-3 border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-card)] p-4 text-sm text-[var(--text-secondary)]">
+                          Training context: {framework.training_budget_summary.colmap_resolution ?? '--'} COLMAP → {framework.training_budget_summary.training_resolution ?? '--'} train
+                          {framework.training_budget_summary.uses_repaired_capture ? ` • repaired capture (${framework.training_budget_summary.repair_step_count ?? 0} step)` : ' • clean capture'}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {recoveryLoopSummary && (
+                    <div className="brutal-card-muted p-4 md:p-5">
+                      <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                        <div>
+                          <p className="brutal-label mb-1">Recovery Outcome</p>
+                          <h2 className="brutal-h3">Deterministic Loop Summary</h2>
+                          <p className="mt-2 text-sm text-[var(--text-secondary)]">
+                            Final repair path chosen after progressive matching and local repair passes.
+                          </p>
+                        </div>
+                        {recoveryLoopSummary.final_path && <span className="brutal-badge brutal-badge-warning">{recoveryLoopSummary.final_path}</span>}
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 text-sm text-[var(--text-secondary)]">
+                        <div className="flex items-center justify-between gap-2"><span>State</span><span className="font-bold text-[var(--ink)]">{recoveryLoopSummary.state ?? '--'}</span></div>
+                        <div className="flex items-center justify-between gap-2"><span>Local repairs</span><span className="font-bold text-[var(--ink)]">{recoveryLoopSummary.local_repair_count ?? '--'}</span></div>
+                        <div className="flex items-center justify-between gap-2"><span>Weak left</span><span className="font-bold text-[var(--ink)]">{recoveryLoopSummary.unresolved_weak_boundary_count ?? '--'}</span></div>
+                        <div className="flex items-center justify-between gap-2"><span>Registered ratio</span><span className="font-bold text-[var(--ink)]">{formatPercent(sparseModelSummary?.registered_ratio)}</span></div>
+                        <div className="flex items-center justify-between gap-2"><span>Best registered</span><span className="font-bold text-[var(--ink)]">{sparseModelSummary?.best_registered ?? '--'}</span></div>
+                        <div className="flex items-center justify-between gap-2"><span>Models</span><span className="font-bold text-[var(--ink)]">{sparseModelSummary?.model_count ?? '--'}</span></div>
+                        <div className="flex items-center justify-between gap-2"><span>Zero ratio</span><span className="font-bold text-[var(--ink)]">{formatPercent(framework?.pair_geometry_stats?.zero_boundary_ratio)}</span></div>
+                        <div className="flex items-center justify-between gap-2"><span>Reason code</span><span className="font-bold text-[var(--ink)]">{recoveryLoopSummary.final_reason_code ?? '--'}</span></div>
+                      </div>
+
+                      {!!recoveryLoopSummary.precedence?.length && (
+                        <div className="mt-3 flex flex-wrap gap-2 text-xs text-[var(--text-secondary)]">
+                          {recoveryLoopSummary.precedence.map((item, index) => (
+                            <span key={`${item}-${index}`} className="border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-card)] px-2 py-1">
+                              {index + 1}. {item}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {recoveryHistory.length > 0 && (
+                <div className="brutal-card p-4 md:p-5">
+                  <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                    <div>
+                      <p className="brutal-label mb-1">Recovery Loop</p>
+                      <h2 className="brutal-h3">Targeted Repair History</h2>
+                      <p className="mt-2 text-sm text-[var(--text-secondary)]">
+                        Narrow retries that ran after baseline matching or sparse reconstruction started to split.
+                      </p>
+                    </div>
+                    <span className="brutal-badge brutal-badge-warning">{recoveryHistory.length} step{recoveryHistory.length > 1 ? 's' : ''}</span>
+                  </div>
+
+                  <div className="space-y-2">
+                    {recoveryHistory.map((step, index) => (
+                      <div key={`${step.kind || step.label || 'recovery'}-${index}`} className="border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-card)] p-4">
+                        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                          <div>
+                            <p className="text-sm font-black uppercase tracking-tight text-[var(--ink)]">
+                              {step.label || step.kind || `recovery ${index + 1}`}
+                            </p>
+                            <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                              {step.reason || 'No recovery note'}
+                            </p>
+                          </div>
+                          <div className="flex flex-wrap gap-2 text-[11px] font-bold uppercase tracking-[0.16em]">
+                            {step.status && <span className="brutal-badge">{step.status}</span>}
+                            {step.outcome && <span className="brutal-badge brutal-badge-warning">{step.outcome}</span>}
+                            {step.reason_code && <span className="brutal-badge brutal-badge-info">{step.reason_code}</span>}
+                            {step.runtime_mode && <span className="brutal-badge">{step.runtime_mode}</span>}
+                            {step.subset_image_count ? <span className="brutal-badge brutal-badge-info">subset {step.subset_image_count}</span> : null}
+                            {step.pair_targeted ? <span className="brutal-badge brutal-badge-info">pairs {step.pair_count ?? '--'}</span> : null}
+                            {step.pair_budget_capped ? <span className="brutal-badge brutal-badge-warning">cap {step.pair_budget_cap ?? '--'}</span> : null}
+                          </div>
+                        </div>
+                        <div className="mt-3 grid gap-2 sm:grid-cols-3 xl:grid-cols-6 text-sm text-[var(--text-secondary)]">
+                          <div className="flex items-center justify-between gap-2"><span>Weak boundaries</span><span className="font-bold text-[var(--ink)]">{step.weak_boundary_count ?? step.geometry_stats?.weak_boundary_count ?? '--'}</span></div>
+                          <div className="flex items-center justify-between gap-2"><span>Targets</span><span className="font-bold text-[var(--ink)]">{step.target_boundary_count ?? '--'}</span></div>
+                          <div className="flex items-center justify-between gap-2"><span>Survivors</span><span className="font-bold text-[var(--ink)]">{step.surviving_target_boundary_count ?? '--'}</span></div>
+                          <div className="flex items-center justify-between gap-2"><span>Padding</span><span className="font-bold text-[var(--ink)]">{step.padding ?? '--'}</span></div>
+                          <div className="flex items-center justify-between gap-2"><span>Overlap</span><span className="font-bold text-[var(--ink)]">{step.overlap ?? '--'}</span></div>
+                          <div className="flex items-center justify-between gap-2"><span>Bridge p10</span><span className="font-bold text-[var(--ink)]">{step.geometry_stats?.bridge_p10 ?? '--'}</span></div>
+                          <div className="flex items-center justify-between gap-2"><span>Bridge min</span><span className="font-bold text-[var(--ink)]">{step.geometry_stats?.bridge_min ?? '--'}</span></div>
+                          <div className="flex items-center justify-between gap-2"><span>Weak ratio</span><span className="font-bold text-[var(--ink)]">{formatPercent(step.geometry_stats?.weak_boundary_ratio)}</span></div>
+                        </div>
+                        {!!step.surviving_target_boundaries?.length && (
+                          <div className="mt-3 flex flex-wrap gap-2 text-xs text-[var(--text-secondary)]">
+                            {step.surviving_target_boundaries.slice(0, 6).map((boundary, boundaryIndex) => (
+                              <span key={`${boundary.key || 'boundary'}-${boundaryIndex}`} className="border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-muted)] px-2 py-1">
+                                {boundary.left_image_name || '?'}→{boundary.right_image_name || '?'}
+                                {boundary.severity_label ? ` • ${boundary.severity_label}` : ''}
+                                {boundary.target_segment_frames ? ` • target ${boundary.target_segment_frames}` : ''}
+                                {boundary.cross_radius ? ` • cross ${boundary.cross_radius}` : ''}
+                                {boundary.local_radius ? ` • local ${boundary.local_radius}` : ''}
+                                {boundary.pair_count ? ` • pairs ${boundary.pair_count}` : ''}
+                                {boundary.pair_budget_capped ? ` • cap ${boundary.pair_budget_cap ?? '--'}` : ''}
+                                {boundary.inserted_frame_count ? ` • +${boundary.inserted_frame_count}` : ''}
+                                {boundary.outcome ? ` • ${boundary.outcome}` : ''}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {!step.surviving_target_boundaries?.length && step.target_boundary_count && step.kind === 'weak_window_subset' && (
+                          <div className="mt-3 border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-muted)] px-3 py-2 text-xs text-[var(--text-secondary)]">
+                            subset rematch cleared every targeted weak boundary, so densification did not need to use this step as a source window
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {videoDiagnostics && (
                 <div className="grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
                   <div className="brutal-card-muted p-4 md:p-5">
@@ -1145,6 +1417,7 @@ export default function ProjectDetailPage() {
                         ['Saved', videoDiagnostics.saved_frames ?? '--'],
                         ['Replaced', videoDiagnostics.replaced_targets ?? '--'],
                         ['Rejected', videoDiagnostics.rejected_candidates ?? '--'],
+                        ['Density', candidateDensityRatio ? `${formatMetric(candidateDensityRatio, 2)}x` : '--'],
                       ].map(([label, value]) => (
                         <div key={label} className="brutal-card p-4">
                           <p className="brutal-label mb-2">{label}</p>
@@ -1152,6 +1425,43 @@ export default function ProjectDetailPage() {
                         </div>
                       ))}
                     </div>
+
+                    {(adaptiveFrameBudget || candidateQualitySummary) && (
+                      <div className="mt-3 grid gap-3 md:grid-cols-2">
+                        <div className="border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-card)] p-4">
+                          <h3 className="text-sm font-black uppercase tracking-tight text-[var(--ink)]">Adaptive Budget</h3>
+                          <div className="mt-3 space-y-2 text-sm text-[var(--text-secondary)]">
+                            <div className="flex items-center justify-between gap-3"><span>Status</span><span className="font-bold text-[var(--ink)]">{adaptiveFrameBudgetEnabled ? 'on' : 'off'}</span></div>
+                            <div className="flex items-center justify-between gap-3"><span>Requested oversample</span><span className="font-bold text-[var(--ink)]">{requestedOversampleFactor ?? '--'}x</span></div>
+                            <div className="flex items-center justify-between gap-3"><span>Effective oversample</span><span className="font-bold text-[var(--ink)]">{oversampleFactor ?? '--'}x</span></div>
+                            <div className="flex items-center justify-between gap-3"><span>Density scale</span><span className="font-bold text-[var(--ink)]">{adaptiveFrameBudget?.density_scale ? `${formatMetric(adaptiveFrameBudget.density_scale, 2)}x` : '--'}</span></div>
+                            <div className="flex items-center justify-between gap-3"><span>Codec</span><span className="font-bold text-[var(--ink)]">{adaptiveFrameBudget?.video_profile?.codec_name?.toUpperCase() || '--'}</span></div>
+                            <div className="flex items-center justify-between gap-3"><span>Duration</span><span className="font-bold text-[var(--ink)]">{adaptiveFrameBudget?.video_profile?.duration ? `${formatMetric(adaptiveFrameBudget.video_profile.duration, 1)}s` : '--'}</span></div>
+                          </div>
+                          {!!adaptiveFrameBudget?.adjustments?.length && (
+                            <div className="mt-3 space-y-2">
+                              {adaptiveFrameBudget.adjustments.slice(0, 4).map((adjustment, index) => (
+                                <div key={`${adjustment.code || 'adjustment'}-${index}`} className="border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-muted)] px-3 py-2 text-xs text-[var(--text-secondary)]">
+                                  <p className="font-bold uppercase text-[var(--ink)]">{adjustment.code || 'adjustment'} • {adjustment.factor ?? '--'}x</p>
+                                  <p className="mt-1">{adjustment.reason || 'No reason recorded'}</p>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-card)] p-4">
+                          <h3 className="text-sm font-black uppercase tracking-tight text-[var(--ink)]">Preview Quality</h3>
+                          <div className="mt-3 space-y-2 text-sm text-[var(--text-secondary)]">
+                            <div className="flex items-center justify-between gap-3"><span>Accepted ratio</span><span className="font-bold text-[var(--ink)]">{formatPercent(candidateQualitySummary?.accepted_ratio)}</span></div>
+                            <div className="flex items-center justify-between gap-3"><span>Accepted frames</span><span className="font-bold text-[var(--ink)]">{candidateQualitySummary?.accepted_total ?? '--'}/{candidateQualitySummary?.candidate_total ?? '--'}</span></div>
+                            <div className="flex items-center justify-between gap-3"><span>Median sharpness</span><span className="font-bold text-[var(--ink)]">{candidateQualitySummary?.median_sharpness ?? '--'}</span></div>
+                            <div className="flex items-center justify-between gap-3"><span>P25 sharpness</span><span className="font-bold text-[var(--ink)]">{candidateQualitySummary?.p25_sharpness ?? '--'}</span></div>
+                            <div className="flex items-center justify-between gap-3"><span>Median brightness</span><span className="font-bold text-[var(--ink)]">{candidateQualitySummary?.median_brightness ?? '--'}</span></div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <div className="brutal-card p-4 md:p-5">
@@ -1655,6 +1965,37 @@ export default function ProjectDetailPage() {
 
                   <div>
                     <p className="brutal-label mb-1 block">
+                      Adaptive Frame Budget
+                    </p>
+                    <label className="flex items-center gap-2 border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-card)] px-3 py-2 text-sm text-[var(--text-secondary)] shadow-[var(--shadow-sm)]">
+                      <input
+                        type="checkbox"
+                        checked={retryParams.adaptive_frame_budget}
+                        onChange={(e) => setRetryParams({...retryParams, adaptive_frame_budget: e.target.checked})}
+                        disabled={!retryParams.smart_frame_selection}
+                        className="h-4 w-4 border-[var(--ink)] text-[var(--ink)]"
+                      />
+                      <span>ให้ backend ปรับ candidate density ตามคุณภาพวิดีโอและ budget จริงแบบอัตโนมัติ</span>
+                    </label>
+                  </div>
+
+                  <div>
+                    <p className="brutal-label mb-1 block">
+                      Adaptive Pair Scheduling
+                    </p>
+                    <label className="flex items-center gap-2 border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-card)] px-3 py-2 text-sm text-[var(--text-secondary)] shadow-[var(--shadow-sm)]">
+                      <input
+                        type="checkbox"
+                        checked={retryParams.adaptive_pair_scheduling}
+                        onChange={(e) => setRetryParams({...retryParams, adaptive_pair_scheduling: e.target.checked})}
+                        className="h-4 w-4 border-[var(--ink)] text-[var(--ink)]"
+                      />
+                      <span>ให้ matching ขยายเป็น checkpoint แบบ bootstrap → bridge → target/loop แทนการใช้ pass หนักทันที</span>
+                    </label>
+                  </div>
+
+                  <div>
+                    <p className="brutal-label mb-1 block">
                       Oversample Factor
                     </p>
                     <select
@@ -1743,7 +2084,7 @@ export default function ProjectDetailPage() {
                   )}
                 </div>
                 <p className="mt-3 text-xs text-[var(--text-secondary)]">
-                  💡 ภาพความละเอียดต่ำช่วยให้ COLMAP ทำงานเร็วขึ้น แล้วใช้ภาพ high-res สำหรับ training
+                  💡 ใช้สอง toggle นี้ทำ A/B test ได้เลยระหว่าง baseline กับ adaptive ordered-video policy
                 </p>
               </div>
             )}
@@ -1961,6 +2302,21 @@ export default function ProjectDetailPage() {
                       className="brutal-input"
                     />
                     <p className="mt-1 text-xs text-[var(--text-secondary)]">ค่าเริ่มต้น: 20 (เพิ่มเพื่อ coverage ดีขึ้น)</p>
+                  </div>
+
+                  <div>
+                    <p className="brutal-label mb-1 block">
+                      Adaptive Pair Scheduling
+                    </p>
+                    <label className="flex items-center gap-2 border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-card)] px-3 py-2 text-sm text-[var(--text-secondary)] shadow-[var(--shadow-sm)]">
+                      <input
+                        type="checkbox"
+                        checked={retryParams.adaptive_pair_scheduling}
+                        onChange={(e) => setRetryParams({...retryParams, adaptive_pair_scheduling: e.target.checked})}
+                        className="h-4 w-4 border-[var(--ink)] text-[var(--ink)]"
+                      />
+                      <span>เปิด progressive schedule เพื่อให้ sequential matching หยุดเร็วเมื่อ geometry ดีพอ</span>
+                    </label>
                   </div>
                 </div>
                 <p className="mt-3 text-xs text-[var(--text-secondary)]">

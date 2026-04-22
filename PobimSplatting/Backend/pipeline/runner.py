@@ -17,7 +17,9 @@ from ..core.projects import (
     append_log_line,
     emit_stage_progress,
     save_projects_db,
+    get_active_projects_snapshot,
     update_stage_detail,
+    update_resource_coordination,
     update_state,
 )
 from ..utils.video_processor import VideoProcessor
@@ -41,6 +43,7 @@ from .orbit_policy import (
     sync_reconstruction_framework,
 )
 from .recovery_planners import (
+    build_weak_window_subset_recovery_pass,
     build_densified_overlap_retry_pass,
     clear_sparse_reconstruction_outputs,
     refine_orbit_safe_profile_from_geometry,
@@ -76,6 +79,116 @@ logger = logging.getLogger(__name__)
 video_processor = VideoProcessor()
 
 
+def _build_resource_coordination_updates(
+    project_id,
+    config,
+    time_estimator,
+    *,
+    num_images,
+    has_videos,
+    num_videos,
+    stage_key=None,
+    manual_override=False,
+):
+    project_entry = project_store.processing_status.get(project_id, {})
+    resource_profile = time_estimator.classify_resource_profile(
+        num_images=max(int(num_images or 0), 1),
+        quality_mode=config.get('quality_mode', 'balanced'),
+        config=config,
+        has_videos=has_videos,
+        num_videos=num_videos,
+        video_diagnostics=project_entry.get('video_extraction_diagnostics'),
+        reconstruction_framework=project_entry.get('reconstruction_framework'),
+    )
+    lane = time_estimator.choose_resource_lane(
+        project_id=project_id,
+        stage_key=stage_key or 'ingest',
+        resource_profile=resource_profile,
+        active_projects=get_active_projects_snapshot(exclude_project_id=project_id),
+        manual_override=manual_override,
+    )
+    return {
+        **resource_profile,
+        **lane,
+        'current_stage': stage_key,
+        'manual_override': bool(manual_override),
+    }
+
+
+def _persist_resource_coordination(project_id, updates):
+    update_resource_coordination(project_id, updates)
+    framework = project_store.processing_status.get(project_id, {}).get('reconstruction_framework') or {}
+    merged_framework = dict(framework)
+    merged_framework['resource_profile'] = {
+        'profile_class': updates.get('profile_class'),
+        'gpu_model': updates.get('gpu_model'),
+        'gpu_vram_mb': updates.get('gpu_vram_mb'),
+        'summary': updates.get('summary'),
+    }
+    merged_framework['resource_lane'] = updates.get('resource_lane')
+    merged_framework['admission_reason'] = updates.get('admission_reason')
+    merged_framework['downgrade_reason'] = updates.get('downgrade_reason')
+    merged_framework['estimated_start_delay'] = updates.get('estimated_start_delay')
+    merged_framework['capture_budget_summary'] = updates.get('capture_budget_summary')
+    project_store.update_reconstruction_framework(project_id, merged_framework)
+
+
+def _wait_for_stage_lane(
+    project_id,
+    stage_key,
+    config,
+    time_estimator,
+    *,
+    num_images,
+    has_videos,
+    num_videos,
+    manual_override=False,
+):
+    wait_logged = False
+    while True:
+        updates = _build_resource_coordination_updates(
+            project_id,
+            config,
+            time_estimator,
+            num_images=num_images,
+            has_videos=has_videos,
+            num_videos=num_videos,
+            stage_key=stage_key,
+            manual_override=manual_override,
+        )
+        _persist_resource_coordination(project_id, updates)
+
+        if updates.get('resource_lane') != 'waiting_for_heavy_slot':
+            return updates
+
+        delay = int(updates.get('estimated_start_delay') or 0)
+        blockers = updates.get('heavy_stage_blockers') or []
+        if not wait_logged:
+            append_log_line(
+                project_id,
+                "⏳ Waiting for a heavy-stage resource slot before "
+                f"{stage_key}: {updates.get('admission_reason', 'resource coordination')}",
+            )
+            if blockers:
+                blocker_preview = ", ".join(
+                    f"{item.get('project_id', '?')[:8]}:{item.get('stage', '?')}"
+                    for item in blockers[:3]
+                )
+                append_log_line(project_id, f"   ↳ blockers: {blocker_preview}")
+            wait_logged = True
+
+        update_stage_detail(
+            project_id,
+            stage_key,
+            text=f"Waiting for resource slot: {stage_key}",
+            subtext=(
+                f"lane={updates.get('resource_lane')} • "
+                f"delay≈{delay}s"
+            ),
+        )
+        time.sleep(5)
+
+
 def _feature_stage_helpers():
     return {
         'generate_hloc_pairs': generate_hloc_pairs,
@@ -87,6 +200,7 @@ def _feature_stage_helpers():
 
 def _sparse_stage_helpers():
     return {
+        'build_weak_window_subset_recovery_pass': build_weak_window_subset_recovery_pass,
         'build_densified_overlap_retry_pass': build_densified_overlap_retry_pass,
         'clear_sparse_reconstruction_outputs': clear_sparse_reconstruction_outputs,
         'get_colmap_config_for_pipeline': get_colmap_config_for_pipeline,
@@ -127,6 +241,19 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
             quality_mode=config.get('quality_mode', 'balanced'),
             has_videos=len(video_files) > 0,
             num_videos=len(video_files)
+        )
+        _persist_resource_coordination(
+            project_id,
+            _build_resource_coordination_updates(
+                project_id,
+                config,
+                time_estimator,
+                num_images=max(num_total_images, 1),
+                has_videos=len(video_files) > 0,
+                num_videos=len(video_files),
+                stage_key=from_stage,
+                manual_override=bool(config.get('resource_override_source') == 'manual_retry'),
+            ),
         )
 
         processing_start_time = time.time()
@@ -389,6 +516,22 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
                                 diagnostics['mode'] = extraction_stats.get('mode')
                                 diagnostics['search_radius'] = extraction_stats.get('search_radius')
                                 diagnostics['oversample_factor'] = extraction_stats.get('oversample_factor')
+                                diagnostics['requested_oversample_factor'] = extraction_stats.get(
+                                    'requested_oversample_factor',
+                                    diagnostics.get('requested_oversample_factor'),
+                                )
+                                diagnostics['candidate_density_ratio'] = extraction_stats.get(
+                                    'candidate_density_ratio',
+                                    diagnostics.get('candidate_density_ratio'),
+                                )
+                                if extraction_stats.get('adaptive_frame_budget') is not None:
+                                    diagnostics['adaptive_frame_budget'] = extraction_stats.get(
+                                        'adaptive_frame_budget'
+                                    )
+                                if extraction_stats.get('candidate_quality_summary') is not None:
+                                    diagnostics['candidate_quality_summary'] = extraction_stats.get(
+                                        'candidate_quality_summary'
+                                    )
                                 diagnostics['candidate_count'] = diagnostics.get('candidate_count', 0) + extraction_stats.get('candidate_count', 0)
                                 diagnostics['requested_targets'] = diagnostics.get('requested_targets', 0) + extraction_stats.get('requested_targets', 0)
                                 diagnostics['saved_frames'] = diagnostics.get('saved_frames', 0) + extraction_stats.get('saved_frames', 0)
@@ -484,6 +627,19 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
             total_images = len(list(paths['images_path'].glob('*')))
             append_log_line(project_id, f"📸 Total images for reconstruction: {total_images}")
             update_stage_detail(project_id, 'ingest', text=f'Images ready: {total_images}', subtext=None)
+            _persist_resource_coordination(
+                project_id,
+                _build_resource_coordination_updates(
+                    project_id,
+                    config,
+                    time_estimator,
+                    num_images=max(total_images, 1),
+                    has_videos=len(video_files) > 0,
+                    num_videos=len(video_files),
+                    stage_key='ingest',
+                    manual_override=bool(config.get('resource_override_source') == 'manual_retry'),
+                ),
+            )
 
             if total_images < 10:
                 raise ValueError(f"Need at least 10 images, but only have {total_images}")
@@ -911,6 +1067,21 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
         )
         use_native_colmap_neural = native_feature_profile['is_native_neural']
         use_hloc = False
+        manual_override = bool(config.get('resource_override_source') == 'manual_retry')
+
+        _persist_resource_coordination(
+            project_id,
+            _build_resource_coordination_updates(
+                project_id,
+                config,
+                time_estimator,
+                num_images=max(num_images, 1),
+                has_videos=config.get('input_type') in {'video', 'mixed'},
+                num_videos=len(list((paths['project_path']).glob('*.mp4'))) + len(list((paths['project_path']).glob('*.mov'))),
+                stage_key='feature_extraction',
+                manual_override=manual_override,
+            ),
+        )
 
         if feature_method == 'superpoint':
             use_hloc = HLOC_AVAILABLE and requested_matcher_type != 'vocab_tree'
@@ -944,6 +1115,16 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
                 colmap_config = run_feature_extraction_stage(project_id, paths, config, colmap_config)
 
         if start_index <= colmap_stages.index('feature_matching'):
+            _wait_for_stage_lane(
+                project_id,
+                'feature_matching',
+                config,
+                time_estimator,
+                num_images=max(num_images, 1),
+                has_videos=config.get('input_type') in {'video', 'mixed'},
+                num_videos=1 if config.get('input_type') in {'video', 'mixed'} else 0,
+                manual_override=manual_override,
+            )
             if use_hloc and hloc_data:
                 append_log_line(project_id, '⚡ Using LightGlue neural matching - 4-10x faster')
                 colmap_config = run_hloc_feature_matching_stage(project_id, paths, config, hloc_data)
@@ -951,10 +1132,31 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
                 colmap_config = run_feature_matching_stage(project_id, paths, config, colmap_config)
 
         if start_index <= colmap_stages.index('sparse_reconstruction'):
+            _wait_for_stage_lane(
+                project_id,
+                'sparse_reconstruction',
+                config,
+                time_estimator,
+                num_images=max(num_images, 1),
+                has_videos=config.get('input_type') in {'video', 'mixed'},
+                num_videos=1 if config.get('input_type') in {'video', 'mixed'} else 0,
+                manual_override=manual_override,
+            )
             colmap_config = run_sparse_reconstruction_stage(project_id, paths, config, colmap_config)
 
         if start_index <= colmap_stages.index('model_conversion'):
             run_model_conversion_stage(project_id, paths)
+
+        _wait_for_stage_lane(
+            project_id,
+            'gaussian_splatting',
+            config,
+            time_estimator,
+            num_images=max(num_images, 1),
+            has_videos=config.get('input_type') in {'video', 'mixed'},
+            num_videos=1 if config.get('input_type') in {'video', 'mixed'} else 0,
+            manual_override=manual_override,
+        )
 
         run_opensplat_training(
             project_id,

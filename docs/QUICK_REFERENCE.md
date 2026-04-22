@@ -1,268 +1,157 @@
-# POBIMOpenSplat - Quick Reference Card
+# POBIMOpenSplat Quick Reference
 
-> This page is the day-to-day command sheet. For the canonical documentation map, start from [DOCS_INDEX.md](DOCS_INDEX.md).
+Use this page for day-to-day operation of the pipeline platform.
 
-## 🚀 Installation (First Time Only)
+For the broader docs map, start at [DOCS_INDEX.md](DOCS_INDEX.md).
 
-```bash
-# Clone and install
-git clone https://github.com/POBIM/POBIMOpenSplat.git
-cd POBIMOpenSplat
-chmod +x install.sh
-./install.sh
-```
-
----
-
-## ⚡ Daily Commands
+## Start And Stop
 
 ```bash
-# Start server (recommended)
 ./quick-start.sh
-
-# Alternative start methods
-cd PobimSplatting && ./start.sh start
-cd PobimSplatting && ./start.sh        # Interactive menu
-
-# Stop server
-cd PobimSplatting && ./start.sh stop
-
-# Restart server
-cd PobimSplatting && ./start.sh
-# Select option 3) Restart all servers
-
-# Check status
-cd PobimSplatting && ./start.sh status
 ```
 
----
+```bash
+cd PobimSplatting
+./start.sh start
+./start.sh status
+./start.sh stop
+```
 
-## 🌐 Access URLs
+## URLs
 
-| Service | URL |
-|---------|-----|
-| Frontend (Main UI) | http://localhost:3000 |
+| Surface | URL |
+|------|------|
+| Frontend | http://localhost:3000 |
 | Backend API | http://localhost:5000 |
+| Health endpoint | http://localhost:5000/api/health |
 
----
+## Health And Tool Checks
 
-## 🧭 SfM Defaults
-
-- Preferred global SfM path: `COLMAP global_mapper`
-- Experimental Python-native backend: `pycolmap.global_mapping` when the backend health check reports it as ready
-- Standalone `GLOMAP`: legacy fallback only for older installs
-- Ordered video/orbit captures: `sequential` matcher
-- Small unordered photo sets: `exhaustive` matcher
-- Large unordered photo collections: `vocab_tree` matcher, used experimentally when available
-- When matcher mode is `auto`, the backend picks the path based on the input pattern instead of forcing one policy
-
-### Check Experimental pycolmap Readiness
 ```bash
-cd PobimSplatting/Backend
-venv/bin/python -c "import pycolmap; print(pycolmap.__version__); print(hasattr(pycolmap, 'global_mapping'))"
+curl http://localhost:5000/api/health
 ```
 
----
-
-## 🔧 Common Issues & Fixes
-
-### Port Already in Use
 ```bash
-cd PobimSplatting && ./start.sh
-# Select: 8) Force clear default ports
+./build/opensplat --version
+./colmap-build/install/bin/colmap --version
+python3 -c "import pycolmap; print(pycolmap.__version__)"
+python3 -c "import hloc; print('hloc ok')"
+python3 fastmap/run.py --help
+ffmpeg -version
 ```
 
-### CUDA Not Found
+## Pipeline Defaults
+
+- Default global SfM: `COLMAP global_mapper`
+- Experimental Python-native global SfM: `pycolmap.global_mapping`
+- Dense-coverage GPU SfM option: `FastMap`
+- Incremental fallback: COLMAP `mapper`
+- Legacy fallback: standalone `GLOMAP`
+- Neural features: `ALIKED` or `SuperPoint` through `hloc`
+- Matcher default: let backend choose with `auto`
+- Large unordered photo sets: experimental `vocab_tree`
+
+## Main Tool Roles
+
+| Tool | Role |
+|------|------|
+| `install.sh` | One-time installation |
+| `quick-start.sh` | Fast launch for regular use |
+| `PobimSplatting/start.sh` | Status, stop, restart, logs, port clearing |
+| `ffmpeg` | Frame extraction |
+| COLMAP | Features, matching, sparse/dense reconstruction, GUI |
+| `pycolmap` | Experimental Python-native global mapping |
+| `hloc` | Neural features and pair generation |
+| LightGlue | Neural matching path |
+| FastMap | GPU-native SfM alternative |
+| `opensplat` | Gaussian training |
+| `MVSMesher` / `MeshConverter` | Mesh export |
+
+## Common Operations
+
+### View logs
+
+```bash
+tail -f PobimSplatting/logs/install.log
+tail -f PobimSplatting/logs/backend.log
+tail -f PobimSplatting/logs/frontend.log
+```
+
+### Clear stuck ports
+
+```bash
+cd PobimSplatting
+./start.sh
+```
+
+Then choose the force-clear option from the menu.
+
+### Rebuild COLMAP with GUI
+
+```bash
+./scripts/rebuild-colmap-with-gui.sh
+```
+
+### Rebuild COLMAP for cloud/global flow
+
+```bash
+./scripts/rebuild-colmap-cloud.sh
+```
+
+### Rebuild only the training binary
+
+```bash
+./scripts/compile-opensplat-cuda126.sh
+```
+
+### Run sparse reconstruction helper directly
+
+```bash
+./scripts/run_sparse_reconstruction.sh
+```
+
+## Runtime Paths
+
+| Path | Contents |
+|------|------|
+| `PobimSplatting/Backend/uploads/` | Uploaded media |
+| `PobimSplatting/Backend/frames/` | Extracted frames |
+| `PobimSplatting/Backend/results/` | Splats and mesh outputs |
+| `PobimSplatting/Backend/projects_db.json` | Project metadata |
+| `PobimSplatting/logs/` | Logs |
+| `PobimSplatting/runtime/` | PID files |
+
+## Common Fixes
+
+### CUDA not in path
+
 ```bash
 export PATH=/usr/local/cuda/bin:$PATH
 export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
 ```
 
-### Rebuild Everything
-```bash
-rm -rf build colmap-build
-./install.sh
-```
+### Reset backend venv
 
-### Rebuild COLMAP with GUI
-```bash
-./scripts/rebuild-colmap-with-gui.sh
-```
-
-### Reset Python Environment
 ```bash
 cd PobimSplatting/Backend
 rm -rf venv
-python3 -m venv venv   # ensure python3 is 3.10-3.12
+python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### Reset Node.js Environment
+### Reset frontend deps
+
 ```bash
 cd PobimSplatting/Frontend
 rm -rf node_modules package-lock.json
 npm install
 ```
 
----
-
-## 📝 View Logs
+### Force restart everything
 
 ```bash
-# Installation log
-tail -f PobimSplatting/logs/install.log
-
-# Backend log
-tail -f PobimSplatting/logs/backend.log
-
-# Frontend log
-tail -f PobimSplatting/logs/frontend.log
-
-# Or use the menu
-cd PobimSplatting && ./start.sh
-# Select: 5) View logs
-```
-
----
-
-## 🛠️ Manual Operations
-
-### Test OpenSplat
-```bash
-./build/opensplat --version
-./build/opensplat --help
-```
-
-### Test COLMAP
-```bash
-./colmap-build/install/bin/colmap --version
-```
-
-### Test GPU
-```bash
-nvidia-smi
-```
-
-### Check System Resources
-```bash
-# Check RAM
-free -h
-
-# Check disk space
-df -h
-
-# Check CPU
-lscpu | grep "CPU(s)"
-
-# Check CUDA
-nvcc --version
-```
-
----
-
-## 📂 Directory Structure
-
-```
-POBIMOpenSplat/
-├── install.sh           # Installation script
-├── quick-start.sh       # Quick start (auto-generated)
-├── build/opensplat      # Main binary
-├── colmap-build/install/bin/colmap  # COLMAP binary
-├── libtorch-*/          # PyTorch libraries
-├── PobimSplatting/      # Web platform
-│   ├── start.sh        # Server manager
-│   ├── Backend/        # Flask API
-│   └── Frontend/       # Next.js UI
-├── datasets/           # Input data
-├── uploads/            # Uploaded files
-└── results/            # Generated models
-```
-
----
-
-## 🎯 Workflow
-
-1. **Upload images** → Frontend (localhost:3000)
-2. **Process dataset** → COLMAP reconstruction
-3. **Train model** → OpenSplat training
-4. **View results** → 3D viewer
-5. **Export model** → Download PLY/mesh
-
----
-
-## 🔑 Environment Variables
-
-```bash
-# CUDA paths
-export PATH=/usr/local/cuda/bin:$PATH
-export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
-
-# LibTorch path (auto-set by quick-start.sh)
-export LD_LIBRARY_PATH=/path/to/libtorch/lib:$LD_LIBRARY_PATH
-
-# Qt for headless COLMAP
-export QT_QPA_PLATFORM=offscreen
-```
-
----
-
-## 📊 Performance Tips
-
-- Use **GPU** for training (10-100x faster than CPU)
-- Allocate **16GB+ RAM** for large datasets
-- Use **SSD storage** for better I/O performance
-- Close **unnecessary applications** during training
-- Monitor with `nvidia-smi` and `htop`
-
----
-
-## 🆘 Emergency Commands
-
-```bash
-# Kill all processes on ports 3000 and 5000
-sudo lsof -ti:3000 | xargs kill -9
-sudo lsof -ti:5000 | xargs kill -9
-
-# Or use fuser
-sudo fuser -k 3000/tcp
-sudo fuser -k 5000/tcp
-
-# Force restart
 pkill -f "next start"
 pkill -f "python app.py"
 ./quick-start.sh
 ```
-
----
-
-## 📱 Quick Shortcuts
-
-| Action | Command |
-|--------|---------|
-| Install | `./install.sh` |
-| Start | `./quick-start.sh` |
-| Stop | `cd PobimSplatting && ./start.sh stop` |
-| Restart | `cd PobimSplatting && ./start.sh` → option 3 |
-| Status | `cd PobimSplatting && ./start.sh status` |
-| Logs | `cd PobimSplatting && ./start.sh` → option 5 |
-| Clear Ports | `cd PobimSplatting && ./start.sh` → option 8 |
-
----
-
-## 🌟 Pro Tips
-
-- **Bookmark this page** for quick reference
-- **Keep PobimSplatting/logs/install.log** for troubleshooting
-- **Run status check** before reporting issues
-- **Clear ports** if server won't start
-- **Use quick-start.sh** instead of manual commands
-- **Check logs** when something goes wrong
-
----
-
-**Print or save this reference card for easy access! 📋✨**
-
----
-
-*Last updated: November 7, 2025*

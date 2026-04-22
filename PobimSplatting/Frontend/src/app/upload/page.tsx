@@ -32,12 +32,14 @@ export default function UploadPage() {
     quality: 100,  // Legacy - kept for backward compatibility
     preview_count: 10,
     smart_frame_selection: true,
+    adaptive_frame_budget: true,
     oversample_factor: 10,
     replacement_search_radius: 4,
     ffmpeg_cpu_workers: 4,
     sfm_engine: 'glomap',  // Legacy alias kept for backend compatibility; UI shows COLMAP Global SfM
     sfm_backend: 'cli' as SfmBackendMode,
     feature_method: 'sift',  // 'sift' (classic COLMAP), 'aliked' (native COLMAP neural), 'superpoint' (hloc)
+    adaptive_pair_scheduling: true,
     use_gpu_extraction: true,  // GPU-accelerated video frame extraction (5-10x faster)
     mixed_precision: false,
     // New resolution-based extraction settings
@@ -226,6 +228,11 @@ export default function UploadPage() {
     const sizes = ['B', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
+  };
+
+  const formatSignedScore = (value: number) => {
+    if (value > 0) return `+${value}`;
+    return `${value}`;
   };
 
   const removeFile = (index: number) => {
@@ -562,6 +569,7 @@ export default function UploadPage() {
     }));
   const resolvedEstimatedNumImages = policyPreview?.estimated_num_images;
   const policyToneKey = policyPreview?.expected_policy?.toneKey ?? resolvedInputProfile;
+  const adaptiveComparisons = policyPreview?.adaptive_comparisons ?? [];
   const PolicyIcon = policyToneKey === 'video'
     ? FileVideo
     : policyToneKey === 'mixed'
@@ -846,8 +854,99 @@ export default function UploadPage() {
                           oversample mode: {config.smart_frame_selection ? `${config.oversample_factor}x` : 'off'}
                         </span>
                       )}
+                      {hasVideo && (
+                        <span className="border border-[color:var(--ink)] bg-white px-2 py-1">
+                          adaptive frame budget: {config.adaptive_frame_budget && config.smart_frame_selection ? 'on' : 'off'}
+                        </span>
+                      )}
+                      {hasVideo && (
+                        <span className="border border-[color:var(--ink)] bg-white px-2 py-1">
+                          adaptive pair scheduling: {config.adaptive_pair_scheduling ? 'on' : 'off'}
+                        </span>
+                      )}
                   </div>
                 </div>
+                {adaptiveComparisons.length > 0 && (
+                  <div className="mt-4 border border-[color:var(--ink)] bg-white/70 p-4 text-gray-900 shadow-[var(--shadow-sm)]">
+                    <div className="flex flex-col gap-1 md:flex-row md:items-end md:justify-between">
+                      <div>
+                        <p className="brutal-label">Adaptive Resource Preview</p>
+                        <p className="mt-1 text-sm text-gray-700">
+                          Ordered-video resource policy deltas against the opposite flag state.
+                        </p>
+                      </div>
+                      <div className="text-xs font-medium text-gray-500">
+                        Backend comparison, not a static UI hint
+                        {policyPreview?.resource_contract?.schema_version ? ` • ${policyPreview.resource_contract.schema_version}` : ''}
+                      </div>
+                    </div>
+                    {policyPreview?.resource_contract && (
+                      <div className="mt-3 flex flex-wrap gap-2 text-xs text-gray-600">
+                        <span className="border border-[color:var(--ink)] bg-white px-2 py-1">
+                          profiles: {policyPreview.resource_contract.benchmark_profiles?.length ?? 0}
+                        </span>
+                        <span className="border border-[color:var(--ink)] bg-white px-2 py-1">
+                          metrics: {policyPreview.resource_contract.metric_keys?.length ?? 0}
+                        </span>
+                      </div>
+                    )}
+                    <div className="mt-4 grid gap-3 md:grid-cols-2">
+                      {adaptiveComparisons.map((comparison) => {
+                        const betterWhenEnabled = comparison.score_delta_enabled_vs_disabled >= 0;
+                        const matchesRecommendation = comparison.current_enabled === comparison.recommended_enabled;
+                        const statusClass = comparison.available
+                          ? matchesRecommendation
+                            ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                            : 'border-amber-200 bg-amber-50 text-amber-900'
+                          : 'border-slate-200 bg-slate-50 text-slate-700';
+
+                        return (
+                          <div
+                            key={comparison.key}
+                            className="border border-[color:var(--ink)] bg-white p-4 shadow-[var(--shadow-sm)]"
+                          >
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-sm font-semibold text-gray-900">{comparison.label}</span>
+                              <span className={`border px-2 py-1 text-[11px] font-semibold ${comparison.current_enabled ? 'border-emerald-200 bg-emerald-100 text-emerald-900' : 'border-slate-200 bg-slate-100 text-slate-700'}`}>
+                                current: {comparison.current_enabled ? 'on' : 'off'}
+                              </span>
+                              <span className={`border px-2 py-1 text-[11px] font-semibold ${statusClass}`}>
+                                {comparison.available
+                                  ? `recommended: ${comparison.recommended_enabled ? 'on' : 'off'}`
+                                  : 'gated'}
+                              </span>
+                            </div>
+                            <p className="mt-2 text-sm text-gray-700">{comparison.effect}</p>
+                            <div className="mt-3 flex flex-wrap gap-2 text-xs text-gray-600">
+                              <span className={`border px-2 py-1 ${betterWhenEnabled ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-900'}`}>
+                                on vs off: {formatSignedScore(comparison.score_delta_enabled_vs_disabled)} confidence
+                              </span>
+                              <span className="border border-[color:var(--ink)] bg-white px-2 py-1">
+                                current score: {comparison.current_score}
+                              </span>
+                              <span className="border border-[color:var(--ink)] bg-white px-2 py-1">
+                                alternate score: {comparison.alternative_score}
+                              </span>
+                            </div>
+                            <div className="mt-3 space-y-2 text-sm text-gray-700">
+                              <div className="border border-[color:var(--ink)] bg-slate-50 px-3 py-2">
+                                <span className="font-semibold text-gray-900">Current:</span> {comparison.current_summary}
+                              </div>
+                              <div className="border border-[color:var(--ink)] bg-white px-3 py-2">
+                                <span className="font-semibold text-gray-900">Alternate:</span> {comparison.alternative_summary}
+                              </div>
+                              {comparison.gate && (
+                                <div className="border border-dashed border-slate-300 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+                                  {comparison.gate}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
                 <div className="mt-4 grid gap-2 md:grid-cols-3">
                   {policyLegend.map((entry) => {
                     const LegendIcon = entry.icon;
@@ -1252,6 +1351,29 @@ export default function UploadPage() {
                       </select>
                     </div>
                   </div>
+                  {hasVideo && (
+                    <div className="mt-3">
+                      <p className="brutal-label mb-2">Adaptive Pair Scheduling</p>
+                      <label className="flex items-center justify-between cursor-pointer border border-[color:var(--ink)] bg-gradient-to-r from-amber-50 to-orange-50 p-3">
+                        <div className="flex items-center">
+                          <Zap className="h-5 w-5 text-amber-600 mr-2" />
+                          <div>
+                            <span className="font-medium text-gray-900">Expand sequential matching in checkpoints</span>
+                            <p className="text-xs text-gray-600">เริ่มจาก pass เบาก่อน แล้วค่อยขยาย overlap/loop เฉพาะเมื่อ pair geometry ยังอ่อน</p>
+                          </div>
+                        </div>
+                        <div className="relative">
+                          <input
+                            type="checkbox"
+                            checked={config.adaptive_pair_scheduling}
+                            onChange={(e) => setConfig({ ...config, adaptive_pair_scheduling: e.target.checked })}
+                            className="sr-only peer"
+                          />
+                          <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:bg-amber-500 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
+                        </div>
+                      </label>
+                    </div>
+                  )}
 
                   {/* Video Options */}
                   {hasVideo && (
@@ -1360,6 +1482,31 @@ export default function UploadPage() {
                             <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:bg-sky-500 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
                           </div>
                         </label>
+                      </div>
+                      <div className="mt-3">
+                        <p className="brutal-label mb-2">Adaptive Frame Budget</p>
+                        <label className="flex items-center justify-between cursor-pointer border border-[color:var(--ink)] bg-gradient-to-r from-emerald-50 to-lime-50 p-3">
+                          <div className="flex items-center">
+                            <Zap className="h-5 w-5 text-emerald-600 mr-2" />
+                            <div>
+                              <span className="font-medium text-gray-900">Let the backend tighten or widen candidate density</span>
+                              <p className="text-xs text-gray-600">ดูจาก duration, fps, resolution, bitrate, และ preview quality เพื่อไม่ให้ใช้ทรัพยากรหนักเกินโดยไม่จำเป็น</p>
+                            </div>
+                          </div>
+                          <div className="relative">
+                            <input
+                              type="checkbox"
+                              checked={config.adaptive_frame_budget}
+                              onChange={(e) => setConfig({ ...config, adaptive_frame_budget: e.target.checked })}
+                              disabled={!config.smart_frame_selection}
+                              className="sr-only peer"
+                            />
+                            <div className={`w-11 h-6 rounded-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all ${config.smart_frame_selection ? 'bg-gray-200 peer-checked:bg-emerald-500 peer-checked:after:translate-x-full' : 'bg-gray-100 opacity-60'}`}></div>
+                          </div>
+                        </label>
+                        {!config.smart_frame_selection && (
+                          <p className="mt-1 text-xs text-gray-500">เปิดได้เมื่อใช้ oversample-and-select เท่านั้น</p>
+                        )}
                       </div>
                       <div className="mt-3">
                         <p className="brutal-label mb-2">CPU Chunk Workers</p>

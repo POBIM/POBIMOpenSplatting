@@ -1,126 +1,89 @@
-# PobimSplatting - 3D Gaussian Splatting Platform
+# PobimSplatting Platform
 
-A modern web platform for 3D reconstruction using OpenSplat, featuring a Next.js frontend and Python Flask backend.
+`PobimSplatting/` is the product surface for the repo: the launcher, API, realtime pipeline orchestration, review UI, and export tools all live here.
 
-## Features
-
-- **Modern Web Interface**: Clean, responsive UI built with Next.js and Tailwind CSS
-- **Drag & Drop Upload**: Easy media upload with progress tracking
-- **Real-time Processing**: WebSocket-based live status updates
-- **Project Management**: Full CRUD operations with SQLite database
-- **3D Viewer**: Integrated viewer for gaussian splat results
-- **System Monitoring**: Dashboard with GPU, storage, and processing stats
-- **GPU-Accelerated Processing**: CUDA-backed COLMAP sparse reconstruction with the global mapper as the preferred path
-
-## 📚 Documentation
-
-- **[Quick Performance Guide](QUICK_PERFORMANCE_GUIDE.md)** - ⚡ GPU acceleration and performance tips
-- **[Mesh Export Guide](MESH_EXPORT_GUIDE.md)** - 📐 Export 3D meshes from gaussian splats
+This layer is responsible for turning raw captures into reviewable gaussian splats and mesh assets. It does not just call `opensplat`; it manages the full reconstruction workflow around it.
 
 ## Architecture
 
-```
+```text
 PobimSplatting/
-├── Frontend/          # Next.js 16 with TypeScript
-│   ├── src/
-│   │   ├── app/      # App router pages
-│   │   ├── components/
-│   │   └── lib/      # API and WebSocket services
-│   └── package.json
-│
-├── Backend/          # Python Flask API
-│   ├── app.py       # Main API server
-│   ├── requirements.txt
-│   ├── uploads/     # Input media storage
-│   ├── outputs/     # Processed splats
-│   └── projects.db  # SQLite database
-│
-└── start.sh         # System control script
+├── Frontend/                 # Next.js 16 UI
+├── Backend/                  # Flask API + Socket.IO + pipeline runner
+├── start.sh                  # Production-style launcher and status manager
+├── logs/                     # Backend/frontend/install logs
+├── runtime/                  # PID files and runtime state
+├── MESH_EXPORT_GUIDE.md      # Mesh export documentation
+└── QUICK_PERFORMANCE_GUIDE.md
 ```
 
-## Installation
+## End-To-End Pipeline
 
-### Prerequisites
+| Stage | Owned by | Main tools | Output |
+|------|------|------|------|
+| Project creation and upload | Frontend + Backend API | Next.js, Flask | Project entry, uploaded files |
+| Frame preparation | Backend | `ffmpeg`, OpenCV | Image frames for SfM |
+| Policy preview | Backend | upload policy analyzer | Suggested matcher and capture strategy |
+| Feature extraction | Backend pipeline | COLMAP SIFT, `hloc` ALIKED, `hloc` SuperPoint | Feature database or neural feature artifacts |
+| Feature matching | Backend pipeline | COLMAP matchers, LightGlue, vocabulary tree | Matched pairs / COLMAP DB |
+| Sparse reconstruction | Backend pipeline | COLMAP `global_mapper`, `pycolmap`, FastMap, COLMAP mapper, legacy GLOMAP | Sparse model in `sparse/0` |
+| Model conversion | Backend pipeline | COLMAP model conversion helpers | Training-ready text/bin outputs |
+| Gaussian training | Backend pipeline | `build/opensplat` | `.ply` or `.splat` result |
+| Review | Frontend | viewer page, project page, camera poses page | Interactive inspection |
+| Mesh export | Backend services | COLMAP dense reconstruction, `MVSMesher`, `MeshConverter`, `PyMeshLab`, `trimesh` | `glb`, `gltf`, `dae`, and mesh derivatives |
 
-- Node.js 20+
-- Python 3.10-3.12 (3.12 recommended)
-- NVIDIA GPU with CUDA (optional but recommended)
-- OpenSplat built and ready
-- COLMAP (recommended for SfM; COLMAP global mapper is the preferred path and standalone GLOMAP is legacy fallback only)
+## Tool Roles
 
-### Setup
+### User-facing tools
 
-1. **Install Frontend Dependencies**:
+- Project dashboard: upload, configure, run, retry, inspect status
+- Project detail page: stage progress, logs, retry from stage, export actions
+- Camera poses page: inspect sparse reconstruction coverage
+- Viewer page: inspect gaussian splat outputs
+- Mesh export panel: create textured meshes from completed reconstructions
+- COLMAP GUI bridge: open the active project in desktop COLMAP when GUI support exists
+
+### Backend pipeline tools
+
+- `ffmpeg`: video frame extraction
+- OpenCV utilities: frame handling and media support
+- COLMAP SIFT: classic local features
+- `hloc`: neural feature extraction and matching
+- LightGlue: neural matching path used with hloc
+- COLMAP `global_mapper`: default global SfM engine
+- `pycolmap.global_mapping`: experimental Python-native global backend
+- FastMap: GPU-native SfM alternative
+- COLMAP `mapper`: incremental fallback
+- standalone `GLOMAP`: legacy fallback only
+- `build/opensplat`: gaussian training stage
+- `MVSMesher` and `MeshConverter`: mesh generation and conversion
+
+## Default Behavior
+
+- `sfm_engine=glomap` maps to the repo's preferred global COLMAP workflow.
+- `sfm_backend=pycolmap` is only meaningful when `pycolmap.global_mapping` is actually available.
+- `feature_method=aliked` or `superpoint` can switch the feature stage to `hloc`.
+- `matcher_type=auto` lets the backend pick between sequential, exhaustive, and experimental vocabulary-tree matching.
+- Retry is stage-aware. The backend clears only the downstream artifacts for the chosen restart point.
+
+## Runtime Surfaces
+
+- Frontend: `http://localhost:3000`
+- Backend API: `http://localhost:5000`
+- Health endpoint: `GET /api/health`
+- WebSocket room model: events are keyed by `project_id`
+
+## Start And Operate
+
+### Recommended launcher flow
+
 ```bash
-cd Frontend
-npm install
-npm run build
-```
-
-2. **Setup Backend Environment**:
-```bash
-cd Backend
-./setup_env.sh
-# Or manually:
-python3 -m venv venv  # ensure python3 is 3.10-3.12
-source venv/bin/activate
-pip install -r requirements.txt
-```
-
-## Usage
-
-### Quick Start
-
-```bash
-# Start both servers
 ./start.sh start
-
-# Or use interactive menu
-./start.sh
+./start.sh status
+./start.sh stop
 ```
 
-The system will be available at:
-- Frontend: http://localhost:3000
-- Backend API: http://localhost:5000
-
-### Control Options
-
-```bash
-./start.sh          # Interactive menu
-./start.sh start    # Start all servers
-./start.sh stop     # Stop all servers
-./start.sh status   # Check system status
-```
-
-## API Endpoints
-
-### Core Endpoints
-
-- `GET /api/health` - System health check
-- `POST /api/upload` - Upload media file
-- `POST /api/process/{id}` - Start processing
-- `GET /api/status/{id}` - Get project status
-- `GET /api/projects` - List all projects
-- `DELETE /api/projects/{id}` - Delete project
-- `GET /api/download/{id}` - Download output
-
-### WebSocket Events
-
-- `connect` - Connection established
-- `subscribe_status` - Subscribe to project updates
-- `status_update` - Receive real-time status
-
-## Pages
-
-- **Dashboard** (`/`) - System overview and stats
-- **Upload** (`/upload`) - Drag-and-drop media upload
-- **Projects** (`/projects`) - Project management
-- **Viewer** (`/viewer`) - 3D splat visualization
-- **Settings** (`/settings`) - Configuration options
-
-## Development
-
-### Frontend Development
+### Development flows
 
 ```bash
 cd Frontend
@@ -128,111 +91,42 @@ npm run build
 npm run start
 ```
 
-For local hot-reload development only:
-
-```bash
-npm run dev
-```
-
-### Backend Development
-
 ```bash
 cd Backend
 source venv/bin/activate
 python app.py
 ```
 
-### Backend Production-Style Start
+Use `npm run dev` only for local hot-reload development. The documented stable path stays `npm run build` then `npm run start`.
 
-```bash
-cd Backend
-source venv/bin/activate
-gunicorn --config gunicorn.conf.py "PobimSplatting.Backend.app:app"
-```
+## Key Files
 
-Or use the launcher from the `PobimSplatting/` directory:
+- `Backend/app.py`: Flask composition root
+- `Backend/routes/api.py`: upload, process, retry, viewer, mesh, health endpoints
+- `Backend/pipeline/runner.py`: cross-stage orchestration
+- `Backend/pipeline/stage_features.py`: feature extraction and matching stages
+- `Backend/pipeline/stage_sparse.py`: global/incremental/FastMap sparse reconstruction
+- `Backend/pipeline/stage_training.py`: gaussian training
+- `Backend/services/mvs_mesher.py`: textured mesh generation from COLMAP outputs
+- `Frontend/src/app/projects/[id]/page.tsx`: main project detail and retry UI
+- `Frontend/src/lib/api.ts`: shared REST client
+- `Frontend/src/lib/websocket.ts`: shared realtime client
 
-```bash
-FLASK_ENV=production ./start.sh start
-```
+## Logs And Runtime Data
 
-The production config keeps `workers=1` and uses threaded Gunicorn so Flask-SocketIO room state stays in-process and compatible with the current backend threading model.
+- Installation log: `logs/install.log`
+- Backend log: `logs/backend.log`
+- Frontend log: `logs/frontend.log`
+- Runtime PID files: `runtime/*.pid`
+- Uploads: `Backend/uploads/`
+- Frames: `Backend/frames/`
+- Results: `Backend/results/`
+- Project index: `Backend/projects_db.json`
 
-## Configuration
+## Related Docs
 
-### Frontend (.env.local)
-
-```env
-NEXT_PUBLIC_API_URL=http://localhost:5000
-NEXT_PUBLIC_WS_URL=http://localhost:5000
-```
-
-### Backend (.env)
-
-```env
-FLASK_ENV=development
-DATABASE_PATH=projects.db
-OPENSPLAT_PATH=/path/to/opensplat
-```
-
-## Features in Detail
-
-### Upload System
-- Supports video (MP4, AVI, MOV) and images (JPG, PNG)
-- File size limit: 500MB
-- Automatic file validation
-- Progress tracking
-
-### Processing Pipeline
-1. File upload and validation
-2. COLMAP sparse reconstruction with the global mapper for unordered photo sets; experimental `vocab_tree` matching is available for large collections
-3. Real-time progress updates via WebSocket
-4. Output generation (PLY format)
-5. Storage and database updates
-
-### Project Management
-- SQLite database for persistence
-- Full CRUD operations
-- Status tracking (uploaded, processing, completed, error)
-- Automatic cleanup options
-
-### Real-time Updates
-- Socket.IO for bidirectional communication
-- Live progress tracking
-- Instant status notifications
-- Multi-client support
-
-## Troubleshooting
-
-### Port Already in Use
-The start.sh script automatically kills processes on ports 3000 and 5000.
-
-### OpenSplat Not Found
-Build OpenSplat first and update the path in Backend/.env
-
-### GPU Not Detected
-Ensure CUDA is installed and nvidia-smi is accessible.
-
-## Tech Stack
-
-### Frontend
-- Next.js 16
-- TypeScript
-- Tailwind CSS
-- Lucide Icons
-- Socket.IO Client
-
-### Backend
-- Flask 3.1
-- Flask-CORS
-- Flask-SocketIO
-- SQLite3
-- Python 3.10-3.12 (3.12 recommended)
-
-## License
-
-MIT License - Feel free to use and modify
-
-## Credits
-
-Built with OpenSplat for 3D Gaussian Splatting processing.
+- [../docs/WORKFLOW.md](../docs/WORKFLOW.md)
+- [../docs/QUICK_REFERENCE.md](../docs/QUICK_REFERENCE.md)
+- [../docs/INSTALLATION.md](../docs/INSTALLATION.md)
+- [MESH_EXPORT_GUIDE.md](MESH_EXPORT_GUIDE.md)
+- [QUICK_PERFORMANCE_GUIDE.md](QUICK_PERFORMANCE_GUIDE.md)

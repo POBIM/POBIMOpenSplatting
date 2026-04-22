@@ -144,6 +144,47 @@ def update_reconstruction_framework(project_id: str, updates: Dict[str, Any]) ->
         save_projects_db()
 
 
+def update_resource_coordination(project_id: str, updates: Dict[str, Any]) -> None:
+    """Merge resource-lane and orchestration diagnostics into project state."""
+    with status_lock:
+        project = processing_status.get(project_id)
+        if not project:
+            return
+
+        coordination = project.setdefault("resource_coordination", {})
+        coordination.update(updates)
+        touch_project_updated(project_id)
+        save_projects_db()
+
+
+def get_active_projects_snapshot(*, exclude_project_id: Optional[str] = None) -> list[Dict[str, Any]]:
+    """Return a lightweight snapshot of active project resource state."""
+    with status_lock:
+        snapshot = []
+        for project_id, project in processing_status.items():
+            if exclude_project_id and project_id == exclude_project_id:
+                continue
+
+            current_stage = None
+            for state in project.get("progress_states", []):
+                if state.get("status") == "running":
+                    current_stage = state.get("key")
+                    break
+
+            coordination = dict(project.get("resource_coordination") or {})
+            snapshot.append(
+                {
+                    "project_id": project_id,
+                    "status": project.get("status"),
+                    "current_stage": current_stage,
+                    "profile_class": coordination.get("profile_class"),
+                    "resource_lane": coordination.get("resource_lane"),
+                    "started_at": project.get("start_time"),
+                }
+            )
+        return snapshot
+
+
 def update_state(
     project_id: str,
     key: str,
@@ -285,6 +326,7 @@ def initialize_project_entry(
         "input_type": input_type,
         "stage_details": {},
         "reconstruction_framework": {},
+        "resource_coordination": {},
     }
 
 

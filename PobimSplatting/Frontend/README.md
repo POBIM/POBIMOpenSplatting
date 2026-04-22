@@ -1,37 +1,79 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# PobimSplatting Frontend
 
-## Getting Started
+This frontend is the operator UI for the reconstruction pipeline. It is not a generic Next.js starter anymore.
 
-For the stable production-style flow used by the launcher:
+It provides the upload surface, project list, project detail page, stage-level retry controls, live logs, camera-pose inspection, gaussian viewer, and mesh export entrypoints for the backend pipeline.
+
+## What Lives Here
+
+- App Router pages under `src/app/`
+- Shared UI components under `src/components/`
+- Shared REST client in `src/lib/api.ts`
+- Shared realtime client in `src/lib/websocket.ts`
+- SfM/matcher display helpers in `src/lib/sfm-display.ts`
+
+## Main Routes
+
+| Route | Role |
+|------|------|
+| `/` | Dashboard and system summary |
+| `/upload` | Upload entrypoint |
+| `/projects` | Project backlog and status |
+| `/projects/[id]` | Main pipeline control surface |
+| `/processing/[id]` | Alias for project detail |
+| `/viewer` | Gaussian splat viewer |
+| `/camera-poses/[id]` | Sparse reconstruction inspection |
+| `/settings` | Runtime configuration surface |
+
+## Frontend Responsibilities In The Pipeline
+
+- Collect upload and retry parameters
+- Show policy previews before processing
+- Render live stage progress and log streams over Socket.IO
+- Surface the selected SfM engine, feature method, and matcher mode
+- Jump users into viewer, camera poses, and mesh export workflows
+- Proxy some backend operations through Next route handlers where needed
+
+## Stable Run Modes
+
+Production-style local run:
 
 ```bash
 npm run build
 npm run start
 ```
 
-For local development with hot reload, use:
+Hot-reload development:
 
 ```bash
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The launcher flow for the whole product assumes the production-style path, not a permanent dev server.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Environment
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```env
+NEXT_PUBLIC_API_URL=http://localhost:5000
+NEXT_PUBLIC_WS_URL=http://localhost:5000
+```
 
-## Learn More
+## Key Files
 
-To learn more about Next.js, take a look at the following resources:
+- `src/app/projects/[id]/page.tsx`: project pipeline page
+- `src/app/viewer/page.tsx`: splat viewer route
+- `src/app/camera-poses/[id]/page.tsx`: sparse pose inspector
+- `src/components/MeshExportPanel.tsx`: textured mesh actions
+- `src/components/SplatViewer.tsx`: viewer shell
+- `src/lib/api.ts`: typed API client
+- `src/lib/websocket.ts`: realtime client
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Validation
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+The primary frontend validation in this repo is:
 
-## Deploy on Vercel
+```bash
+npm run build
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Then run the app and verify the main routes against a live backend.

@@ -544,7 +544,28 @@ class VideoProcessor:
         logger.info(f"FFmpeg CPU extraction: {total_frames} frames, {fps:.2f} fps, {duration:.2f}s, {width}x{height}")
 
         mode = extraction_config.get('mode', 'frames')
-        sampling_plan = self._build_sampling_plan(total_frames, fps, extraction_config)
+        quality_telemetry = self._collect_adaptive_budget_quality_telemetry(
+            video_path,
+            total_frames,
+            extraction_config,
+        )
+        sampling_plan = self._build_sampling_plan(
+            total_frames,
+            fps,
+            extraction_config,
+            video_info=video_info,
+            quality_telemetry=quality_telemetry,
+        )
+        if sampling_plan.get('adaptive_frame_budget') is not None:
+            budget = sampling_plan['adaptive_frame_budget']
+            logger.info(
+                "Adaptive frame budget: requested %sx -> effective %sx (density %.2fx, %s candidates for %s outputs)",
+                budget['requested_oversample_factor'],
+                budget['effective_oversample_factor'],
+                budget['density_scale'],
+                sampling_plan['candidate_count'],
+                sampling_plan['target_output_count'],
+            )
 
         resolution = extraction_config.get('resolution')
         if not resolution:
@@ -578,6 +599,7 @@ class VideoProcessor:
                         target_width=target_width,
                         target_height=target_height,
                         jpeg_quality=jpeg_quality,
+                        sampling_plan=sampling_plan,
                     )
                 except Exception as e:
                     logger.warning(f"Parallel ffmpeg CPU extraction failed, falling back to single-process ffmpeg: {e}")
@@ -639,6 +661,7 @@ class VideoProcessor:
                 extraction_config,
                 total_frames=total_frames,
                 fps=fps,
+                sampling_plan=sampling_plan,
                 progress_callback=progress_callback,
             )
             self.last_extraction_stats['strategy'] = 'ffmpeg_cpu_oversample_select'
@@ -668,14 +691,13 @@ class VideoProcessor:
                             pass
 
         if extraction_config.get('smart_frame_selection', False):
-            self.last_extraction_stats = {
+            self.last_extraction_stats = self._append_sampling_plan_stats({
                 **self.last_extraction_stats,
                 'mode': mode,
                 'candidate_count': expected_frames,
-                'oversample_factor': sampling_plan['oversample_factor'],
-            }
+            }, sampling_plan)
         else:
-            self.last_extraction_stats = {
+            self.last_extraction_stats = self._append_sampling_plan_stats({
                 'strategy': 'ffmpeg_cpu',
                 'mode': mode,
                 'requested_targets': expected_frames,
@@ -684,9 +706,8 @@ class VideoProcessor:
                 'replaced_targets': 0,
                 'search_radius': 0,
                 'rejected_candidates': 0,
-                'oversample_factor': sampling_plan['oversample_factor'],
                 'selections': [],
-            }
+            }, sampling_plan)
 
         if progress_callback and extracted_frames:
             progress_callback(len(extracted_frames), self._get_target_output_count(total_frames, fps, extraction_config), extracted_frames[-1])
@@ -706,11 +727,11 @@ class VideoProcessor:
         target_width,
         target_height,
         jpeg_quality,
+        sampling_plan,
     ):
         video_info = self._get_video_info_ffprobe(video_path)
         fps = video_info['fps'] if video_info else 0.0
         total_frames = video_info['total_frames'] if video_info else max(1, int(duration * fps)) if fps > 0 else 0
-        sampling_plan = self._build_sampling_plan(total_frames, fps, extraction_config)
         target_fps = float(sampling_plan['extraction_fps'] or extraction_config.get('target_fps', 1.0) or 1.0)
         expected_frames = sampling_plan['candidate_count'] if sampling_plan['smart_selection'] else sampling_plan['target_output_count']
         requested_workers = int(extraction_config.get('ffmpeg_cpu_workers') or 0)
@@ -794,7 +815,7 @@ class VideoProcessor:
             except OSError:
                 pass
 
-        self.last_extraction_stats = {
+        self.last_extraction_stats = self._append_sampling_plan_stats({
             'strategy': f'ffmpeg_cpu_parallel_{chunk_count}x',
             'mode': 'fps',
             'requested_targets': expected_frames,
@@ -803,9 +824,8 @@ class VideoProcessor:
             'replaced_targets': 0,
             'search_radius': 0,
             'rejected_candidates': 0,
-            'oversample_factor': sampling_plan['oversample_factor'],
             'selections': [],
-        }
+        }, sampling_plan)
 
         if extraction_config.get('smart_frame_selection', False):
             extracted_frames = self._score_and_select_extracted_frames(
@@ -813,6 +833,7 @@ class VideoProcessor:
                 extraction_config,
                 total_frames=total_frames,
                 fps=fps,
+                sampling_plan=sampling_plan,
                 progress_callback=progress_callback,
             )
             self.last_extraction_stats['strategy'] = f'ffmpeg_cpu_parallel_{chunk_count}x_oversample_select'
@@ -827,12 +848,13 @@ class VideoProcessor:
         *,
         total_frames: int,
         fps: float,
+        sampling_plan: Optional[Dict[str, Any]] = None,
         progress_callback=None,
     ):
         if not extracted_frames:
             return extracted_frames
 
-        plan = self._build_sampling_plan(total_frames, fps, extraction_config)
+        plan = sampling_plan or self._build_sampling_plan(total_frames, fps, extraction_config)
         quality_percent = int(extraction_config.get('quality', 100) or 100)
         target_output_count = int(plan['target_output_count'])
         candidate_count = len(extracted_frames)
@@ -919,6 +941,18 @@ class VideoProcessor:
         scored_candidates.sort(key=lambda item: item['candidate_index'])
         if not scored_candidates:
             return extracted_frames
+
+        accepted_candidates = sum(1 for item in scored_candidates if item['accepted'])
+        candidate_sharpness = [float(item['metrics']['sharpness']) for item in scored_candidates]
+        candidate_brightness = [float(item['metrics']['brightness']) for item in scored_candidates]
+        candidate_quality_summary = {
+            'candidate_total': len(scored_candidates),
+            'accepted_total': accepted_candidates,
+            'accepted_ratio': round(accepted_candidates / max(len(scored_candidates), 1), 4),
+            'median_sharpness': round(float(np.median(candidate_sharpness)), 4),
+            'p25_sharpness': round(float(np.percentile(candidate_sharpness, 25)), 4),
+            'median_brightness': round(float(np.median(candidate_brightness)), 4),
+        }
 
         if callable(status_callback):
             status_callback('candidate_selection_start', {
@@ -1029,7 +1063,7 @@ class VideoProcessor:
                 'sharpness': round(float(candidate['metrics']['sharpness']), 4),
             })
 
-        self.last_extraction_stats = {
+        self.last_extraction_stats = self._append_sampling_plan_stats({
             **self.last_extraction_stats,
             'requested_targets': target_output_count,
             'candidate_count': candidate_count,
@@ -1037,14 +1071,14 @@ class VideoProcessor:
             'replaced_targets': replaced_targets,
             'search_radius': search_radius,
             'rejected_candidates': rejected_candidates,
-            'oversample_factor': plan['oversample_factor'],
             'scoring_workers': scoring_workers,
             'selections': selection_records,
             'frame_manifest': frame_manifest,
             'source_video_path': source_video_path or None,
             'source_total_frames': int(total_frames),
             'source_fps': float(fps or 0.0),
-        }
+            'candidate_quality_summary': candidate_quality_summary,
+        }, plan)
         if callable(status_callback):
             status_callback('candidate_selection_complete', {
                 'total': len(final_paths),
@@ -1070,11 +1104,12 @@ class VideoProcessor:
         jpeg_quality,
         gpu_info,
         chunk_count_override=None,
+        sampling_plan=None,
     ):
         video_info = self._get_video_info_ffprobe(video_path)
         fps = video_info['fps'] if video_info else 0.0
         total_frames = video_info['total_frames'] if video_info else max(1, int(duration * fps)) if fps > 0 else 0
-        sampling_plan = self._build_sampling_plan(total_frames, fps, extraction_config)
+        sampling_plan = sampling_plan or self._build_sampling_plan(total_frames, fps, extraction_config)
         target_fps = float(sampling_plan['extraction_fps'] or extraction_config.get('target_fps', 1.0) or 1.0)
         expected_frames = sampling_plan['candidate_count'] if sampling_plan['smart_selection'] else sampling_plan['target_output_count']
         requested_workers = int(extraction_config.get('ffmpeg_cpu_workers') or 0)
@@ -1175,7 +1210,7 @@ class VideoProcessor:
             except OSError:
                 pass
 
-        self.last_extraction_stats = {
+        self.last_extraction_stats = self._append_sampling_plan_stats({
             'strategy': f"ffmpeg_{gpu_info['method']}_parallel_{chunk_count}x",
             'mode': 'fps',
             'requested_targets': expected_frames,
@@ -1184,9 +1219,8 @@ class VideoProcessor:
             'replaced_targets': 0,
             'search_radius': 0,
             'rejected_candidates': 0,
-            'oversample_factor': sampling_plan['oversample_factor'],
             'selections': [],
-        }
+        }, sampling_plan)
 
         if extraction_config.get('smart_frame_selection', False):
             extracted_frames = self._score_and_select_extracted_frames(
@@ -1194,6 +1228,7 @@ class VideoProcessor:
                 extraction_config,
                 total_frames=total_frames,
                 fps=fps,
+                sampling_plan=sampling_plan,
                 progress_callback=progress_callback,
             )
             self.last_extraction_stats['strategy'] = f"ffmpeg_{gpu_info['method']}_parallel_{chunk_count}x_oversample_select"
@@ -1257,7 +1292,28 @@ class VideoProcessor:
         target_width, target_height, jpeg_quality = get_target_dimensions(resolution, width, height)
         logger.info(f"Target resolution: {target_width}x{target_height} ({resolution})")
         
-        sampling_plan = self._build_sampling_plan(total_frames, fps, extraction_config)
+        quality_telemetry = self._collect_adaptive_budget_quality_telemetry(
+            video_path,
+            total_frames,
+            extraction_config,
+        )
+        sampling_plan = self._build_sampling_plan(
+            total_frames,
+            fps,
+            extraction_config,
+            video_info=video_info,
+            quality_telemetry=quality_telemetry,
+        )
+        if sampling_plan.get('adaptive_frame_budget') is not None:
+            budget = sampling_plan['adaptive_frame_budget']
+            logger.info(
+                "Adaptive frame budget: requested %sx -> effective %sx (density %.2fx, %s candidates for %s outputs)",
+                budget['requested_oversample_factor'],
+                budget['effective_oversample_factor'],
+                budget['density_scale'],
+                sampling_plan['candidate_count'],
+                sampling_plan['target_output_count'],
+            )
         gpu_parallel_retryable_failure = False
 
         if mode in {'fps', 'target_count'}:
@@ -1306,6 +1362,7 @@ class VideoProcessor:
                             jpeg_quality=jpeg_quality,
                             gpu_info=gpu_info,
                             chunk_count_override=chunk_count,
+                            sampling_plan=sampling_plan,
                         )
                     except Exception as e:
                         error_text = str(e)
@@ -1428,6 +1485,7 @@ class VideoProcessor:
                 extraction_config,
                 total_frames=total_frames,
                 fps=fps,
+                sampling_plan=sampling_plan,
                 progress_callback=progress_callback,
             )
             self.last_extraction_stats['strategy'] = f'ffmpeg_{gpu_info["method"]}_oversample_select'
@@ -1462,14 +1520,13 @@ class VideoProcessor:
         logger.info(f"✅ GPU extraction complete: {len(extracted_frames)} frames")
         
         if extraction_config.get('smart_frame_selection', False):
-            self.last_extraction_stats = {
+            self.last_extraction_stats = self._append_sampling_plan_stats({
                 **self.last_extraction_stats,
                 'mode': mode,
                 'candidate_count': expected_frames,
-                'oversample_factor': sampling_plan['oversample_factor'],
-            }
+            }, sampling_plan)
         else:
-            self.last_extraction_stats = {
+            self.last_extraction_stats = self._append_sampling_plan_stats({
                 'strategy': f'ffmpeg_{gpu_info["method"]}',
                 'mode': mode,
                 'requested_targets': expected_frames,
@@ -1478,9 +1535,8 @@ class VideoProcessor:
                 'replaced_targets': 0,
                 'search_radius': 0,
                 'rejected_candidates': 0,
-                'oversample_factor': sampling_plan['oversample_factor'],
                 'selections': [],
-            }
+            }, sampling_plan)
 
         # Final progress callback
         if progress_callback and extracted_frames:
@@ -1741,6 +1797,7 @@ class VideoProcessor:
                 'use_gpu': True,
                 'smart_frame_selection': False,
                 'oversample_factor': 10,
+                'adaptive_frame_budget': False,
             }
 
         # Check if GPU should be used
@@ -1911,11 +1968,275 @@ class VideoProcessor:
         requested = int(extraction_config.get('oversample_factor', 10) or 10)
         return max(2, min(requested, 20))
 
-    def _build_sampling_plan(self, total_frames: int, fps: float, extraction_config: Dict[str, Any]) -> Dict[str, Any]:
+    def _should_use_adaptive_frame_budget(self, extraction_config: Dict[str, Any]) -> bool:
+        return bool(
+            extraction_config.get('smart_frame_selection', False)
+            and extraction_config.get('adaptive_frame_budget', False)
+        )
+
+    def _collect_adaptive_budget_quality_telemetry(
+        self,
+        video_path,
+        total_frames: int,
+        extraction_config: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        if not self._should_use_adaptive_frame_budget(extraction_config):
+            return None
+
+        sample_count = int(extraction_config.get('adaptive_budget_sample_count', 12) or 12)
+        sample_count = max(4, min(sample_count, 24))
+        if total_frames <= 0:
+            return None
+
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            logger.warning("Adaptive frame budget telemetry skipped: could not open video for preview sampling")
+            return None
+
+        quality_percent = int(extraction_config.get('quality', 100) or 100)
+        sample_positions = np.linspace(0, total_frames - 1, num=min(sample_count, total_frames))
+        sample_indices = []
+        seen_indices = set()
+        for position in sample_positions:
+            frame_index = max(0, min(total_frames - 1, int(round(float(position)))))
+            if frame_index not in seen_indices:
+                sample_indices.append(frame_index)
+                seen_indices.add(frame_index)
+
+        samples = []
+        prev_frame = None
+
+        try:
+            for frame_index in sample_indices:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
+                ret, frame = cap.read()
+                if not ret or frame is None:
+                    continue
+
+                score_info = self._score_frame_candidate(frame, prev_frame, quality_percent)
+                metrics = score_info['metrics']
+                samples.append({
+                    'frame_index': int(frame_index),
+                    'accepted': bool(score_info['accepted']),
+                    'sharpness': round(float(metrics['sharpness']), 4),
+                    'brightness': round(float(metrics['brightness']), 4),
+                    'diff_mean': (
+                        round(float(metrics['diff_mean']), 4)
+                        if metrics.get('diff_mean') is not None
+                        else None
+                    ),
+                    'blur_threshold': round(float(metrics['blur_threshold']), 4),
+                })
+                prev_frame = frame
+        finally:
+            cap.release()
+
+        if not samples:
+            return None
+
+        sharpness_values = [sample['sharpness'] for sample in samples]
+        brightness_values = [sample['brightness'] for sample in samples]
+        diff_values = [sample['diff_mean'] for sample in samples if sample['diff_mean'] is not None]
+        blur_thresholds = [sample['blur_threshold'] for sample in samples]
+        accepted_count = sum(1 for sample in samples if sample['accepted'])
+        brightness_failures = sum(
+            1 for sample in samples if sample['brightness'] < 10.0 or sample['brightness'] > 245.0
+        )
+        blur_failures = sum(
+            1 for sample in samples if sample['sharpness'] < sample['blur_threshold']
+        )
+        duplicate_failures = sum(
+            1 for sample in samples
+            if sample['diff_mean'] is not None and sample['diff_mean'] < 1.0
+        )
+        sample_total = len(samples)
+
+        return {
+            'telemetry_source': 'adaptive_preview_samples',
+            'requested_sample_count': sample_count,
+            'sample_count': sample_total,
+            'accepted_ratio': round(accepted_count / max(sample_total, 1), 4),
+            'median_sharpness': round(float(np.median(sharpness_values)), 4),
+            'p25_sharpness': round(float(np.percentile(sharpness_values, 25)), 4),
+            'median_brightness': round(float(np.median(brightness_values)), 4),
+            'median_blur_threshold': round(float(np.median(blur_thresholds)), 4),
+            'median_diff_mean': round(float(np.median(diff_values)), 4) if diff_values else None,
+            'brightness_failure_ratio': round(brightness_failures / max(sample_total, 1), 4),
+            'blur_failure_ratio': round(blur_failures / max(sample_total, 1), 4),
+            'duplicate_failure_ratio': round(duplicate_failures / max(sample_total, 1), 4),
+            'samples': samples,
+        }
+
+    def _build_adaptive_frame_budget(
+        self,
+        total_frames: int,
+        fps: float,
+        extraction_config: Dict[str, Any],
+        *,
+        video_info: Optional[Dict[str, Any]] = None,
+        quality_telemetry: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if not self._should_use_adaptive_frame_budget(extraction_config):
+            return None
+
+        requested_oversample_factor = self._get_oversample_factor(extraction_config)
+        target_output_count = self._get_target_output_count(total_frames, fps, extraction_config)
+        video_info = dict(video_info or {})
+        width = int(video_info.get('width') or 0)
+        height = int(video_info.get('height') or 0)
+        duration = float(video_info.get('duration') or ((total_frames / fps) if fps > 0 else 0.0))
+        bitrate = int(video_info.get('bit_rate') or 0)
+        codec_name = str(video_info.get('codec_name') or '').lower()
+        scale = 1.0
+        adjustments = []
+
+        def apply_adjustment(code: str, factor: float, reason: str) -> None:
+            nonlocal scale
+            scale *= factor
+            adjustments.append({
+                'code': code,
+                'factor': round(float(factor), 4),
+                'reason': reason,
+            })
+
+        if duration >= 180 and target_output_count >= 120:
+            apply_adjustment(
+                'long_video_budget_pressure',
+                0.9,
+                f"duration {duration:.1f}s with {target_output_count} requested outputs increases decode cost",
+            )
+        if duration >= 600:
+            apply_adjustment(
+                'very_long_video_cap',
+                0.85,
+                f"duration {duration:.1f}s is long enough to justify a tighter candidate budget",
+            )
+        if fps >= 50:
+            apply_adjustment(
+                'high_source_fps',
+                0.9,
+                f"source fps {fps:.2f} already provides dense temporal coverage",
+            )
+        if width * height >= 3840 * 2160:
+            apply_adjustment(
+                'uhd_decode_cost',
+                0.85,
+                f"source resolution {width}x{height} increases decode and JPEG cost per candidate",
+            )
+        if bitrate >= 80_000_000:
+            apply_adjustment(
+                'high_bitrate_decode_cost',
+                0.9,
+                f"bitrate {bitrate / 1_000_000:.1f} Mbps suggests heavier decode cost",
+            )
+        if fps > 0 and fps <= 24 and total_frames > (target_output_count * max(2, requested_oversample_factor // 2)):
+            apply_adjustment(
+                'low_native_temporal_density',
+                1.15,
+                f"source fps {fps:.2f} leaves less temporal headroom per requested output",
+            )
+        if 0 < target_output_count <= 80 and duration >= 30:
+            apply_adjustment(
+                'small_target_headroom',
+                1.1,
+                f"only {target_output_count} outputs requested, so extra candidate density is affordable",
+            )
+
+        if quality_telemetry:
+            accepted_ratio = float(quality_telemetry.get('accepted_ratio') or 0.0)
+            blur_failure_ratio = float(quality_telemetry.get('blur_failure_ratio') or 0.0)
+            duplicate_failure_ratio = float(quality_telemetry.get('duplicate_failure_ratio') or 0.0)
+            median_sharpness = float(quality_telemetry.get('median_sharpness') or 0.0)
+            median_blur_threshold = float(quality_telemetry.get('median_blur_threshold') or 0.0)
+
+            if accepted_ratio < 0.55 or blur_failure_ratio >= 0.35:
+                apply_adjustment(
+                    'low_preview_acceptance',
+                    1.25,
+                    f"preview accepted ratio {accepted_ratio:.2f} with blur failure ratio {blur_failure_ratio:.2f} suggests harder footage",
+                )
+            elif accepted_ratio < 0.75:
+                apply_adjustment(
+                    'mixed_preview_acceptance',
+                    1.1,
+                    f"preview accepted ratio {accepted_ratio:.2f} suggests moderate quality churn",
+                )
+            elif accepted_ratio > 0.92 and median_blur_threshold > 0 and median_sharpness >= (median_blur_threshold * 2.0):
+                apply_adjustment(
+                    'clean_preview_signal',
+                    0.9,
+                    f"preview accepted ratio {accepted_ratio:.2f} and median sharpness {median_sharpness:.1f} indicate clean candidates",
+                )
+
+            if duplicate_failure_ratio >= 0.45 and accepted_ratio >= 0.8:
+                apply_adjustment(
+                    'duplicate_heavy_preview',
+                    0.85,
+                    f"preview duplicate failure ratio {duplicate_failure_ratio:.2f} suggests oversampling would add near-duplicates",
+                )
+
+        effective_oversample_factor = max(1, min(20, int(round(requested_oversample_factor * scale))))
+        density_scale = effective_oversample_factor / max(requested_oversample_factor, 1)
+
+        return {
+            'enabled': True,
+            'requested_oversample_factor': requested_oversample_factor,
+            'effective_oversample_factor': effective_oversample_factor,
+            'density_scale': round(float(density_scale), 4),
+            'adjustments': adjustments,
+            'target_output_count': int(target_output_count),
+            'video_profile': {
+                'total_frames': int(total_frames),
+                'fps': round(float(fps or 0.0), 4),
+                'duration': round(float(duration or 0.0), 4),
+                'width': width,
+                'height': height,
+                'codec_name': codec_name or None,
+                'bit_rate_mbps': round(float(bitrate) / 1_000_000, 4) if bitrate > 0 else None,
+            },
+            'quality_preview': quality_telemetry,
+        }
+
+    def _append_sampling_plan_stats(
+        self,
+        stats: Dict[str, Any],
+        sampling_plan: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        if not sampling_plan:
+            return stats
+
+        stats['oversample_factor'] = sampling_plan['oversample_factor']
+        stats['requested_oversample_factor'] = sampling_plan['requested_oversample_factor']
+        stats['candidate_density_ratio'] = sampling_plan['candidate_density_ratio']
+        if sampling_plan.get('adaptive_frame_budget') is not None:
+            stats['adaptive_frame_budget'] = sampling_plan['adaptive_frame_budget']
+        return stats
+
+    def _build_sampling_plan(
+        self,
+        total_frames: int,
+        fps: float,
+        extraction_config: Dict[str, Any],
+        *,
+        video_info: Optional[Dict[str, Any]] = None,
+        quality_telemetry: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         mode = extraction_config.get('mode', 'frames')
         smart_selection = extraction_config.get('smart_frame_selection', False)
         target_output_count = self._get_target_output_count(total_frames, fps, extraction_config)
-        oversample_factor = self._get_oversample_factor(extraction_config) if smart_selection else 1
+        requested_oversample_factor = self._get_oversample_factor(extraction_config) if smart_selection else 1
+        adaptive_budget = self._build_adaptive_frame_budget(
+            total_frames,
+            fps,
+            extraction_config,
+            video_info=video_info,
+            quality_telemetry=quality_telemetry,
+        )
+        oversample_factor = (
+            int(adaptive_budget['effective_oversample_factor'])
+            if adaptive_budget is not None
+            else requested_oversample_factor
+        )
 
         if mode in {'fps', 'target_count'}:
             if mode == 'target_count':
@@ -1937,6 +2258,9 @@ class VideoProcessor:
                 'extraction_fps': extraction_fps,
                 'sampling_filter': sampling_filter,
                 'oversample_factor': oversample_factor,
+                'requested_oversample_factor': requested_oversample_factor,
+                'candidate_density_ratio': round(candidate_count / max(target_output_count, 1), 4),
+                'adaptive_frame_budget': adaptive_budget,
             }
 
         max_frames = int(extraction_config.get('max_frames', 100) or 100)
@@ -1957,6 +2281,9 @@ class VideoProcessor:
             'extraction_fps': None,
             'sampling_filter': sampling_filter,
             'oversample_factor': oversample_factor,
+            'requested_oversample_factor': requested_oversample_factor,
+            'candidate_density_ratio': round(candidate_count / max(target_output_count, 1), 4),
+            'adaptive_frame_budget': adaptive_budget,
         }
 
     def _estimate_candidate_source_indices(

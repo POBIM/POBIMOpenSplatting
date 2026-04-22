@@ -54,6 +54,29 @@ export interface Project {
     [key: string]: any;
   };
   reconstruction_framework?: ReconstructionFramework;
+  resource_coordination?: {
+    profile_class?: string;
+    gpu_model?: string;
+    gpu_vram_mb?: number;
+    summary?: string;
+    resource_lane?: string;
+    admission_reason?: string;
+    downgrade_reason?: string | null;
+    estimated_start_delay?: number;
+    current_stage?: string;
+    manual_override?: boolean;
+    capture_budget_summary?: {
+      input_type?: string;
+      num_images?: number;
+      num_videos?: number;
+      adaptive_frame_budget?: boolean;
+      adaptive_pair_scheduling?: boolean;
+      effective_oversample_factor?: number;
+      colmap_resolution?: string;
+      training_resolution?: string;
+      use_separate_training_images?: boolean;
+    };
+  };
   video_extraction_diagnostics?: VideoExtractionDiagnostics;
   recent_logs?: string[];
   log_count?: number;
@@ -89,6 +112,156 @@ export interface ReconstructionFramework {
     zero_boundary_count?: number;
     zero_boundary_ratio?: number;
   };
+  resource_contract_version?: string;
+  resource_profile?: {
+    profile_class?: string;
+    gpu_model?: string;
+    gpu_vram_mb?: number;
+    summary?: string;
+  };
+  resource_lane?: string;
+  admission_reason?: string;
+  downgrade_reason?: string | null;
+  estimated_start_delay?: number;
+  capture_budget_summary?: {
+    input_type?: string;
+    num_images?: number;
+    num_videos?: number;
+    adaptive_frame_budget?: boolean;
+    adaptive_pair_scheduling?: boolean;
+    effective_oversample_factor?: number;
+    colmap_resolution?: string;
+    training_resolution?: string;
+    use_separate_training_images?: boolean;
+  };
+  training_budget_summary?: {
+    resource_profile_class?: string;
+    resource_lane?: string;
+    training_resolution?: string;
+    colmap_resolution?: string;
+    use_separate_training_images?: boolean;
+    adaptive_frame_budget?: boolean;
+    adaptive_pair_scheduling?: boolean;
+    repair_step_count?: number;
+    uses_repaired_capture?: boolean;
+  };
+  recovery_loop_summary?: {
+    schema_version?: string;
+    precedence?: string[];
+    final_path?: string;
+    state?: string;
+    local_repair_count?: number;
+    broad_fallback_used?: boolean;
+    final_reason_code?: string | null;
+    unresolved_weak_boundary_count?: number;
+    unresolved_split_model?: boolean;
+  };
+  sparse_model_summary?: {
+    best_registered?: number;
+    registered_ratio?: number;
+    model_count?: number;
+    alternate_registered?: number;
+    has_multiple_models?: boolean;
+  };
+  progressive_matching_plan?: {
+    enabled?: boolean;
+    reason?: string;
+    resource_tier?: string;
+    peak_feature_count?: number | null;
+    gpu_total_vram_mb?: number | null;
+    final_overlap?: number;
+    passes?: Array<{
+      key?: string;
+      label?: string;
+      required?: boolean;
+      kind?: string;
+      max_num_matches?: number;
+      continue_if?: string;
+      checkpoint_note?: string;
+      matcher_params?: Record<string, string>;
+    }>;
+  };
+  progressive_matching_checkpoints?: Array<{
+    key?: string;
+    label?: string;
+    max_num_matches?: number;
+    verified_pairs?: number;
+    geometry_stats?: {
+      image_count?: number;
+      bridge_p10?: number;
+      bridge_min?: number;
+      weak_boundary_count?: number;
+      weak_boundary_ratio?: number;
+      zero_boundary_count?: number;
+      zero_boundary_ratio?: number;
+    };
+  }>;
+  recovery_history?: Array<{
+    kind?: string;
+    label?: string;
+    reason?: string;
+    reason_code?: string;
+    step_order?: number;
+    status?: string;
+    outcome?: string;
+    subset_image_count?: number;
+    weak_boundary_count?: number;
+    target_boundary_count?: number;
+    surviving_target_boundary_count?: number;
+    padding?: number | null;
+    overlap?: string;
+    quadratic_overlap?: string;
+    loop_detection?: string;
+    runtime_mode?: string;
+    pair_targeted?: boolean;
+    pair_count?: number;
+    pair_budget_cap?: number;
+    pair_budget_capped?: boolean;
+    pair_budget_reason?: string;
+    targeted_boundaries?: Array<{
+      key?: string;
+      left_image_name?: string;
+      right_image_name?: string;
+      bridge_strength?: number;
+      adjacent_inliers?: number;
+      severity_label?: string;
+      severity_multiplier?: number;
+      target_segment_frames?: number;
+      inserted_frame_count?: number;
+      cross_radius?: number;
+      local_radius?: number;
+      pair_count?: number;
+      pair_budget_cap?: number;
+      pair_budget_capped?: boolean;
+      outcome?: string;
+    }>;
+    surviving_target_boundaries?: Array<{
+      key?: string;
+      left_image_name?: string;
+      right_image_name?: string;
+      bridge_strength?: number;
+      adjacent_inliers?: number;
+      severity_label?: string;
+      severity_multiplier?: number;
+      target_segment_frames?: number;
+      inserted_frame_count?: number;
+      cross_radius?: number;
+      local_radius?: number;
+      pair_count?: number;
+      pair_budget_cap?: number;
+      pair_budget_capped?: boolean;
+      outcome?: string;
+    }>;
+    geometry_stats?: {
+      image_count?: number;
+      bridge_p10?: number;
+      bridge_min?: number;
+      weak_boundary_count?: number;
+      weak_boundary_ratio?: number;
+      zero_boundary_count?: number;
+      zero_boundary_ratio?: number;
+    };
+  }>;
 }
 
 export interface ProcessingStatus {
@@ -123,7 +296,38 @@ export interface VideoExtractionDiagnostics {
   search_radius?: number;
   rejected_candidates?: number;
   oversample_factor?: number;
+  requested_oversample_factor?: number;
+  candidate_density_ratio?: number;
   scoring_workers?: number;
+  adaptive_frame_budget?: {
+    enabled?: boolean;
+    requested_oversample_factor?: number;
+    effective_oversample_factor?: number;
+    density_scale?: number;
+    target_output_count?: number;
+    adjustments?: Array<{
+      code?: string;
+      factor?: number;
+      reason?: string;
+    }>;
+    video_profile?: {
+      total_frames?: number;
+      fps?: number;
+      duration?: number;
+      width?: number;
+      height?: number;
+      codec_name?: string | null;
+      bit_rate_mbps?: number | null;
+    };
+  };
+  candidate_quality_summary?: {
+    candidate_total?: number;
+    accepted_total?: number;
+    accepted_ratio?: number;
+    median_sharpness?: number;
+    p25_sharpness?: number;
+    median_brightness?: number;
+  };
   selections?: VideoExtractionSelection[];
   videos?: Array<{
     filename?: string;
@@ -134,7 +338,11 @@ export interface VideoExtractionDiagnostics {
     search_radius?: number;
     rejected_candidates?: number;
     oversample_factor?: number;
+    requested_oversample_factor?: number;
+    candidate_density_ratio?: number;
     scoring_workers?: number;
+    adaptive_frame_budget?: VideoExtractionDiagnostics['adaptive_frame_budget'];
+    candidate_quality_summary?: VideoExtractionDiagnostics['candidate_quality_summary'];
     selections?: VideoExtractionSelection[];
   }>;
 }
@@ -171,9 +379,11 @@ export interface UploadConfig {
   quality?: number;
   preview_count?: number;
   smart_frame_selection?: boolean;
+  adaptive_frame_budget?: boolean;
   oversample_factor?: number;
   replacement_search_radius?: number;
   ffmpeg_cpu_workers?: number;
+  adaptive_pair_scheduling?: boolean;
   custom_params?: any;
 }
 
@@ -189,7 +399,41 @@ export interface UploadPolicyPreviewRule {
   text: string;
 }
 
+export interface UploadPolicyAdaptiveState {
+  enabled: boolean;
+  available: boolean;
+  label: string;
+  effect: string;
+  current_summary: string;
+  disabled_summary?: string;
+  gate?: string | null;
+}
+
+export interface UploadPolicyAdaptiveComparison {
+  key: 'frame_budget' | 'pair_scheduling' | string;
+  label: string;
+  effect: string;
+  available: boolean;
+  current_enabled: boolean;
+  recommended_enabled: boolean;
+  score_delta_enabled_vs_disabled: number;
+  current_score: number;
+  alternative_score: number;
+  current_summary: string;
+  alternative_summary: string;
+  gate?: string | null;
+}
+
 export interface UploadPolicyPreview {
+  resource_contract?: {
+    schema_version?: string;
+    benchmark_profiles?: Array<{
+      id?: string;
+      label?: string;
+      description?: string;
+    }>;
+    metric_keys?: string[];
+  };
   heuristic_source: 'backend' | string;
   input_profile: 'images' | 'video' | 'mixed' | 'unknown' | string;
   estimated_num_images: number;
@@ -220,6 +464,11 @@ export interface UploadPolicyPreview {
   orbit_safe_mode?: boolean;
   orbit_safe_profile?: string | null;
   bridge_risk_score?: number | null;
+  adaptive_policy?: {
+    frame_budget?: UploadPolicyAdaptiveState;
+    pair_scheduling?: UploadPolicyAdaptiveState;
+  };
+  adaptive_comparisons?: UploadPolicyAdaptiveComparison[];
 }
 
 // API helper functions
@@ -321,6 +570,7 @@ export const api = {
     if (config.quality !== undefined) formData.append('quality', config.quality.toString());
     if (config.preview_count) formData.append('preview_count', config.preview_count.toString());
     if (config.smart_frame_selection !== undefined) formData.append('smart_frame_selection', config.smart_frame_selection.toString());
+    if (config.adaptive_frame_budget !== undefined) formData.append('adaptive_frame_budget', config.adaptive_frame_budget.toString());
     if (config.oversample_factor !== undefined) formData.append('oversample_factor', config.oversample_factor.toString());
     if (config.replacement_search_radius !== undefined) formData.append('replacement_search_radius', config.replacement_search_radius.toString());
     if (config.ffmpeg_cpu_workers !== undefined) formData.append('ffmpeg_cpu_workers', config.ffmpeg_cpu_workers.toString());
@@ -332,6 +582,7 @@ export const api = {
     if (config.colmap_resolution) formData.append('colmap_resolution', config.colmap_resolution);
     if (config.training_resolution) formData.append('training_resolution', config.training_resolution);
     if (config.use_separate_training_images !== undefined) formData.append('use_separate_training_images', config.use_separate_training_images.toString());
+    if (config.adaptive_pair_scheduling !== undefined) formData.append('adaptive_pair_scheduling', config.adaptive_pair_scheduling.toString());
 
     // Custom parameters - send each parameter individually
     if (config.quality_mode === 'custom') {

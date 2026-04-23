@@ -64,6 +64,7 @@ def setup_project_directories(project_id: str) -> Dict[str, Path]:
         "log_file": project_path / "processing.log",
         "database_path": project_path / "database.db",
         "sparse_path": project_path / "sparse",
+        "sparse_snapshots_path": project_path / "sparse_snapshots",
         "text_path": project_path / "text",
     }
 
@@ -72,4 +73,3 @@ def setup_project_directories(project_id: str) -> Dict[str, Path]:
             path.mkdir(parents=True, exist_ok=True)
 
     return paths
-

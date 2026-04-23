@@ -19,6 +19,7 @@ Start with the repo root [README.md](../README.md) for the project overview. Use
 | Understand the product surface under `PobimSplatting/` | [../PobimSplatting/README.md](../PobimSplatting/README.md) |
 | See the full processing workflow stage by stage | [WORKFLOW.md](WORKFLOW.md) |
 | Run the system day to day | [QUICK_REFERENCE.md](QUICK_REFERENCE.md) |
+| Understand the CPU-first hybrid policy for ordered video | [ORDERED_VIDEO_HYBRID_POLICY.md](ORDERED_VIDEO_HYBRID_POLICY.md) |
 | See what is still missing in the ordered-video resource-aware work | [ORDERED_VIDEO_NEXT_STEPS.md](ORDERED_VIDEO_NEXT_STEPS.md) |
 | Understand how ordered-video self-tuning is supposed to work | [ORDERED_VIDEO_SELF_TUNING_GUIDE.md](ORDERED_VIDEO_SELF_TUNING_GUIDE.md) |
 | Review ordered-video evidence and signoff expectations | [ORDERED_VIDEO_BENCHMARK_BASELINE.md](ORDERED_VIDEO_BENCHMARK_BASELINE.md) |
@@ -52,7 +53,7 @@ The real product is a pipeline platform made of:
 | Frame extraction | `ffmpeg`, OpenCV helpers | Used for video and mixed inputs |
 | Feature extraction | COLMAP SIFT, `hloc` ALIKED, `hloc` SuperPoint | Neural path is conditional |
 | Matching | COLMAP matchers, LightGlue, experimental vocabulary tree | `auto` lets backend choose |
-| Sparse SfM | COLMAP `global_mapper`, `pycolmap.global_mapping`, FastMap, COLMAP mapper, legacy GLOMAP | Default global path is COLMAP `global_mapper` |
+| Sparse SfM | COLMAP `global_mapper`, `pycolmap.global_mapping`, FastMap, COLMAP mapper, legacy GLOMAP | Ordered video stays CPU-first by default; GPU/global paths remain available for retries and unordered photo sets |
 | Training | `build/opensplat` | Gaussian splat training stage |
 | Review | Web viewer, camera poses page, COLMAP GUI | Viewer is primary; GUI is optional |
 | Mesh export | COLMAP dense reconstruction, `MVSMesher`, `MeshConverter`, `PyMeshLab`, `trimesh` | Produces textured mesh outputs |
@@ -69,6 +70,7 @@ The real product is a pipeline platform made of:
 
 - [WORKFLOW.md](WORKFLOW.md): stage-by-stage processing workflow
 - [QUICK_REFERENCE.md](QUICK_REFERENCE.md): daily commands, health checks, and common operator actions
+- [ORDERED_VIDEO_HYBRID_POLICY.md](ORDERED_VIDEO_HYBRID_POLICY.md): CPU-first ordered-video policy plus the retained GPU paths for extraction, training, retries, and unordered inputs
 - [INSTALLATION.md](INSTALLATION.md): English installation guide
 - [INSTALLATION_TH.md](INSTALLATION_TH.md): Thai installation guide
 - [INSTALLATION_SYSTEM.md](INSTALLATION_SYSTEM.md): explanation of installer mechanics

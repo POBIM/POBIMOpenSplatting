@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
+import shutil
 import time
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +26,73 @@ from ..utils.video_processor import VideoProcessor
 from .runtime_support import should_emit_progress_milestone, should_log_subprocess_line
 
 logger = logging.getLogger(__name__)
+
+TRAINING_PREVIEW_FILENAME = "preview_latest.ply"
+TRAINING_PREVIEW_METADATA_FILENAME = "preview_latest.json"
+MIN_TRAINING_PREVIEW_SAVE_EVERY = 500
+MAX_TRAINING_PREVIEW_SAVE_EVERY = 2500
+TRAINING_PREVIEW_TARGET_UPDATES = 8
+
+
+def _choose_training_preview_save_every(iteration_total: int) -> int:
+    if iteration_total <= 0:
+        return MIN_TRAINING_PREVIEW_SAVE_EVERY
+
+    target = max(1, round(iteration_total / TRAINING_PREVIEW_TARGET_UPDATES))
+    return max(
+        MIN_TRAINING_PREVIEW_SAVE_EVERY,
+        min(MAX_TRAINING_PREVIEW_SAVE_EVERY, target),
+    )
+
+
+def _write_training_preview_metadata(
+    metadata_path: Path,
+    *,
+    iteration: int,
+    total_iterations: int,
+    file_path: Path,
+    source_filename: str,
+    is_final: bool,
+) -> None:
+    payload = {
+        "filename": file_path.name,
+        "source_filename": source_filename,
+        "iteration": iteration,
+        "total_iterations": total_iterations,
+        "is_final": is_final,
+        "updated_at": datetime.now().isoformat(),
+        "size_bytes": file_path.stat().st_size if file_path.exists() else 0,
+        "version": file_path.stat().st_mtime_ns if file_path.exists() else 0,
+    }
+    metadata_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _promote_training_preview_snapshot(
+    source_path: Path,
+    preview_path: Path,
+    metadata_path: Path,
+    *,
+    iteration: int,
+    total_iterations: int,
+    is_final: bool,
+) -> None:
+    preview_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if is_final:
+        temp_preview_path = preview_path.with_suffix(".tmp")
+        shutil.copy2(source_path, temp_preview_path)
+        os.replace(temp_preview_path, preview_path)
+    else:
+        os.replace(source_path, preview_path)
+
+    _write_training_preview_metadata(
+        metadata_path,
+        iteration=iteration,
+        total_iterations=total_iterations,
+        file_path=preview_path,
+        source_filename=source_path.name,
+        is_final=is_final,
+    )
 
 
 def finalize_project(project_id):
@@ -168,6 +237,11 @@ def run_opensplat_training(
             paths["results_path"]
             / f"{project_id}_{quality_mode}_{enhanced_iterations}iter.ply"
         )
+        preview_path = paths["results_path"] / TRAINING_PREVIEW_FILENAME
+        preview_metadata_path = (
+            paths["results_path"] / TRAINING_PREVIEW_METADATA_FILENAME
+        )
+        preview_save_every = _choose_training_preview_save_every(enhanced_iterations)
         cmd = [
             str(opensplat_binary),
             str(paths["project_path"].absolute()),
@@ -175,7 +249,13 @@ def run_opensplat_training(
             str(enhanced_iterations),
             "--output",
             str(output_ply.absolute()),
+            "--save-every",
+            str(preview_save_every),
         ]
+        append_log_line(
+            project_id,
+            f"🪟 Training preview snapshots enabled every {preview_save_every} iterations",
+        )
 
         crop_size = config.get("crop_size", 0)
         if crop_size > 0:
@@ -329,6 +409,7 @@ def run_opensplat_training(
         training_progress = {"current": 0, "total": iteration_total}
         training_progress_log = {"last_bucket": -1}
         splats_state = {"current": 0, "max": 0}
+        preview_state = {"latest_iteration": 0}
 
         splats_patterns = (
             re.compile(r"new count\s+(\d+)", re.IGNORECASE),
@@ -366,6 +447,45 @@ def run_opensplat_training(
 
         def training_line_handler(line):
             _update_splats_from_line(line)
+            line_stripped = line.strip()
+            if line_stripped:
+                preview_candidate = Path(line_stripped)
+                if preview_candidate.suffix.lower() == ".ply" and preview_candidate.exists():
+                    preview_iteration_match = re.search(
+                        r"(?:^|[_-])(\d+)(?:iter|iters|steps?)?\.ply$",
+                        preview_candidate.name,
+                        re.IGNORECASE,
+                    )
+                    if preview_candidate.resolve() == output_ply.resolve():
+                        _promote_training_preview_snapshot(
+                            preview_candidate,
+                            preview_path,
+                            preview_metadata_path,
+                            iteration=iteration_total,
+                            total_iterations=iteration_total,
+                            is_final=True,
+                        )
+                        preview_state["latest_iteration"] = iteration_total
+                        append_log_line(
+                            project_id,
+                            "🪟 Training preview updated with final output",
+                        )
+                    elif preview_iteration_match:
+                        preview_iteration = int(preview_iteration_match.group(1))
+                        if preview_iteration > preview_state["latest_iteration"]:
+                            _promote_training_preview_snapshot(
+                                preview_candidate,
+                                preview_path,
+                                preview_metadata_path,
+                                iteration=preview_iteration,
+                                total_iterations=iteration_total,
+                                is_final=False,
+                            )
+                            preview_state["latest_iteration"] = preview_iteration
+                            append_log_line(
+                                project_id,
+                                f"🪟 Training preview updated at iteration {preview_iteration}/{iteration_total}",
+                            )
             patterns = [
                 r"Iteration\s+(\d+)/(\d+)",
                 r"Step\s+(\d+)/(\d+)",

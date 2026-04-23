@@ -28,6 +28,10 @@ export interface CameraPosesData {
   cameras: CameraPose[];
   sparse_point_count?: number;
   sparse_points?: SparsePoint[];
+  is_live?: boolean;
+  source_type?: 'snapshot' | 'final' | string;
+  source_label?: string;
+  sparse_model_path?: string;
 }
 
 interface Props {

@@ -409,6 +409,50 @@ export interface PlyFilesResponse {
   total: number;
 }
 
+export interface CameraPose {
+  image_name: string;
+  position: [number, number, number];
+  quaternion: [number, number, number, number];
+  fx?: number;
+  fy?: number;
+  width?: number;
+  height?: number;
+  image_url?: string;
+}
+
+export interface SparsePoint {
+  position: [number, number, number];
+  color?: [number, number, number];
+}
+
+export interface CameraPosesData {
+  project_id: string;
+  project_name?: string;
+  sfm_engine?: string;
+  camera_count: number;
+  cameras: CameraPose[];
+  sparse_point_count?: number;
+  sparse_points?: SparsePoint[];
+  is_live?: boolean;
+  source_type?: 'snapshot' | 'final' | string;
+  source_label?: string;
+  sparse_model_path?: string;
+}
+
+export interface TrainingPreview {
+  project_id: string;
+  available: boolean;
+  is_live: boolean;
+  filename: string;
+  iteration: number;
+  total_iterations: number;
+  is_final: boolean;
+  updated_at: string;
+  size_bytes: number;
+  version: number;
+  preview_url: string;
+}
+
 export interface UploadConfig {
   project_name?: string;
   project_description?: string;
@@ -831,8 +875,21 @@ export const api = {
   },
 
   // Camera Poses
-  getCameraPoses: async (id: string) => {
-    const response = await apiClient.get(`/api/project/${id}/camera_poses`);
+  getCameraPoses: async (
+    id: string,
+    options: { preferLive?: boolean } = {}
+  ) => {
+    const response = await apiClient.get(`/api/project/${id}/camera_poses`, {
+      params:
+        options.preferLive === undefined
+          ? undefined
+          : { prefer_live: options.preferLive ? '1' : '0' },
+    });
+    return response.data;
+  },
+
+  getTrainingPreview: async (id: string) => {
+    const response = await apiClient.get(`/api/project/${id}/training_preview`);
     return response.data;
   },
 

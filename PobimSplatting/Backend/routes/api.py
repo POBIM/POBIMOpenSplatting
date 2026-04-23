@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
@@ -53,6 +54,9 @@ logger = logging.getLogger(__name__)
 
 video_processor = VideoProcessor()
 
+TRAINING_PREVIEW_FILENAME = "preview_latest.ply"
+TRAINING_PREVIEW_METADATA_FILENAME = "preview_latest.json"
+
 
 def _clear_directory_contents(path: Path) -> None:
     if not path.exists():
@@ -86,6 +90,51 @@ def _send_uncached_preview(file_path: Path):
     return response
 
 
+def _send_uncached_binary(
+    file_path: Path, mimetype: str = "application/octet-stream"
+):
+    response = send_file(file_path, mimetype=mimetype, as_attachment=False, max_age=0)
+    response.cache_control.no_cache = True
+    response.cache_control.no_store = True
+    response.cache_control.must_revalidate = True
+    response.expires = 0
+    return response
+
+
+def _get_training_preview_paths(project_id: str) -> tuple[Path, Path]:
+    results_dir = app_config.RESULTS_FOLDER / project_id
+    return (
+        results_dir / TRAINING_PREVIEW_FILENAME,
+        results_dir / TRAINING_PREVIEW_METADATA_FILENAME,
+    )
+
+
+def _load_training_preview_metadata(project_id: str):
+    preview_path, metadata_path = _get_training_preview_paths(project_id)
+    if not preview_path.exists():
+        raise FileNotFoundError("No training preview available for this project")
+
+    metadata = {}
+    if metadata_path.exists():
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            metadata = {}
+
+    stat = preview_path.stat()
+    metadata.setdefault("filename", preview_path.name)
+    metadata.setdefault("iteration", 0)
+    metadata.setdefault("total_iterations", 0)
+    metadata.setdefault("is_final", False)
+    metadata.setdefault("updated_at", datetime.fromtimestamp(stat.st_mtime).isoformat())
+    metadata["size_bytes"] = stat.st_size
+    metadata["version"] = stat.st_mtime_ns
+    metadata["preview_url"] = (
+        f"/api/project/{project_id}/training_preview_file?v={metadata['version']}"
+    )
+    return preview_path, metadata
+
+
 def _prepare_retry_artifacts(project_id: str, paths: dict, from_stage: str) -> None:
     cleanup_targets = []
 
@@ -99,6 +148,7 @@ def _prepare_retry_artifacts(project_id: str, paths: dict, from_stage: str) -> N
                 ("file", Path(f"{paths['database_path']}-shm")),
                 ("file", Path(f"{paths['database_path']}-wal")),
                 ("dir", paths["sparse_path"]),
+                ("dir", paths["sparse_snapshots_path"]),
                 ("dir", paths["text_path"]),
                 ("dir", paths["results_path"]),
             ]
@@ -112,6 +162,7 @@ def _prepare_retry_artifacts(project_id: str, paths: dict, from_stage: str) -> N
                 ("file", Path(f"{paths['database_path']}-shm")),
                 ("file", Path(f"{paths['database_path']}-wal")),
                 ("dir", paths["sparse_path"]),
+                ("dir", paths["sparse_snapshots_path"]),
                 ("dir", paths["text_path"]),
                 ("dir", paths["results_path"]),
             ]
@@ -123,6 +174,7 @@ def _prepare_retry_artifacts(project_id: str, paths: dict, from_stage: str) -> N
                 ("file", Path(f"{paths['database_path']}-shm")),
                 ("file", Path(f"{paths['database_path']}-wal")),
                 ("dir", paths["sparse_path"]),
+                ("dir", paths["sparse_snapshots_path"]),
                 ("dir", paths["text_path"]),
                 ("dir", paths["results_path"]),
             ]
@@ -131,6 +183,7 @@ def _prepare_retry_artifacts(project_id: str, paths: dict, from_stage: str) -> N
         cleanup_targets.extend(
             [
                 ("dir", paths["sparse_path"]),
+                ("dir", paths["sparse_snapshots_path"]),
                 ("dir", paths["text_path"]),
                 ("dir", paths["results_path"]),
             ]
@@ -139,6 +192,7 @@ def _prepare_retry_artifacts(project_id: str, paths: dict, from_stage: str) -> N
         cleanup_targets.extend(
             [
                 ("dir", paths["sparse_path"]),
+                ("dir", paths["sparse_snapshots_path"]),
                 ("dir", paths["text_path"]),
                 ("dir", paths["results_path"]),
             ]
@@ -458,13 +512,79 @@ def _parse_colmap_points3d_txt(points_path, max_points=5000):
     return sampled, total_points
 
 
-def _load_project_camera_poses(project_id):
+def _is_sparse_model_dir(model_path: Path) -> bool:
+    if not model_path.exists() or not model_path.is_dir():
+        return False
+
+    has_binary_model = all(
+        (model_path / filename).exists()
+        for filename in ("cameras.bin", "images.bin", "points3D.bin")
+    )
+    has_text_model = all(
+        (model_path / filename).exists()
+        for filename in ("cameras.txt", "images.txt", "points3D.txt")
+    )
+    return has_binary_model or has_text_model
+
+
+def _find_latest_sparse_snapshot(project_path: Path) -> Path | None:
+    snapshots_root = project_path / "sparse_snapshots"
+    if not snapshots_root.exists():
+        return None
+
+    candidates = sorted(
+        [child for child in snapshots_root.iterdir() if child.is_dir()],
+        key=lambda child: (child.stat().st_mtime_ns, child.name),
+        reverse=True,
+    )
+    for candidate in candidates:
+        if _is_sparse_model_dir(candidate):
+            return candidate
+    return None
+
+
+def _resolve_project_camera_pose_model_path(
+    project_id: str, *, prefer_live: bool = True
+) -> tuple[Path | None, str]:
+    project_path = (app_config.UPLOAD_FOLDER / project_id).resolve()
+    sparse_path = project_path / "sparse"
+
+    project_data = project_store.processing_status.get(project_id, {})
+    progress_states = project_data.get("progress_states") or []
+    sparse_stage = next(
+        (
+            state
+            for state in progress_states
+            if state.get("key") == "sparse_reconstruction"
+        ),
+        None,
+    )
+    sparse_running = bool(sparse_stage and sparse_stage.get("status") == "running")
+
+    if prefer_live and sparse_running:
+        live_snapshot_path = _find_latest_sparse_snapshot(project_path)
+        if live_snapshot_path:
+            return live_snapshot_path, "snapshot"
+
+    final_sparse_path = select_best_sparse_model(sparse_path)
+    if final_sparse_path and final_sparse_path.exists():
+        return final_sparse_path, "final"
+
+    fallback_snapshot_path = _find_latest_sparse_snapshot(project_path)
+    if fallback_snapshot_path:
+        return fallback_snapshot_path, "snapshot"
+
+    return None, "missing"
+
+
+def _load_project_camera_poses(project_id, *, prefer_live: bool = True):
     project_path = (app_config.UPLOAD_FOLDER / project_id).resolve()
     if not project_path.exists():
         raise FileNotFoundError("Project not found")
 
-    sparse_path = project_path / "sparse"
-    sparse_model_path = select_best_sparse_model(sparse_path)
+    sparse_model_path, source_type = _resolve_project_camera_pose_model_path(
+        project_id, prefer_live=prefer_live
+    )
     if not sparse_model_path or not sparse_model_path.exists():
         raise FileNotFoundError("No sparse reconstruction found for this project")
 
@@ -494,7 +614,13 @@ def _load_project_camera_poses(project_id):
         for image in images:
             image["image_url"] = image["image_url"].format(project_id=project_id)
         sparse_points, sparse_point_count = _parse_colmap_points3d_txt(points_path)
-        return str(sparse_model_path), images, sparse_points, sparse_point_count
+        return (
+            str(sparse_model_path),
+            images,
+            sparse_points,
+            sparse_point_count,
+            source_type,
+        )
     finally:
         for path in cleanup_paths:
             try:
@@ -1440,7 +1566,13 @@ def retry_project(project_id):
                     )
 
             # Update COLMAP Sparse Reconstruction parameters if provided
-            for param_key in ["min_num_matches", "max_num_models", "init_num_trials"]:
+            for param_key in [
+                "min_num_matches",
+                "max_num_models",
+                "init_num_trials",
+                "force_cpu_sparse_reconstruction",
+                "sparse_retry_sfm_engine",
+            ]:
                 if param_key in new_params and new_params[param_key] is not None:
                     config[param_key] = new_params[param_key]
                     append_log_line(
@@ -1735,8 +1867,13 @@ def get_camera_poses(project_id):
         return jsonify({"error": "Project not found"}), 404
 
     try:
-        sparse_model_path, cameras, sparse_points, sparse_point_count = (
-            _load_project_camera_poses(project_id)
+        prefer_live = request.args.get("prefer_live", "1").lower() not in {
+            "0",
+            "false",
+            "no",
+        }
+        sparse_model_path, cameras, sparse_points, sparse_point_count, source_type = (
+            _load_project_camera_poses(project_id, prefer_live=prefer_live)
         )
         project_data = project_store.processing_status.get(project_id, {})
         metadata = project_data.get("metadata") or {}
@@ -1752,6 +1889,13 @@ def get_camera_poses(project_id):
                 "sparse_point_count": sparse_point_count,
                 "sparse_points": sparse_points,
                 "cameras": cameras,
+                "is_live": bool(prefer_live and source_type == "snapshot"),
+                "source_type": source_type,
+                "source_label": (
+                    "Live sparse snapshot"
+                    if source_type == "snapshot"
+                    else "Final sparse model"
+                ),
             }
         )
     except FileNotFoundError as exc:
@@ -1762,6 +1906,57 @@ def get_camera_poses(project_id):
     except Exception as exc:
         logger.exception(
             f"Unexpected error loading camera poses for project {project_id}"
+        )
+        return jsonify({"error": str(exc)}), 500
+
+
+@api_bp.route("/project/<project_id>/training_preview", methods=["GET"])
+def get_training_preview(project_id):
+    if project_id not in project_store.processing_status:
+        return jsonify({"error": "Project not found"}), 404
+
+    try:
+        _, metadata = _load_training_preview_metadata(project_id)
+        project_data = project_store.processing_status.get(project_id, {})
+        progress_states = project_data.get("progress_states") or []
+        training_stage = next(
+            (
+                state
+                for state in progress_states
+                if state.get("key") == "gaussian_splatting"
+            ),
+            None,
+        )
+        return jsonify(
+            {
+                "project_id": project_id,
+                "available": True,
+                "is_live": bool(training_stage and training_stage.get("status") == "running"),
+                **metadata,
+            }
+        )
+    except FileNotFoundError as exc:
+        return jsonify({"error": str(exc), "available": False}), 404
+    except Exception as exc:
+        logger.exception(
+            f"Unexpected error loading training preview for project {project_id}"
+        )
+        return jsonify({"error": str(exc), "available": False}), 500
+
+
+@api_bp.route("/project/<project_id>/training_preview_file", methods=["GET"])
+def get_training_preview_file(project_id):
+    if project_id not in project_store.processing_status:
+        return jsonify({"error": "Project not found"}), 404
+
+    try:
+        preview_path, _ = _load_training_preview_metadata(project_id)
+        return _send_uncached_binary(preview_path)
+    except FileNotFoundError as exc:
+        return jsonify({"error": str(exc)}), 404
+    except Exception as exc:
+        logger.exception(
+            f"Unexpected error serving training preview for project {project_id}"
         )
         return jsonify({"error": str(exc)}), 500
 

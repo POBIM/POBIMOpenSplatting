@@ -1,8 +1,8 @@
 'use client';
 
 import { useParams, useRouter } from 'next/navigation';
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { api, AutoTuningSummary, Project, PlyFile } from '@/lib/api';
+import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
+import { api, AutoTuningSummary, CameraPose, CameraPosesData, Project, PlyFile, TrainingPreview } from '@/lib/api';
 import { websocket } from '@/lib/websocket';
 import { getMatcherLabelWithMode, getSfmEngineCompactLabel, getSfmEngineLabel, isGlobalSfmEngine } from '@/lib/sfm-display';
 import MeshExportPanel from '@/components/MeshExportPanel';
@@ -39,6 +39,9 @@ import {
   LucideIcon
 } from 'lucide-react';
 import { Breadcrumbs } from '@/components/ui';
+
+const CameraPoseVisualization = lazy(() => import('@/components/CameraPoseVisualization'));
+const TrainingSplatPreview = lazy(() => import('@/components/TrainingSplatPreview'));
 
 const getStageLabelForEngine = (
   stageKey: string, 
@@ -264,6 +267,13 @@ export default function ProjectDetailPage() {
   const [showRetryModal, setShowRetryModal] = useState(false);
   const [selectedRetryStage, setSelectedRetryStage] = useState<string>('ingest');
   const stageLogsRef = useRef<HTMLDivElement>(null);
+  const [liveCameraPoses, setLiveCameraPoses] = useState<CameraPosesData | null>(null);
+  const [liveCameraPoseLoading, setLiveCameraPoseLoading] = useState(false);
+  const [liveCameraPoseError, setLiveCameraPoseError] = useState<string | null>(null);
+  const [selectedSparseCamera, setSelectedSparseCamera] = useState<CameraPose | null>(null);
+  const [trainingPreview, setTrainingPreview] = useState<TrainingPreview | null>(null);
+  const [trainingPreviewLoading, setTrainingPreviewLoading] = useState(false);
+  const [trainingPreviewError, setTrainingPreviewError] = useState<string | null>(null);
   const [retryParams, setRetryParams] = useState({
     // Gaussian Splatting params
     quality_mode: '',
@@ -278,6 +288,8 @@ export default function ProjectDetailPage() {
     // COLMAP Sparse Reconstruction params
     min_num_matches: '',
     max_num_models: '',
+    force_cpu_sparse_reconstruction: false,
+    sparse_retry_sfm_engine: '',
     // Resolution settings
     extraction_mode: '',
     max_frames: '',
@@ -356,6 +368,26 @@ export default function ProjectDetailPage() {
     }
     return logGroups.find(group => group.key === expandedStage)?.logs ?? [];
   }, [logGroups, expandedStage]);
+  const sparseStage = stages.find(s => s.key === 'sparse_reconstruction');
+  const featureExtractionStage = stages.find(s => s.key === 'feature_extraction');
+  const trainingStage = stages.find(s => s.key === 'gaussian_splatting');
+  const canInspectSparseModel = featureExtractionStage?.status === 'completed' || sparseStage?.status === 'completed';
+  const showSparsePoseViewer =
+    expandedStage === 'sparse_reconstruction' &&
+    (
+      sparseStage?.status === 'running' ||
+      sparseStage?.status === 'completed' ||
+      sparseStage?.status === 'failed' ||
+      Boolean(liveCameraPoses)
+    );
+  const showTrainingPreview =
+    expandedStage === 'gaussian_splatting' &&
+    (
+      trainingStage?.status === 'running' ||
+      trainingStage?.status === 'completed' ||
+      trainingStage?.status === 'failed' ||
+      Boolean(trainingPreview)
+    );
 
   // Auto-expand the running stage
   useEffect(() => {
@@ -455,6 +487,73 @@ export default function ProjectDetailPage() {
       }
     } catch (err) {
       console.error('Failed to load frame previews:', err);
+    }
+  }, [projectId]);
+
+  const loadLiveCameraPoses = useCallback(async (options: { silent?: boolean } = {}) => {
+    try {
+      if (!options.silent) {
+        setLiveCameraPoseLoading(true);
+      }
+      const data = await api.getCameraPoses(projectId, { preferLive: true });
+      setLiveCameraPoses(data);
+      setLiveCameraPoseError(null);
+      setSelectedSparseCamera((prev) => {
+        if (!prev) {
+          return null;
+        }
+        return data.cameras.find((camera: CameraPose) => camera.image_name === prev.image_name) || null;
+      });
+    } catch (err: any) {
+      if (err?.response?.status === 404) {
+        setLiveCameraPoseError(null);
+        if (!options.silent) {
+          setLiveCameraPoses(null);
+        }
+        return;
+      }
+      const message =
+        err?.response?.data?.error ||
+        err?.message ||
+        'Failed to load sparse camera poses';
+      setLiveCameraPoseError(message);
+    } finally {
+      if (!options.silent) {
+        setLiveCameraPoseLoading(false);
+      }
+    }
+  }, [projectId]);
+
+  const loadTrainingPreview = useCallback(async (options: { silent?: boolean } = {}) => {
+    try {
+      if (!options.silent) {
+        setTrainingPreviewLoading(true);
+      }
+      const data = await api.getTrainingPreview(projectId);
+      setTrainingPreview((prev) => {
+        if (prev?.version === data.version && prev?.preview_url === data.preview_url) {
+          return prev;
+        }
+        return data;
+      });
+      setTrainingPreviewError(null);
+    } catch (err: any) {
+      if (err?.response?.status === 404) {
+        setTrainingPreviewError(null);
+        if (!options.silent) {
+          setTrainingPreview(null);
+        }
+        return;
+      }
+      const message =
+        err?.response?.data?.error ||
+        err?.message ||
+        'Failed to load training preview';
+      setTrainingPreviewError(message);
+    } finally {
+      if (!options.silent) {
+        setTrainingPreviewLoading(false);
+      }
     }
   }, [projectId]);
 
@@ -648,6 +747,40 @@ export default function ProjectDetailPage() {
     return () => clearInterval(interval);
   }, [project?.status, loadProject, loadFramePreviews]);
 
+  useEffect(() => {
+    if (!showSparsePoseViewer) {
+      return;
+    }
+
+    loadLiveCameraPoses();
+    if (sparseStage?.status !== 'running') {
+      return;
+    }
+
+    const interval = setInterval(() => {
+      void loadLiveCameraPoses({ silent: true });
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [showSparsePoseViewer, sparseStage?.status, loadLiveCameraPoses]);
+
+  useEffect(() => {
+    if (!showTrainingPreview) {
+      return;
+    }
+
+    loadTrainingPreview();
+    if (trainingStage?.status !== 'running') {
+      return;
+    }
+
+    const interval = setInterval(() => {
+      void loadTrainingPreview({ silent: true });
+    }, 5000);
+
+    return () => clearInterval(interval);
+  }, [showTrainingPreview, trainingStage?.status, loadTrainingPreview]);
+
   // Keyboard navigation for image preview
   useEffect(() => {
     if (!showImagePreview) return;
@@ -749,6 +882,12 @@ export default function ProjectDetailPage() {
         if (retryParams.max_num_models) {
           params.max_num_models = parseInt(retryParams.max_num_models);
         }
+        if (retryParams.force_cpu_sparse_reconstruction) {
+          params.force_cpu_sparse_reconstruction = true;
+        }
+        if (retryParams.sparse_retry_sfm_engine) {
+          params.sparse_retry_sfm_engine = retryParams.sparse_retry_sfm_engine;
+        }
       }
 
       // Add parameters if retrying from gaussian_splatting stage
@@ -781,6 +920,8 @@ export default function ProjectDetailPage() {
         sequential_overlap: '',
         min_num_matches: '',
         max_num_models: '',
+        force_cpu_sparse_reconstruction: false,
+        sparse_retry_sfm_engine: '',
         extraction_mode: '',
         max_frames: '',
         target_fps: '',
@@ -835,6 +976,8 @@ export default function ProjectDetailPage() {
         sequential_overlap: '',
         min_num_matches: '',
         max_num_models: '',
+        force_cpu_sparse_reconstruction: false,
+        sparse_retry_sfm_engine: '',
         extraction_mode: project?.config?.extraction_mode || '',
         max_frames: project?.config?.max_frames?.toString() || '',
         target_fps: project?.config?.target_fps?.toString() || '',
@@ -1013,9 +1156,6 @@ export default function ProjectDetailPage() {
     ? (getStageLabelForEngine(currentStage.key, project?.config?.sfm_engine, project?.config?.feature_method)
       || PIPELINE_STAGES.find(s => s.key === currentStage.key)?.label)
     : 'Initializing';
-  const sparseStage = stages.find(s => s.key === 'sparse_reconstruction');
-  const featureExtractionStage = stages.find(s => s.key === 'feature_extraction');
-  const canInspectSparseModel = featureExtractionStage?.status === 'completed' || sparseStage?.status === 'completed';
   const projectInfoTiles = [
     { label: 'Input', value: project.input_type || 'unknown' },
     { label: 'Files', value: fileCount.toLocaleString() },
@@ -1238,6 +1378,42 @@ export default function ProjectDetailPage() {
                   </div>
                 </div>
               )}
+
+              <div className="brutal-card-muted p-4 md:p-5">
+                <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                  <div>
+                    <p className="brutal-label mb-1">Execution Policy</p>
+                    <h2 className="brutal-h3">CPU-First Ordered Video</h2>
+                    <p className="mt-2 text-sm text-[var(--text-secondary)]">
+                      Ordered video and orbit-style captures stay on the conservative incremental COLMAP path by default.
+                      GPU remains active for extraction, training, unordered photo sets, and explicit sparse retry overrides.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <span className="brutal-badge brutal-badge-warning">
+                      default {framework?.capture_pattern?.looks_like_video_orbit || project?.input_type === 'video' ? 'CPU incremental' : 'policy-driven'}
+                    </span>
+                    <span className="brutal-badge brutal-badge-info">GPU retry available</span>
+                  </div>
+                </div>
+                <div className="grid gap-3 md:grid-cols-3">
+                  <div className="brutal-card p-4">
+                    <p className="brutal-label mb-2">Ordered Video</p>
+                    <p className="text-sm font-bold uppercase text-[var(--ink)]">Incremental COLMAP</p>
+                    <p className="mt-2 text-xs text-[var(--text-secondary)]">Stable default for sequential, orbit, and video-like captures.</p>
+                  </div>
+                  <div className="brutal-card-muted p-4">
+                    <p className="brutal-label mb-2">Adaptive Control</p>
+                    <p className="text-sm font-bold uppercase text-[var(--ink)]">Budget + Recovery</p>
+                    <p className="mt-2 text-xs text-[var(--text-secondary)]">Auto-tuning can tighten extraction and recovery thresholds without silently switching the mapper family.</p>
+                  </div>
+                  <div className="brutal-card p-4">
+                    <p className="brutal-label mb-2">GPU Path</p>
+                    <p className="text-sm font-bold uppercase text-[var(--ink)]">Retry Or Photos</p>
+                    <p className="mt-2 text-xs text-[var(--text-secondary)]">Use sparse retry overrides or unordered photo policies when you want global/GPU reconstruction.</p>
+                  </div>
+                </div>
+              </div>
 
               {(progressivePlan || progressiveCheckpoints.length > 0) && (
                 <div className="grid gap-4 xl:grid-cols-[0.92fr_1.08fr]">
@@ -1893,6 +2069,173 @@ export default function ProjectDetailPage() {
                 })()}
               </div>
 
+              {showSparsePoseViewer && (
+                <div className="brutal-card p-4 md:p-5">
+                  <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                    <div>
+                      <p className="brutal-label mb-1">Live Sparse View</p>
+                      <h2 className="brutal-h3">Camera Pose Monitor</h2>
+                      <p className="mt-2 text-sm text-[var(--text-secondary)]">
+                        Inspect the current sparse model while reconstruction is running or review the final sparse layout afterward.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {liveCameraPoses?.is_live && (
+                        <span className="brutal-badge brutal-badge-success">Live snapshot</span>
+                      )}
+                      {liveCameraPoses && (
+                        <span className="brutal-badge">
+                          {liveCameraPoses.camera_count.toLocaleString()} cameras
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-[var(--text-secondary)]">
+                    <span className="brutal-badge brutal-badge-info">
+                      {liveCameraPoses?.source_label || 'Waiting for sparse snapshot...'}
+                    </span>
+                    {liveCameraPoses?.sparse_point_count ? (
+                      <span className="brutal-badge">
+                        {liveCameraPoses.sparse_point_count.toLocaleString()} points
+                      </span>
+                    ) : null}
+                  </div>
+
+                  <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]">
+                    <div className="brutal-card-dark min-h-[420px] overflow-hidden p-0">
+                      {liveCameraPoses ? (
+                        <Suspense
+                          fallback={
+                            <div className="flex h-[420px] items-center justify-center">
+                              <Loader className="h-8 w-8 animate-spin text-[var(--text-on-ink)]" />
+                            </div>
+                          }
+                        >
+                          <CameraPoseVisualization
+                            data={liveCameraPoses}
+                            selectedCamera={selectedSparseCamera}
+                            onCameraSelect={setSelectedSparseCamera}
+                          />
+                        </Suspense>
+                      ) : (
+                        <div className="flex h-[420px] items-center justify-center px-6 text-center text-sm text-[var(--text-on-ink-muted)]">
+                          {liveCameraPoseLoading
+                            ? 'Loading sparse camera poses...'
+                            : liveCameraPoseError
+                              ? liveCameraPoseError
+                              : 'Waiting for the first sparse reconstruction snapshot. This panel will update once enough cameras are registered.'}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="space-y-3">
+                      <div className="brutal-card-muted p-4">
+                        <p className="brutal-label mb-2">Selected Camera</p>
+                        {selectedSparseCamera ? (
+                          <div className="space-y-2 text-sm text-[var(--text-secondary)]">
+                            <p className="font-bold uppercase text-[var(--ink)]">{selectedSparseCamera.image_name}</p>
+                            <div className="grid grid-cols-3 gap-2 text-xs">
+                              {selectedSparseCamera.position.map((value, index) => (
+                                <div key={index} className="brutal-card p-2">
+                                  <p className="brutal-label mb-1">{['X', 'Y', 'Z'][index]}</p>
+                                  <p className="font-mono text-[var(--ink)]">{value.toFixed(3)}</p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : (
+                          <p className="text-sm text-[var(--text-secondary)]">
+                            Select a camera in the viewer to inspect its pose.
+                          </p>
+                        )}
+                      </div>
+                      <div className="brutal-card p-4">
+                        <p className="brutal-label mb-2">Full Inspection</p>
+                        <p className="mb-3 text-sm text-[var(--text-secondary)]">
+                          Open the dedicated camera pose page for a larger viewer and full sidebar navigation.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => router.push(`/camera-poses/${projectId}`)}
+                          className="brutal-btn brutal-btn-primary"
+                        >
+                          <Eye className="h-4 w-4" />
+                          Open Camera Poses
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {showTrainingPreview && (
+                <div className="brutal-card-muted p-4 md:p-5">
+                  <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                    <div>
+                      <p className="brutal-label mb-1">Live Training View</p>
+                      <h2 className="brutal-h3">Training Splat Preview</h2>
+                      <p className="mt-2 text-sm text-[var(--text-secondary)]">
+                        Preview the latest Gaussian splat snapshot during training without leaving the project page.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {trainingPreview?.is_live && (
+                        <span className="brutal-badge brutal-badge-success">Live</span>
+                      )}
+                      {trainingPreview?.iteration ? (
+                        <span className="brutal-badge">
+                          {trainingPreview.iteration.toLocaleString()}/{(trainingPreview.total_iterations || 0).toLocaleString()} iter
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-[var(--text-secondary)]">
+                    <span className="brutal-badge brutal-badge-info">
+                      {trainingPreview
+                        ? (trainingPreview.is_final ? 'Final training preview' : `Latest preview at iteration ${trainingPreview.iteration.toLocaleString()}`)
+                        : 'Waiting for the first training preview snapshot...'}
+                    </span>
+                    {trainingPreview?.preview_url && (
+                      <button
+                        type="button"
+                        onClick={() => router.push(`/viewer?file=${encodeURIComponent(trainingPreview.preview_url)}`)}
+                        className="brutal-btn brutal-btn-xs"
+                      >
+                        Open In Viewer
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="brutal-card min-h-[420px] overflow-hidden p-0">
+                    {trainingPreview?.preview_url ? (
+                      <Suspense
+                        fallback={
+                          <div className="flex h-[420px] items-center justify-center">
+                            <Loader className="h-8 w-8 animate-spin text-[var(--ink)]" />
+                          </div>
+                        }
+                      >
+                        <TrainingSplatPreview
+                          key={trainingPreview.version}
+                          plyUrl={trainingPreview.preview_url}
+                          onOpenFullViewer={() => router.push(`/viewer?file=${encodeURIComponent(trainingPreview.preview_url)}`)}
+                        />
+                      </Suspense>
+                    ) : (
+                      <div className="flex h-[420px] items-center justify-center px-6 text-center text-sm text-[var(--text-secondary)]">
+                        {trainingPreviewLoading
+                          ? 'Loading training preview...'
+                          : trainingPreviewError
+                            ? trainingPreviewError
+                            : 'Training preview is not available yet.'}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {(project.status === 'completed' || project.status === 'failed') && (
                 <div className="grid gap-4 xl:grid-cols-2">
                   <div className="brutal-card p-4 md:p-5">
@@ -2533,6 +2876,40 @@ export default function ProjectDetailPage() {
                       className="brutal-input"
                     />
                     <p className="mt-1 text-xs text-[var(--text-secondary)]">ค่าเริ่มต้น: 50 (เพิ่มเพื่อลองหลาย models)</p>
+                  </div>
+
+                  <div>
+                    <p className="brutal-label mb-1 block">
+                      Sparse Retry Engine
+                    </p>
+                    <select
+                      value={retryParams.sparse_retry_sfm_engine}
+                      onChange={(e) => setRetryParams({...retryParams, sparse_retry_sfm_engine: e.target.value})}
+                      className="brutal-select"
+                    >
+                      <option value="">ใช้ policy เดิม</option>
+                      <option value="colmap">Incremental COLMAP</option>
+                      <option value="glomap">Global Mapper</option>
+                      <option value="fastmap">FastMap</option>
+                    </select>
+                    <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                      ใช้ override นี้เมื่อต้องการบังคับ sparse retry ให้ลอง engine อื่นจาก policy ปัจจุบัน
+                    </p>
+                  </div>
+
+                  <div>
+                    <p className="brutal-label mb-1 block">
+                      Force CPU Sparse Reconstruction
+                    </p>
+                    <label className="flex items-center gap-2 border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-card)] px-3 py-2 text-sm text-[var(--text-secondary)] shadow-[var(--shadow-sm)]">
+                      <input
+                        type="checkbox"
+                        checked={retryParams.force_cpu_sparse_reconstruction}
+                        onChange={(e) => setRetryParams({...retryParams, force_cpu_sparse_reconstruction: e.target.checked})}
+                        className="h-4 w-4 border-[var(--ink)] text-[var(--ink)]"
+                      />
+                      <span>ปิด GPU สำหรับ mapper / bundle adjustment รอบ retry นี้ เพื่อเทียบกับเส้นทาง CPU เดิม</span>
+                    </label>
                   </div>
                 </div>
                 <p className="mt-3 text-xs text-[var(--text-secondary)]">

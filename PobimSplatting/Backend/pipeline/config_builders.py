@@ -800,18 +800,27 @@ def generate_hloc_pairs(pairs_path, image_list, matcher_type, matcher_params):
 
 
 def should_prefer_incremental_sfm(config, paths, num_images):
-    # Default behaviour: always prefer global SfM (colmap global_mapper / legacy GLOMAP)
-    # so the GPU-heavy Global Positioning + batch BA path runs instead of the CPU-bound
-    # incremental registration loop. The previous heuristics (robust mode, exhaustive
-    # matcher on small sets, ordered video/orbit frames) are preserved as an explicit
-    # opt-in via `config['prefer_incremental_sfm'] = True`.
+    retry_override = normalize_sfm_engine(config.get("sparse_retry_sfm_engine"))
+    if retry_override:
+        return False, None
+
     if normalize_sfm_engine(config.get("sfm_engine", "glomap")) != "glomap":
         return False, None
 
     if config.get("fast_sfm", False):
         return False, None
 
-    if not config.get("prefer_incremental_sfm", False):
+    if bool(config.get("force_cpu_sparse_reconstruction", False)):
+        return (
+            True,
+            "Sparse retry is explicitly pinned to the CPU incremental COLMAP path",
+        )
+
+    # Ordered video / orbit-style captures stay CPU-first by default for stability.
+    # Global mapper remains available for unordered photo sets, FastMap, and explicit
+    # sparse retry overrides.
+    explicit_preference = config.get("prefer_incremental_sfm")
+    if explicit_preference is False:
         return False, None
 
     matcher_type = normalize_matcher_type(config.get("matcher_type"))
@@ -833,7 +842,7 @@ def should_prefer_incremental_sfm(config, paths, num_images):
     if looks_like_video_orbit and num_images <= ORDERED_CAPTURE_POLICY_IMAGE_LIMIT:
         return (
             True,
-            "Ordered video/orbit frames are reconstructed more robustly with incremental COLMAP SfM",
+            "Ordered video/orbit frames default to incremental COLMAP SfM for better stability",
         )
 
     return False, None

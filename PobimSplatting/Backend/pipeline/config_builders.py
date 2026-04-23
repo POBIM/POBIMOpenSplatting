@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 
 from ..core import config as app_config
 from ..core.projects import append_log_line
+from .auto_tuning import attach_auto_tuning_to_config
 from .orbit_policy import (
     ORDERED_CAPTURE_POLICY_IMAGE_LIMIT,
     analyze_capture_pattern,
@@ -132,7 +133,7 @@ def _build_upload_adaptive_policy_state(
 
 
 def build_upload_policy_preview(config, media_summary):
-    preview_config = dict(config or {})
+    preview_config = attach_auto_tuning_to_config(config or {})
     preview_config["input_type"] = (
         media_summary.get("input_type") or preview_config.get("input_type") or "images"
     )
@@ -591,6 +592,7 @@ def build_upload_policy_preview(config, media_summary):
 
     return {
         "resource_contract": build_resource_aware_contract(),
+        "auto_tuning_summary": preview_config.get("auto_tuning_summary"),
         "heuristic_source": "backend",
         "input_profile": input_profile,
         "estimated_num_images": estimated_num_images,

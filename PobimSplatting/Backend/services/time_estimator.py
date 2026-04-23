@@ -77,6 +77,10 @@ class SmartTimeEstimator:
             'ultra': 4.5
         }
 
+    def _get_auto_tuning_snapshot(self, config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        policy = dict((config or {}).get('_auto_tuning_policy') or {})
+        return dict(policy.get('active_snapshot') or {})
+
     def detect_gpu(self) -> str:
         """Detect GPU model from nvidia-smi"""
         try:
@@ -196,6 +200,9 @@ class SmartTimeEstimator:
         use_separate_training_images = bool(config.get('use_separate_training_images', False))
         adaptive_frame_budget = bool(config.get('adaptive_frame_budget', True))
         adaptive_pair_scheduling = bool(config.get('adaptive_pair_scheduling', True))
+        auto_tuning_policy = dict(config.get('_auto_tuning_policy') or {})
+        auto_tuning_summary = dict(config.get('auto_tuning_summary') or auto_tuning_policy.get('summary') or {})
+        orchestration_tuning = dict(self._get_auto_tuning_snapshot(config).get('orchestration') or {})
         effective_oversample = (
             ((video_diagnostics.get('adaptive_frame_budget') or {}).get('effective_oversample_factor'))
             or video_diagnostics.get('oversample_factor')
@@ -227,9 +234,19 @@ class SmartTimeEstimator:
         if weak_boundary_ratio >= 0.05 or recovery_steps >= 2:
             score += 1
 
-        if gpu_vram_mb <= 8192 and score >= 4:
+        gpu_constrained_score_threshold = max(
+            3,
+            int(orchestration_tuning.get('gpu_constrained_score_threshold') or 4),
+        )
+        heavy_score_threshold = max(
+            gpu_constrained_score_threshold + 1,
+            int(orchestration_tuning.get('heavy_score_threshold') or 5),
+        )
+        wait_delay_scale = float(orchestration_tuning.get('wait_delay_scale') or 1.0)
+
+        if gpu_vram_mb <= 8192 and score >= gpu_constrained_score_threshold:
             profile_class = 'gpu_constrained'
-        elif score >= 5:
+        elif score >= heavy_score_threshold:
             profile_class = 'heavy'
         elif score >= 2:
             profile_class = 'balanced'
@@ -255,6 +272,10 @@ class SmartTimeEstimator:
             'heavy_stage_keys': list(HEAVY_STAGE_KEYS),
             'capture_budget_summary': capture_budget_summary,
             'score': score,
+            'auto_tuning_summary': auto_tuning_summary,
+            'wait_delay_scale': round(wait_delay_scale, 4),
+            'gpu_constrained_score_threshold': gpu_constrained_score_threshold,
+            'heavy_score_threshold': heavy_score_threshold,
             'summary': (
                 f"{profile_class} profile • {num_images} images • "
                 f"{colmap_resolution} COLMAP / {training_resolution} training"
@@ -282,18 +303,25 @@ class SmartTimeEstimator:
         ]
 
         lane = 'running'
+        lane_state = 'running'
         admission_reason = 'no heavy-stage contention detected'
         downgrade_reason = None
         estimated_start_delay = 0
+        wait_delay_scale = float(resource_profile.get('wait_delay_scale') or 1.0)
 
         if profile_class == 'gpu_constrained':
             downgrade_reason = 'gpu_vram_constrained'
             if stage_is_heavy:
                 lane = 'downgraded'
+                lane_state = 'downgraded'
                 admission_reason = 'heavy stage will run in a GPU-constrained lane'
         elif stage_is_heavy and blocking_projects:
             lane = 'waiting_for_heavy_slot'
-            estimated_start_delay = max(45, 45 * len(blocking_projects))
+            lane_state = 'waiting_for_heavy_slot'
+            estimated_start_delay = max(
+                45,
+                int(round((45 * len(blocking_projects)) * max(0.9, min(wait_delay_scale, 1.2)))),
+            )
             admission_reason = (
                 f"waiting for {len(blocking_projects)} active heavy-stage project(s) to clear"
             )
@@ -303,6 +331,7 @@ class SmartTimeEstimator:
 
         return {
             'resource_lane': lane,
+            'resource_lane_state': lane_state,
             'admission_reason': admission_reason,
             'downgrade_reason': downgrade_reason,
             'estimated_start_delay': estimated_start_delay,

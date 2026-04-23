@@ -43,6 +43,7 @@ export interface Project {
   iterations?: number;
   camera_model?: string;
   thumbnail_url?: string;
+  auto_tuning_summary?: AutoTuningSummary;
   config?: {
     smart_frame_selection?: boolean;
     oversample_factor?: number;
@@ -60,11 +61,13 @@ export interface Project {
     gpu_vram_mb?: number;
     summary?: string;
     resource_lane?: string;
+    resource_lane_state?: string;
     admission_reason?: string;
     downgrade_reason?: string | null;
     estimated_start_delay?: number;
     current_stage?: string;
     manual_override?: boolean;
+    auto_tuning_summary?: AutoTuningSummary;
     capture_budget_summary?: {
       input_type?: string;
       num_images?: number;
@@ -120,9 +123,11 @@ export interface ReconstructionFramework {
     summary?: string;
   };
   resource_lane?: string;
+  resource_lane_state?: string;
   admission_reason?: string;
   downgrade_reason?: string | null;
   estimated_start_delay?: number;
+  auto_tuning_summary?: AutoTuningSummary;
   capture_budget_summary?: {
     input_type?: string;
     num_images?: number;
@@ -204,6 +209,10 @@ export interface ReconstructionFramework {
     step_order?: number;
     status?: string;
     outcome?: string;
+    tuned_decision_used?: boolean;
+    failed_step_key?: string | null;
+    fallback_step?: string | null;
+    fallback_reason?: string | null;
     subset_image_count?: number;
     weak_boundary_count?: number;
     target_boundary_count?: number;
@@ -262,6 +271,41 @@ export interface ReconstructionFramework {
       zero_boundary_ratio?: number;
     };
   }>;
+}
+
+export interface AutoTuningSurfaceSummary {
+  status?: string;
+  label?: string;
+  summary?: string;
+  tuned?: boolean;
+  source?: string;
+  override_applied?: boolean;
+  confidence?: number | string;
+}
+
+export interface AutoTuningSummary {
+  schema_version?: string;
+  enabled?: boolean;
+  mode?: string;
+  active_snapshot?: string;
+  active_label?: string;
+  source_label?: string;
+  summary?: string;
+  derived_from_runs?: number;
+  confidence?: number | string;
+  last_updated_at?: string;
+  guardrails_applied?: string[];
+  fallback_to_stable?: boolean;
+  fallback_reason?: string | null;
+  stable_snapshot_version?: string;
+  tuned_snapshot_version?: string;
+  tuned_value_count?: number;
+  extraction?: AutoTuningSurfaceSummary;
+  matching?: AutoTuningSurfaceSummary;
+  recovery?: AutoTuningSurfaceSummary;
+  orchestration?: AutoTuningSurfaceSummary;
+  training?: AutoTuningSurfaceSummary;
+  export?: AutoTuningSurfaceSummary;
 }
 
 export interface ProcessingStatus {
@@ -469,6 +513,7 @@ export interface UploadPolicyPreview {
     pair_scheduling?: UploadPolicyAdaptiveState;
   };
   adaptive_comparisons?: UploadPolicyAdaptiveComparison[];
+  auto_tuning_summary?: AutoTuningSummary;
 }
 
 // API helper functions

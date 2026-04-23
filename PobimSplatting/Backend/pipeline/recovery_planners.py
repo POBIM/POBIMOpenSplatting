@@ -37,6 +37,24 @@ from .resource_contract import RECOVERY_PRECEDENCE, RESOURCE_AWARE_SCHEMA_VERSIO
 COLMAP_PAIR_ID_FACTOR = 2147483647
 
 
+def _recovery_auto_tuning(colmap_cfg):
+    snapshot = dict((colmap_cfg or {}).get('auto_tuning') or {})
+    tuning = dict(snapshot.get('recovery') or {})
+    return {
+        'weak_boundary_stop_ratio': float(tuning.get('weak_boundary_stop_ratio') or 0.02),
+        'weak_boundary_trigger_ratio': float(tuning.get('weak_boundary_trigger_ratio') or 0.08),
+        'weak_boundary_quadratic_ratio': float(tuning.get('weak_boundary_quadratic_ratio') or 0.03),
+        'pair_budget_scale': float(tuning.get('pair_budget_scale') or 1.0),
+        'final_loop_trigger_ratio': float(tuning.get('final_loop_trigger_ratio') or 0.05),
+        'final_loop_registered_ratio': float(tuning.get('final_loop_registered_ratio') or 0.95),
+    }
+
+
+def _tuned_decision_used(colmap_cfg):
+    summary = dict((colmap_cfg or {}).get('auto_tuning_summary') or {})
+    return summary.get('active_mode') == 'tuned'
+
+
 def analyze_pair_geometry_stats(database_path, bridge_window=6):
     if not Path(database_path).exists():
         return None
@@ -154,6 +172,7 @@ def _estimate_targeted_pair_budget(
     boundary_count,
     overlap,
     max_num_matches,
+    scale=1.0,
 ):
     boundary_count = max(1, int(boundary_count or 1))
     overlap = max(4, int(overlap or 8))
@@ -177,6 +196,8 @@ def _estimate_targeted_pair_budget(
     if max_num_matches and max_num_matches <= 32768:
         per_boundary_cap = min(per_boundary_cap, 72)
 
+    scale = max(0.9, min(float(scale or 1.0), 1.15))
+    per_boundary_cap = int(round(per_boundary_cap * scale))
     total_cap = per_boundary_cap * boundary_count
     total_cap = min(total_cap, 512 if gpu_total_vram_mb <= 8192 else 768)
 
@@ -361,6 +382,7 @@ def build_targeted_boundary_pair_plan(
     *,
     gpu_total_vram_mb=None,
     max_num_matches=None,
+    pair_budget_scale=1.0,
 ):
     ordered_names = [str(name) for name in (image_names or []) if name]
     if len(ordered_names) < 2:
@@ -375,6 +397,7 @@ def build_targeted_boundary_pair_plan(
         boundary_count=len(target_boundaries or []),
         overlap=overlap,
         max_num_matches=max_num_matches,
+        scale=pair_budget_scale,
     )
     remaining_total_cap = int(budget['total_cap'])
     plan_capped = False
@@ -507,6 +530,11 @@ def build_weak_window_subset_recovery_pass(paths, colmap_cfg, sparse_summary):
     bridge_p10 = float(geometry_stats.get('bridge_p10') or 0.0)
     bridge_min = float(geometry_stats.get('bridge_min') or 0.0)
     weak_boundary_count = int(geometry_stats.get('weak_boundary_count') or 0)
+    recovery_tuning = _recovery_auto_tuning(colmap_cfg)
+    weak_boundary_stop_ratio = float(recovery_tuning['weak_boundary_stop_ratio'])
+    weak_boundary_trigger_ratio = float(recovery_tuning['weak_boundary_trigger_ratio'])
+    weak_boundary_quadratic_ratio = float(recovery_tuning['weak_boundary_quadratic_ratio'])
+    pair_budget_scale = float(recovery_tuning['pair_budget_scale'])
     if weak_boundary_count <= 0:
         return None
 
@@ -545,6 +573,7 @@ def build_weak_window_subset_recovery_pass(paths, colmap_cfg, sparse_summary):
                 target_overlap,
                 gpu_total_vram_mb=get_gpu_total_vram_mb(),
                 max_num_matches=colmap_cfg.get('max_num_matches'),
+                pair_budget_scale=pair_budget_scale,
             )
             recovery_matcher_params = dict(matcher_params)
             recovery_matcher_params['SequentialMatching.overlap'] = str(target_overlap)
@@ -591,7 +620,12 @@ def build_weak_window_subset_recovery_pass(paths, colmap_cfg, sparse_summary):
                 ),
             }
 
-    if weak_boundary_ratio < 0.02 and zero_boundary_count == 0 and bridge_p10 >= 28 and bridge_min >= 18:
+    if (
+        weak_boundary_ratio < weak_boundary_stop_ratio
+        and zero_boundary_count == 0
+        and bridge_p10 >= 28
+        and bridge_min >= 18
+    ):
         return None
 
     current_overlap = max(4, int(matcher_params.get('SequentialMatching.overlap', '12')))
@@ -604,7 +638,7 @@ def build_weak_window_subset_recovery_pass(paths, colmap_cfg, sparse_summary):
     suggested_overlap = int((overlap_plan or {}).get('target_overlap') or current_overlap)
     overlap_cap = max(24, min(48, current_overlap + 14))
     target_overlap = min(max(current_overlap + 4, suggested_overlap), overlap_cap)
-    if zero_boundary_count > 0 or weak_boundary_ratio >= 0.08:
+    if zero_boundary_count > 0 or weak_boundary_ratio >= weak_boundary_trigger_ratio:
         target_overlap = min(max(target_overlap, current_overlap + 6), max(overlap_cap, current_overlap + 6))
 
     subset_max_images = min(144, max(48, target_overlap * max(2, min(4, weak_boundary_count))))
@@ -621,7 +655,9 @@ def build_weak_window_subset_recovery_pass(paths, colmap_cfg, sparse_summary):
     recovery_matcher_params = dict(matcher_params)
     recovery_matcher_params['SequentialMatching.overlap'] = str(target_overlap)
     recovery_matcher_params['SequentialMatching.quadratic_overlap'] = (
-        '1' if weak_boundary_ratio >= 0.03 or zero_boundary_count > 0 else matcher_params.get('SequentialMatching.quadratic_overlap', '0')
+        '1'
+        if weak_boundary_ratio >= weak_boundary_quadratic_ratio or zero_boundary_count > 0
+        else matcher_params.get('SequentialMatching.quadratic_overlap', '0')
     )
     recovery_matcher_params['SequentialMatching.loop_detection'] = '0'
 
@@ -686,19 +722,22 @@ def refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id=None):
         'bridge-balanced': 1,
         'bridge-recovery': 2,
     }
+    recovery_tuning = _recovery_auto_tuning(colmap_cfg)
+    weak_boundary_quadratic_ratio = float(recovery_tuning['weak_boundary_quadratic_ratio'])
+    weak_boundary_trigger_ratio = float(recovery_tuning['weak_boundary_trigger_ratio'])
     current_profile = colmap_cfg.get('orbit_safe_profile') or 'bridge-balanced'
     suggested_profile = current_profile
 
     if (
         geometry_stats['bridge_min'] < 18
         or geometry_stats['bridge_p10'] < 22
-        or geometry_stats['weak_boundary_ratio'] >= 0.08
+        or geometry_stats['weak_boundary_ratio'] >= weak_boundary_trigger_ratio
         or geometry_stats['zero_boundary_count'] > 0
     ):
         suggested_profile = 'bridge-recovery'
     elif (
         geometry_stats['bridge_p10'] < 30
-        or geometry_stats['weak_boundary_ratio'] >= 0.03
+        or geometry_stats['weak_boundary_ratio'] >= weak_boundary_quadratic_ratio
         or geometry_stats['adjacent_p10'] < 25
     ):
         suggested_profile = 'bridge-balanced'
@@ -758,11 +797,11 @@ def refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id=None):
         if overlap_plan and overlap_plan['target_overlap'] > overlap_plan['current_overlap']:
             colmap_cfg['matcher_params']['SequentialMatching.overlap'] = str(overlap_plan['target_overlap'])
 
-        if weak_boundary_ratio >= 0.03 or zero_boundary_count > 0:
+        if weak_boundary_ratio >= weak_boundary_quadratic_ratio or zero_boundary_count > 0:
             colmap_cfg['matcher_params']['SequentialMatching.quadratic_overlap'] = '1'
             colmap_cfg['matcher_params']['SequentialMatching.loop_detection'] = '1'
 
-        if weak_boundary_ratio >= 0.06 or zero_boundary_count > 0:
+        if weak_boundary_ratio >= max(weak_boundary_trigger_ratio * 0.75, weak_boundary_quadratic_ratio) or zero_boundary_count > 0:
             colmap_cfg['mapper_params']['Mapper.structure_less_registration_fallback'] = '1'
             colmap_cfg['mapper_params']['Mapper.abs_pose_min_num_inliers'] = str(
                 min(
@@ -1176,6 +1215,11 @@ def run_orbit_safe_bridge_recovery_matching_pass(
                     'step_order': _recovery_step_order(recovery_matching_pass.get('kind')),
                     'status': 'failed',
                     'outcome': 'abandoned_to_fallback',
+                    'failed_step_key': recovery_matching_pass.get('kind'),
+                    'fallback_step': (
+                        (colmap_cfg.get('final_recovery_matching_pass') or {}).get('kind')
+                    ),
+                    'fallback_reason': 'recovery matching failed before sparse continuity was restored',
                     'subset_image_count': len(subset_image_ids),
                     'weak_boundary_count': boundary_subset.get('weak_boundary_count', 0),
                     'target_boundary_count': len(boundary_subset.get('target_boundaries') or []),
@@ -1184,6 +1228,7 @@ def run_orbit_safe_bridge_recovery_matching_pass(
                         if runtime_state['cpu_fallback_used']
                         else ('gpu' if runtime_state['used_gpu'] else 'cpu')
                     ),
+                    'tuned_decision_used': _tuned_decision_used(colmap_cfg),
                     'schema_version': RESOURCE_AWARE_SCHEMA_VERSION,
                 },
             )
@@ -1308,6 +1353,17 @@ def run_orbit_safe_bridge_recovery_matching_pass(
             'step_order': _recovery_step_order(recovery_matching_pass.get('kind')),
             'status': 'completed',
             'outcome': outcome,
+            'failed_step_key': None,
+            'fallback_step': (
+                recovery_matching_pass.get('kind')
+                if recovery_matching_pass.get('kind') == 'final_loop_detection_subset'
+                else None
+            ),
+            'fallback_reason': (
+                'broad fallback remained necessary after local repair attempts'
+                if recovery_matching_pass.get('kind') == 'final_loop_detection_subset'
+                else None
+            ),
             'subset_image_count': len(subset_image_ids),
             'weak_boundary_count': boundary_subset.get('weak_boundary_count', 0),
             'target_boundary_count': len(targeted_boundary_keys),
@@ -1321,6 +1377,7 @@ def run_orbit_safe_bridge_recovery_matching_pass(
                 if runtime_state['cpu_fallback_used']
                 else ('gpu' if runtime_state['used_gpu'] else 'cpu')
             ),
+            'tuned_decision_used': _tuned_decision_used(colmap_cfg),
             'pair_targeted': use_pair_targeted_matching,
             'pair_count': int(pair_plan.get('pair_count') or 0),
             'pair_budget_cap': int(pair_plan.get('pair_budget_cap') or 0),
@@ -1482,6 +1539,9 @@ def run_boundary_frame_densification_recovery(
                 f"inserted {densification_plan['inserted_count']} frame(s) across "
                 f"{len(planned_boundaries)} weak boundary window(s)"
             ),
+            'failed_step_key': None,
+            'fallback_step': 'stubborn_boundary_subset',
+            'fallback_reason': 'densification inserted targeted frames before escalating to a stronger subset rematch if survivors remain',
             'subset_image_count': None,
             'weak_boundary_count': len(planned_boundaries),
             'target_boundary_count': int(densification_plan.get('selected_boundary_count') or len(planned_boundaries)),
@@ -1491,6 +1551,7 @@ def run_boundary_frame_densification_recovery(
             'quadratic_overlap': None,
             'loop_detection': None,
             'runtime_mode': 'reextract',
+            'tuned_decision_used': _tuned_decision_used(colmap_cfg),
             'targeted_boundaries': [
                 {
                     'key': _make_boundary_key(boundary.get('left_image_name'), boundary.get('right_image_name')),
@@ -1559,8 +1620,11 @@ def should_run_final_loop_detection_recovery(colmap_cfg, sparse_summary, num_ima
 
     best_registered = int(sparse_summary.get('best_registered') or 0)
     alternate_registered = int(sparse_summary.get('alternate_registered') or 0)
+    tuning = _recovery_auto_tuning(colmap_cfg)
+    final_loop_trigger_ratio = float(tuning['final_loop_trigger_ratio'])
+    final_loop_registered_ratio = float(tuning['final_loop_registered_ratio'])
 
-    if best_registered >= num_images:
+    if best_registered >= int(num_images * final_loop_registered_ratio):
         return False
 
-    return alternate_registered >= max(5, int(num_images * 0.05))
+    return alternate_registered >= max(5, int(num_images * final_loop_trigger_ratio))

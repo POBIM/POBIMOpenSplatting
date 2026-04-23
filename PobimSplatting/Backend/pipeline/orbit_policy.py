@@ -7,10 +7,21 @@ import re
 from pathlib import Path
 
 from ..core.projects import append_log_line, update_reconstruction_framework
-from .resource_contract import RECOVERY_PRECEDENCE, RESOURCE_AWARE_SCHEMA_VERSION
+from .resource_contract import (
+    RECOVERY_PRECEDENCE,
+    RESOURCE_AWARE_SCHEMA_VERSION,
+    missing_required_resource_fields,
+)
 from .frame_manifest import load_frame_selection_manifest
 
 logger = logging.getLogger(__name__)
+
+PHASE_REQUIRED_RESOURCE_FIELDS = {
+    'feature_extraction': ['resource_profile', 'resource_lane', 'capture_budget_summary', 'auto_tuning_summary'],
+    'feature_matching': ['resource_profile', 'resource_lane', 'capture_budget_summary', 'auto_tuning_summary'],
+    'sparse_reconstruction': ['resource_profile', 'resource_lane', 'capture_budget_summary', 'recovery_loop_summary', 'auto_tuning_summary'],
+    'gaussian_splatting': ['resource_profile', 'resource_lane', 'capture_budget_summary', 'recovery_loop_summary', 'training_budget_summary', 'auto_tuning_summary'],
+}
 
 ORDERED_CAPTURE_POLICY_IMAGE_LIMIT = 600
 ORBIT_SAFE_PROFILE_PERMISSIVENESS = {
@@ -744,16 +755,30 @@ def sync_reconstruction_framework(project_id, config, colmap_cfg, *, phase, extr
     for key in (
         'resource_profile',
         'resource_lane',
+        'resource_lane_state',
         'admission_reason',
         'downgrade_reason',
         'estimated_start_delay',
         'capture_budget_summary',
+        'auto_tuning_summary',
     ):
         if key in colmap_cfg:
             framework_state[key] = colmap_cfg.get(key)
 
     if extra:
         framework_state.update(extra)
+
+    missing_fields = missing_required_resource_fields(
+        framework_state,
+        required_fields=PHASE_REQUIRED_RESOURCE_FIELDS.get(phase),
+    )
+    if missing_fields:
+        logger.warning(
+            "Resource-aware framework payload is missing fields for %s during %s: %s",
+            project_id,
+            phase,
+            ", ".join(missing_fields),
+        )
 
     update_reconstruction_framework(project_id, framework_state)
 

@@ -1,22 +1,29 @@
 # Ordered Video Next Steps
 
-This document is the working follow-up guide for the ordered-video resource-aware pipeline.
+This document is the working closeout guide for the ordered-video resource-aware pipeline.
 
 Use it together with:
 
-- [ORDERED_VIDEO_RESOURCE_AWARE_ROADMAP.md](ORDERED_VIDEO_RESOURCE_AWARE_ROADMAP.md) for the full roadmap
-- [ORDERED_VIDEO_BENCHMARK_BASELINE.md](ORDERED_VIDEO_BENCHMARK_BASELINE.md) for the benchmark contract and run notes
+- [ORDERED_VIDEO_RESOURCE_AWARE_ROADMAP.md](ORDERED_VIDEO_RESOURCE_AWARE_ROADMAP.md) for the phase map and implementation history
+- [ORDERED_VIDEO_BENCHMARK_BASELINE.md](ORDERED_VIDEO_BENCHMARK_BASELINE.md) for the evidence and signoff contract
 
-## Current Status
+## Closeout Strategy
 
-The repo is no longer at POC-only stage.
+The closeout path is now split into two layers:
+
+1. Runtime evidence and self-tuning are the primary learning loop.
+2. Benchmarks and manual review are the signoff loop.
+
+This means the team does not need to block all progress on finding 3-5 perfect benchmark videos before the system gets smarter. The system should learn from accumulated real runs, while validation and benchmark notes remain the promotion gate for defaults and release decisions.
+
+## Current Implementation Anchors
 
 Implemented already:
 
 - adaptive frame budget
 - progressive pair scheduling
 - upload and retry controls for adaptive flags
-- project diagnostics for extraction and progressive matching
+- project diagnostics for extraction, matching, and recovery
 - benchmark script with saved report support
 - weak-window subset rematch
 - survivor-only boundary densification
@@ -28,25 +35,50 @@ Implemented already:
 - project resource profile and resource lane foundation
 - training budget summary propagation
 
+## Docs And Validation Track Deliverables
+
+This track owns operator-facing closeout material and lightweight inspection tooling. It does not change backend policy logic directly.
+
+Deliverables in this track:
+
+- keep the rollout docs aligned with the current contract
+- define how runtime evidence should be reviewed round by round
+- keep benchmark material as signoff guidance, not the only path to confidence
+- provide a lightweight operator script to inspect accumulated ordered-video evidence
+
 ## What Is Still Missing For A Full Rollout
 
-### 1. Phase 2 Signoff Is Not Finished
+### 1. Contract And Evidence Need To Become Durable
 
-The recovery loop is much stronger now, but it is not fully closed operationally until real-video evidence exists.
+The contract exists, but the rollout is not complete until the repo consistently emits and reviews these fields:
+
+- `resource_profile`
+- `resource_lane`
+- `capture_budget_summary`
+- `recovery_loop_summary`
+- `training_budget_summary`
+- future `auto_tuning_summary`
 
 Still needed:
 
-- run 3-5 real ordered-video benchmark sets
-- compare `baseline` vs `adaptive current` vs `adaptive candidate`
-- tune pair-budget caps from real footage instead of synthetic-only validation
-- confirm weak-boundary datasets repair locally more often than they fall back broadly
-- record threshold notes for:
-  - severity tiers
-  - pair-budget caps
-  - stubborn escalation trigger
-  - broad fallback trigger
+- persistent runtime evidence store under `PobimSplatting/runtime/auto_tuning/`
+- stable snapshot and tuned snapshot persistence
+- explicit operator visibility for which values are default and which are tuned
+- drift checks when payload shape or naming changes
 
-### 2. Phase 3 Is Only Foundation-Level
+### 2. Phase 2 Is Strong But Not Yet Self-Calibrated
+
+The recovery loop is already much stronger than the original POC, but the remaining work is now about safe self-calibration rather than only adding more passes.
+
+Still needed:
+
+- tuned thresholds for strong geometry and weak-boundary escalation
+- tuned pair-budget cap scaling
+- automatic fallback to stable defaults if tuned behavior degrades
+- consistent `tuned_decision_used` markers in recovery history
+- repeated review of unresolved and fallback-heavy cases from accumulated runs
+
+### 3. Phase 3 Needs Machine-Aware Coordination
 
 Current state:
 
@@ -57,13 +89,12 @@ Current state:
 
 Still needed:
 
-- stronger concurrency policy across more than one active large project
-- lane-specific downgrade behavior instead of only visibility and waiting
-- better estimated delay calculation from active stage durations
-- clearer project-list visibility for queued/downgraded jobs, not only project-detail visibility
-- retry semantics that clearly distinguish manual override from automatic downgrade in every stage
+- resource-lane tuning from recent run history, not only static rules
+- clearer delay estimation from actual active-job timings
+- stronger downgrade and defer semantics for large concurrent jobs
+- operator-facing visibility for lane decisions outside the detail page
 
-### 3. Phase 4 Is Only Partially Wired
+### 4. Phase 4 Needs End-To-End Lifecycle Continuity
 
 Current state:
 
@@ -72,172 +103,181 @@ Current state:
 
 Still needed:
 
-- mesh/export services use `resource_profile` or `capture_budget_summary`
-- conservative export path for constrained jobs
-- staged or deferred heavy post-processing for large repaired datasets
-- review/result surfaces show lifecycle continuity through export, not just reconstruction
+- export and mesh services consume the same resource-aware context
+- constrained jobs take a conservative export path
+- heavy repaired jobs can take staged or delayed heavy post-processing
+- review/result surfaces show continuity from extraction through export
 
-### 4. Phase 5 Has Not Started Properly
+### 5. Phase 5 Is Mostly Hardening And Release Work
 
 Still needed:
 
-- stable defaults vs experimental overrides policy
-- default-on decision for ordered-video path
+- stable defaults versus experimental overrides policy
+- default-on decision for the ordered-video path
 - rollback switch documentation
 - release checklist
-- cleanup of debug-heavy field names that operators no longer need
-- operator docs for the final default workflow
+- final cleanup of debug-only naming or fields that operators no longer need
+- final operator workflow docs for the default path
 
 ## Recommended Execution Order
 
 Follow this order unless a production bug interrupts it.
 
-### Step A: Close Phase 2 With Real Evidence
+### Step A: Build The Runtime Evidence Loop
 
 Do this first.
 
-- collect 3-5 real videos
-- fill `ORDERED_VIDEO_BENCHMARK_BASELINE.md`
-- tune threshold notes
-- verify that local repair wins on weak-boundary cases
+- persist ordered-video run evidence
+- persist stable and tuned snapshot files
+- expose clear source metadata for tuned values
+- review evidence with the operator helper after each serious round
 
 Exit gate:
 
-- long ordered-video cases show pair-count or runtime savings
-- sparse continuity remains acceptable
-- project page clearly explains final repair path
+- the repo has durable evidence records from real runs
+- the team can inspect current defaults, tuned values, and recovery outcomes without reading raw logs first
 
-### Step B: Strengthen Phase 3 Resource Orchestration
+### Step B: Use Evidence To Close Phase 2
 
-Do this only after Phase 2 thresholds are credible.
+Do this before widening orchestration aggressively.
 
-- improve lane selection from active machine load
-- add better heavy-stage blocking logic
-- refine delay estimates from active projects
-- show lane/downgrade reasons in project list and status surfaces
+- review weak-boundary and fallback-heavy runs
+- tune escalation thresholds conservatively
+- tune pair-budget cap behavior
+- confirm stable-default fallback is ready if tuned behavior regresses
 
 Exit gate:
 
-- two large video projects on one machine do not thrash CPU/GPU as before
-- operators can see why a job is waiting or downgraded
+- local repair wins more often without making the state harder to read
+- unresolved and broad-fallback cases are explainable from evidence reports
 
-### Step C: Complete Phase 4 Downstream Propagation
+### Step C: Strengthen Phase 3 Resource Orchestration
 
-- wire `resource_profile` into mesh/export services
-- introduce conservative export behavior for constrained jobs
-- surface repaired-capture context in review/export UI
+- use accumulated runtime evidence to refine lane selection
+- improve heavy-stage admission and downgrade behavior
+- refine start-delay estimates from recent stage timing
+- improve operator visibility for deferred and downgraded jobs
+
+Exit gate:
+
+- two large video projects on one machine do not thrash CPU or GPU as before
+- operators can tell why a job is waiting or downgraded
+
+### Step D: Complete Phase 4 Downstream Propagation
+
+- wire resource-aware context into mesh and export services
+- add conservative and staged downstream paths where appropriate
+- surface lifecycle continuity in review and export-facing diagnostics
 
 Exit gate:
 
 - lifecycle diagnostics stay coherent from extraction through training and export
 
-### Step D: Finish Phase 5 Hardening
+### Step E: Finish Phase 5 Hardening
 
 - decide defaults
-- document rollback path
+- document rollback
 - publish release checklist
-- trim debug-only surfaces if they are no longer needed
+- reduce debug-heavy surfaces after the policy stabilizes
 
 Exit gate:
 
 - ordered-video path can ship default-on with rollback preserved
 
-## Concrete Work Items By Seam
+## Evidence Sources And Operator Workflow
 
-### Backend Recovery And Matching
+### Primary Evidence Sources
 
-Main files:
+- `PobimSplatting/Backend/projects_db.json`
+- `PobimSplatting/runtime/auto_tuning/ordered_video_evidence.json`
+- `PobimSplatting/runtime/auto_tuning/ordered_video_tuned_snapshot.json`
+- `PobimSplatting/runtime/auto_tuning/ordered_video_stable_snapshot.json`
+- optional benchmark JSON or JSONL outputs from `scripts/benchmark_ordered_video_policy.py`
 
-- `PobimSplatting/Backend/pipeline/recovery_planners.py`
-- `PobimSplatting/Backend/pipeline/stage_sparse.py`
-- `PobimSplatting/Backend/pipeline/stage_features.py`
+### Operator Helper
 
-Next tasks:
+Use the lightweight inspection helper to summarize what the system knows right now:
 
-- tune pair-budget caps from real data
-- refine fallback trigger conditions
-- ensure every failed recovery pass leaves understandable history
-- keep recovery precedence stable
+```bash
+python3 scripts/report_ordered_video_evidence.py --format markdown
+```
 
-### Backend Resource Orchestration
+To save a report:
 
-Main files:
+```bash
+python3 scripts/report_ordered_video_evidence.py \
+  --format markdown \
+  --output /tmp/ordered_video_evidence_report.md
+```
 
-- `PobimSplatting/Backend/services/time_estimator.py`
-- `PobimSplatting/Backend/core/projects.py`
-- `PobimSplatting/Backend/pipeline/runner.py`
-- `PobimSplatting/Backend/routes/api.py`
+To combine project-derived evidence with benchmark JSONL notes:
 
-Next tasks:
+```bash
+python3 scripts/report_ordered_video_evidence.py \
+  --benchmark-jsonl /path/to/ordered_video_policy_runs.jsonl
+```
 
-- improve lane selection from actual active-stage pressure
-- strengthen delay estimates
-- expose lane state consistently in status and project list APIs
+### Practical Review Loop
 
-### Downstream Training And Export
+Run this loop after each meaningful backend round:
 
-Main files:
+1. Run ordered-video jobs normally.
+2. Inspect the evidence report.
+3. Check whether unresolved, fallback-heavy, or pair-budget-capped cases are rising.
+4. Adjust policy logic in the owning backend seam.
+5. Re-run the evidence report and only then decide whether a synthetic or manual benchmark signoff round is needed.
 
-- `PobimSplatting/Backend/pipeline/stage_training.py`
-- `PobimSplatting/Backend/services/mesh_converter.py`
-- `PobimSplatting/Backend/services/mvs_mesher.py`
+## Team Handoff By Seam
 
-Next tasks:
+### Docs And Validation Track
 
-- carry budget class into export behavior
-- add conservative path for constrained or repaired projects
-- keep logs and diagnostics aligned with upstream policy
+Owns:
 
-### Frontend Operator Surfaces
+- this closeout guide
+- the benchmark and signoff sheet
+- evidence inspection helper
+- rollout checklists and operator-facing review instructions
 
-Main files:
+Does not own:
 
-- `PobimSplatting/Frontend/src/lib/api.ts`
-- `PobimSplatting/Frontend/src/app/projects/[id]/page.tsx`
-- `PobimSplatting/Frontend/src/app/upload/page.tsx`
+- backend tuning math
+- frontend operator pages
+- recovery branching logic
 
-Next tasks:
+### Backend Teams
 
-- keep project-detail diagnostics high-signal
-- add project-list lane visibility
-- reduce debug noise after thresholds stabilize
+Need to provide:
 
-## Benchmark And Validation Checklist
+- persisted evidence records
+- tuned snapshot persistence
+- stable snapshot fallback behavior
+- lane and recovery summaries that stay contract-compatible
 
-Run this for each serious round:
+### Frontend Team
 
-- `baseline`
-- `adaptive current`
-- `adaptive plus candidate change`
+Needs to surface:
 
-Record at least:
+- stable versus tuned value visibility
+- concise project-level summaries for lane, recovery, and downstream context
+- override impact messaging without increasing operator noise
 
-- extracted image count
-- pair count
-- bridge p10
-- bridge min
-- weak boundary ratio
-- zero boundary ratio
-- registered image ratio
-- extraction runtime
-- matching runtime
-- sparse runtime
-- total runtime
+## Release Gate
 
-Also record:
+Do not call the ordered-video path finished until all of these are true:
 
-- final recovery path
-- final reason code
-- whether pair budget was capped
-- whether broad fallback was used
-- whether the result is operator-readable from UI alone
+- runtime evidence exists and is readable
+- stable and tuned snapshots are distinguishable
+- recovery summaries remain deterministic and operator-readable
+- resource-lane decisions are explainable
+- training and export surfaces preserve upstream context
+- rollback instructions exist
 
 ## Practical Next Command
 
-If the next round is implementation, the best next step is:
+If the next round is docs or validation work, the best next step is:
 
-1. benchmark real videos and fill the baseline note sheet
-2. tune Phase 2 thresholds from that evidence
-3. then continue Phase 3 orchestration work
+1. run `python3 scripts/report_ordered_video_evidence.py --format markdown`
+2. inspect which evidence files are present and which are still missing
+3. use that report to drive the next backend or frontend implementation round
 
-Do not widen Phase 3 or Phase 4 aggressively before Phase 2 benchmark signoff is credible.
+Do not treat manual benchmark sheets as the only source of truth anymore. Use them to sign off a release candidate, not to replace the runtime evidence loop.

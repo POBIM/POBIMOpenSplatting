@@ -2,7 +2,7 @@
 
 import { useParams, useRouter } from 'next/navigation';
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { api, Project, PlyFile } from '@/lib/api';
+import { api, AutoTuningSummary, Project, PlyFile } from '@/lib/api';
 import { websocket } from '@/lib/websocket';
 import { getMatcherLabelWithMode, getSfmEngineCompactLabel, getSfmEngineLabel, isGlobalSfmEngine } from '@/lib/sfm-display';
 import MeshExportPanel from '@/components/MeshExportPanel';
@@ -127,6 +127,65 @@ const formatMetric = (value?: number | null, digits = 1) => {
     return '--';
   }
   return value.toFixed(digits);
+};
+
+const formatTuningConfidence = (value?: number | string | null) => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return `${value}`;
+  }
+  if (typeof value === 'string' && value.trim().length > 0) {
+    return value;
+  }
+  return '--';
+};
+
+const formatShortTimestamp = (value?: string | null) => {
+  if (!value) {
+    return '--';
+  }
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) {
+    return value;
+  }
+  return new Date(parsed).toLocaleString([], {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+};
+
+const getAutoTuningBadge = (summary?: AutoTuningSummary | null) => {
+  if (!summary) {
+    return null;
+  }
+
+  const label = summary.active_label
+    ?? summary.source_label
+    ?? summary.active_snapshot
+    ?? summary.mode
+    ?? 'auto tuning';
+
+  if (summary.fallback_to_stable) {
+    return {
+      label,
+      tone: 'brutal-badge brutal-badge-warning',
+    };
+  }
+
+  if ((summary.active_snapshot || summary.mode || '').toLowerCase().includes('tuned')) {
+    return {
+      label,
+      tone: 'brutal-badge brutal-badge-success',
+    };
+  }
+
+  return {
+    label,
+    tone: 'brutal-badge brutal-badge-info',
+  };
 };
 
 const extractLogTimestamp = (line: string): number | null => {
@@ -270,9 +329,25 @@ export default function ProjectDetailPage() {
   const recoveryLoopSummary = framework?.recovery_loop_summary;
   const effectiveResourceProfile = framework?.resource_profile ?? resourceCoordination;
   const effectiveResourceLane = framework?.resource_lane ?? resourceCoordination?.resource_lane;
+  const effectiveLaneState = framework?.resource_lane_state ?? resourceCoordination?.resource_lane_state;
   const effectiveAdmissionReason = framework?.admission_reason ?? resourceCoordination?.admission_reason;
   const effectiveDowngradeReason = framework?.downgrade_reason ?? resourceCoordination?.downgrade_reason;
   const effectiveStartDelay = framework?.estimated_start_delay ?? resourceCoordination?.estimated_start_delay;
+  const autoTuningSummary = framework?.auto_tuning_summary ?? resourceCoordination?.auto_tuning_summary ?? project?.auto_tuning_summary;
+  const autoTuningBadge = getAutoTuningBadge(autoTuningSummary);
+  const tunedRecoveryStepCount = recoveryHistory.filter((step) => step.tuned_decision_used).length;
+  const autoTuningSurfaces = autoTuningSummary
+    ? [
+        { label: 'Extraction', surface: autoTuningSummary.extraction },
+        { label: 'Matching', surface: autoTuningSummary.matching },
+        { label: 'Recovery', surface: autoTuningSummary.recovery },
+        { label: 'Orchestration', surface: autoTuningSummary.orchestration },
+        { label: 'Training', surface: autoTuningSummary.training },
+        { label: 'Export', surface: autoTuningSummary.export },
+      ].filter((entry): entry is { label: string; surface: NonNullable<AutoTuningSummary['extraction']> } =>
+        Boolean(entry.surface?.summary || entry.surface?.label || entry.surface?.status),
+      )
+    : [];
   const sparseModelSummary = framework?.sparse_model_summary;
   const logGroups = useMemo(() => groupLogsByStage(logs, stages), [logs, stages]);
   const stageLogs = useMemo(() => {
@@ -1242,8 +1317,8 @@ export default function ProjectDetailPage() {
                 </div>
               )}
 
-              {(effectiveResourceProfile || recoveryLoopSummary) && (
-                <div className="grid gap-4 xl:grid-cols-[0.95fr_1.05fr]">
+              {(effectiveResourceProfile || recoveryLoopSummary || autoTuningSummary) && (
+                <div className={`grid gap-4 ${autoTuningSummary ? 'xl:grid-cols-3' : 'xl:grid-cols-[0.95fr_1.05fr]'}`}>
                   {effectiveResourceProfile && (
                     <div className="brutal-card p-4 md:p-5">
                       <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
@@ -1254,7 +1329,10 @@ export default function ProjectDetailPage() {
                             Machine-aware lane selection for ordered-video heavy stages.
                           </p>
                         </div>
-                        {effectiveResourceLane && <span className="brutal-badge brutal-badge-info">{effectiveResourceLane}</span>}
+                        <div className="flex flex-wrap gap-2">
+                          {effectiveResourceLane && <span className="brutal-badge brutal-badge-info">{effectiveResourceLane}</span>}
+                          {effectiveLaneState && <span className="brutal-badge">{effectiveLaneState}</span>}
+                        </div>
                       </div>
 
                       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -1263,6 +1341,7 @@ export default function ProjectDetailPage() {
                           ['GPU', effectiveResourceProfile.gpu_model ?? '--'],
                           ['VRAM', effectiveResourceProfile.gpu_vram_mb ? `${effectiveResourceProfile.gpu_vram_mb} MB` : '--'],
                           ['Delay', effectiveStartDelay ? `${effectiveStartDelay}s` : '--'],
+                          ['Lane state', effectiveLaneState ?? '--'],
                         ].map(([label, value]) => (
                           <div key={label} className="brutal-card-muted p-4">
                             <p className="brutal-label mb-2">{label}</p>
@@ -1287,6 +1366,72 @@ export default function ProjectDetailPage() {
                     </div>
                   )}
 
+                  {autoTuningSummary && (
+                    <div className="brutal-card p-4 md:p-5">
+                      <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                        <div>
+                          <p className="brutal-label mb-1">Policy Source</p>
+                          <h2 className="brutal-h3">Auto-Tuning Summary</h2>
+                          <p className="mt-2 text-sm text-[var(--text-secondary)]">
+                            Stable-vs-tuned visibility for decisions derived from prior runtime evidence.
+                          </p>
+                        </div>
+                        {autoTuningBadge && <span className={autoTuningBadge.tone}>{autoTuningBadge.label}</span>}
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                        {[
+                          ['Runs', autoTuningSummary.derived_from_runs ?? '--'],
+                          ['Confidence', formatTuningConfidence(autoTuningSummary.confidence)],
+                          ['Tuned values', autoTuningSummary.tuned_value_count ?? '--'],
+                          ['Schema', autoTuningSummary.schema_version ?? '--'],
+                          ['Stable snapshot', autoTuningSummary.stable_snapshot_version ?? '--'],
+                          ['Updated', formatShortTimestamp(autoTuningSummary.last_updated_at)],
+                        ].map(([label, value]) => (
+                          <div key={label} className="brutal-card-muted p-4">
+                            <p className="brutal-label mb-2">{label}</p>
+                            <p className="text-sm font-black uppercase tracking-tight text-[var(--ink)]">{value}</p>
+                          </div>
+                        ))}
+                      </div>
+
+                      {(autoTuningSummary.summary || autoTuningSummary.source_label || autoTuningSummary.fallback_reason) && (
+                        <div className="mt-3 border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-muted)] p-4 text-sm text-[var(--text-secondary)]">
+                          {autoTuningSummary.summary || autoTuningSummary.source_label || 'No tuning summary recorded'}
+                          {autoTuningSummary.fallback_reason ? ` • fallback=${autoTuningSummary.fallback_reason}` : ''}
+                        </div>
+                      )}
+
+                      {!!autoTuningSummary.guardrails_applied?.length && (
+                        <div className="mt-3 flex flex-wrap gap-2 text-xs text-[var(--text-secondary)]">
+                          {autoTuningSummary.guardrails_applied.slice(0, 6).map((guardrail, index) => (
+                            <span key={`${guardrail}-${index}`} className="border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-card)] px-2 py-1">
+                              {guardrail}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      {autoTuningSurfaces.length > 0 && (
+                        <div className="mt-3 space-y-2">
+                          {autoTuningSurfaces.map(({ label, surface }) => (
+                            <div key={label} className="border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-card)] p-4">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <p className="text-sm font-black uppercase tracking-tight text-[var(--ink)]">{label}</p>
+                                <div className="flex flex-wrap gap-2 text-[11px] font-bold uppercase tracking-[0.16em]">
+                                  {surface.label && <span className="brutal-badge brutal-badge-info">{surface.label}</span>}
+                                  {surface.status && <span className="brutal-badge">{surface.status}</span>}
+                                  {surface.tuned ? <span className="brutal-badge brutal-badge-success">tuned</span> : <span className="brutal-badge">stable</span>}
+                                </div>
+                              </div>
+                              <p className="mt-2 text-sm text-[var(--text-secondary)]">{surface.summary || 'No tuning summary recorded for this surface.'}</p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {recoveryLoopSummary && (
                     <div className="brutal-card-muted p-4 md:p-5">
                       <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
@@ -1297,7 +1442,10 @@ export default function ProjectDetailPage() {
                             Final repair path chosen after progressive matching and local repair passes.
                           </p>
                         </div>
-                        {recoveryLoopSummary.final_path && <span className="brutal-badge brutal-badge-warning">{recoveryLoopSummary.final_path}</span>}
+                        <div className="flex flex-wrap gap-2">
+                          {recoveryLoopSummary.final_path && <span className="brutal-badge brutal-badge-warning">{recoveryLoopSummary.final_path}</span>}
+                          {tunedRecoveryStepCount > 0 && <span className="brutal-badge brutal-badge-success">tuned steps {tunedRecoveryStepCount}</span>}
+                        </div>
                       </div>
 
                       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4 text-sm text-[var(--text-secondary)]">
@@ -1354,6 +1502,7 @@ export default function ProjectDetailPage() {
                             {step.status && <span className="brutal-badge">{step.status}</span>}
                             {step.outcome && <span className="brutal-badge brutal-badge-warning">{step.outcome}</span>}
                             {step.reason_code && <span className="brutal-badge brutal-badge-info">{step.reason_code}</span>}
+                            {step.tuned_decision_used ? <span className="brutal-badge brutal-badge-success">tuned</span> : null}
                             {step.runtime_mode && <span className="brutal-badge">{step.runtime_mode}</span>}
                             {step.subset_image_count ? <span className="brutal-badge brutal-badge-info">subset {step.subset_image_count}</span> : null}
                             {step.pair_targeted ? <span className="brutal-badge brutal-badge-info">pairs {step.pair_count ?? '--'}</span> : null}
@@ -1385,6 +1534,12 @@ export default function ProjectDetailPage() {
                                 {boundary.outcome ? ` • ${boundary.outcome}` : ''}
                               </span>
                             ))}
+                          </div>
+                        )}
+                        {(step.failed_step_key || step.fallback_step || step.fallback_reason) && (
+                          <div className="mt-3 border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-muted)] px-3 py-2 text-xs text-[var(--text-secondary)]">
+                            failed step {step.failed_step_key ?? '--'} • fallback {step.fallback_step ?? '--'}
+                            {step.fallback_reason ? ` • ${step.fallback_reason}` : ''}
                           </div>
                         )}
                         {!step.surviving_target_boundaries?.length && step.target_boundary_count && step.kind === 'weak_window_subset' && (

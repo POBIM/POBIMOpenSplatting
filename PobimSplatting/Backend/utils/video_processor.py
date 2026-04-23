@@ -1974,6 +1974,14 @@ class VideoProcessor:
             and extraction_config.get('adaptive_frame_budget', False)
         )
 
+    def _get_auto_tuning_snapshot(self, extraction_config: Dict[str, Any]) -> Dict[str, Any]:
+        policy = dict(
+            extraction_config.get('auto_tuning_policy')
+            or extraction_config.get('_auto_tuning_policy')
+            or {}
+        )
+        return dict(policy.get('active_snapshot') or {})
+
     def _collect_adaptive_budget_quality_telemetry(
         self,
         video_path,
@@ -2087,6 +2095,8 @@ class VideoProcessor:
         duration = float(video_info.get('duration') or ((total_frames / fps) if fps > 0 else 0.0))
         bitrate = int(video_info.get('bit_rate') or 0)
         codec_name = str(video_info.get('codec_name') or '').lower()
+        auto_tuning_snapshot = self._get_auto_tuning_snapshot(extraction_config)
+        frame_budget_tuning = dict(auto_tuning_snapshot.get('frame_budget') or {})
         scale = 1.0
         adjustments = []
 
@@ -2175,6 +2185,14 @@ class VideoProcessor:
                     f"preview duplicate failure ratio {duplicate_failure_ratio:.2f} suggests oversampling would add near-duplicates",
                 )
 
+        tuned_scale = float(frame_budget_tuning.get('scale') or 1.0)
+        if abs(tuned_scale - 1.0) >= 0.01:
+            apply_adjustment(
+                'auto_tuned_budget_scale',
+                tuned_scale,
+                f"runtime evidence tuned frame budget scale to {tuned_scale:.2f}",
+            )
+
         effective_oversample_factor = max(1, min(20, int(round(requested_oversample_factor * scale))))
         density_scale = effective_oversample_factor / max(requested_oversample_factor, 1)
 
@@ -2183,6 +2201,7 @@ class VideoProcessor:
             'requested_oversample_factor': requested_oversample_factor,
             'effective_oversample_factor': effective_oversample_factor,
             'density_scale': round(float(density_scale), 4),
+            'tuned_scale': round(float(tuned_scale), 4),
             'adjustments': adjustments,
             'target_output_count': int(target_output_count),
             'video_profile': {

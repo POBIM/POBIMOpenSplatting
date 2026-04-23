@@ -570,6 +570,27 @@ export default function UploadPage() {
   const resolvedEstimatedNumImages = policyPreview?.estimated_num_images;
   const policyToneKey = policyPreview?.expected_policy?.toneKey ?? resolvedInputProfile;
   const adaptiveComparisons = policyPreview?.adaptive_comparisons ?? [];
+  const autoTuningSummary = policyPreview?.auto_tuning_summary;
+  const autoTuningLabel = autoTuningSummary
+    ? autoTuningSummary.active_label
+      ?? autoTuningSummary.source_label
+      ?? autoTuningSummary.active_snapshot
+      ?? autoTuningSummary.mode
+      ?? 'auto tuning'
+    : null;
+  const autoTuningTone = autoTuningSummary?.fallback_to_stable
+    ? 'border-amber-200 bg-amber-50 text-amber-900'
+    : (autoTuningSummary?.active_snapshot || autoTuningSummary?.mode || '').toLowerCase().includes('tuned')
+      ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+      : 'border-slate-200 bg-slate-50 text-slate-700';
+  const autoTuningSurfaces = autoTuningSummary
+    ? [
+        { label: 'Extraction', surface: autoTuningSummary.extraction },
+        { label: 'Matching', surface: autoTuningSummary.matching },
+        { label: 'Recovery', surface: autoTuningSummary.recovery },
+        { label: 'Orchestration', surface: autoTuningSummary.orchestration },
+      ].filter((entry) => Boolean(entry.surface?.summary || entry.surface?.label || entry.surface?.status))
+    : [];
   const PolicyIcon = policyToneKey === 'video'
     ? FileVideo
     : policyToneKey === 'mixed'
@@ -866,6 +887,59 @@ export default function UploadPage() {
                       )}
                   </div>
                 </div>
+                {autoTuningSummary && (
+                  <div className="mt-4 border border-[color:var(--ink)] bg-white/70 p-4 text-gray-900 shadow-[var(--shadow-sm)]">
+                    <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                      <div>
+                        <p className="brutal-label">Policy Source</p>
+                        <p className="mt-1 text-sm text-gray-700">
+                          Upcoming self-tuning decisions will surface here without replacing the stable defaults silently.
+                        </p>
+                      </div>
+                      {autoTuningLabel && (
+                        <span className={`border px-2 py-1 text-[11px] font-semibold ${autoTuningTone}`}>
+                          {autoTuningLabel}
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2 text-xs text-gray-600">
+                      <span className="border border-[color:var(--ink)] bg-white px-2 py-1">
+                        runs: {autoTuningSummary.derived_from_runs ?? '--'}
+                      </span>
+                      <span className="border border-[color:var(--ink)] bg-white px-2 py-1">
+                        confidence: {typeof autoTuningSummary.confidence === 'number' ? autoTuningSummary.confidence : autoTuningSummary.confidence || '--'}
+                      </span>
+                      <span className="border border-[color:var(--ink)] bg-white px-2 py-1">
+                        schema: {autoTuningSummary.schema_version ?? '--'}
+                      </span>
+                      <span className="border border-[color:var(--ink)] bg-white px-2 py-1">
+                        tuned values: {autoTuningSummary.tuned_value_count ?? '--'}
+                      </span>
+                    </div>
+                    {(autoTuningSummary.summary || autoTuningSummary.fallback_reason) && (
+                      <div className="mt-3 border border-[color:var(--ink)] bg-slate-50 px-3 py-2 text-sm text-gray-700">
+                        {autoTuningSummary.summary || 'No tuning summary recorded yet.'}
+                        {autoTuningSummary.fallback_reason ? ` • fallback=${autoTuningSummary.fallback_reason}` : ''}
+                      </div>
+                    )}
+                    {!!autoTuningSurfaces.length && (
+                      <div className="mt-3 grid gap-2 md:grid-cols-2">
+                        {autoTuningSurfaces.map(({ label, surface }) => (
+                          <div key={label} className="border border-[color:var(--ink)] bg-white px-3 py-2 text-sm text-gray-700">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-semibold text-gray-900">{label}</span>
+                              {surface?.label && <span className="border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-semibold text-slate-700">{surface.label}</span>}
+                              <span className={`border px-2 py-1 text-[11px] font-semibold ${surface?.tuned ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-slate-200 bg-slate-50 text-slate-700'}`}>
+                                {surface?.tuned ? 'tuned' : 'stable'}
+                              </span>
+                            </div>
+                            <p className="mt-2">{surface?.summary || surface?.status || 'No summary recorded.'}</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
                 {adaptiveComparisons.length > 0 && (
                   <div className="mt-4 border border-[color:var(--ink)] bg-white/70 p-4 text-gray-900 shadow-[var(--shadow-sm)]">
                     <div className="flex flex-col gap-1 md:flex-row md:items-end md:justify-between">

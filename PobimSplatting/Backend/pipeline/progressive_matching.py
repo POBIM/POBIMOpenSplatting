@@ -19,6 +19,21 @@ def _looks_like_ordered_video(capture_pattern: Optional[Dict[str, Any]]) -> bool
     return float(capture.get("ordered_frame_ratio") or 0.0) >= 0.8
 
 
+def _progressive_tuning(colmap_cfg: Dict[str, Any]) -> Dict[str, float]:
+    snapshot = dict((colmap_cfg or {}).get("auto_tuning") or {})
+    tuning = dict(snapshot.get("progressive_matching") or {})
+    return {
+        "strong_bridge_p10": float(tuning.get("strong_bridge_p10") or 28.0),
+        "strong_weak_boundary_ratio": float(tuning.get("strong_weak_boundary_ratio") or 0.015),
+        "stable_bridge_p10": float(tuning.get("stable_bridge_p10") or 22.0),
+        "stable_weak_boundary_ratio": float(tuning.get("stable_weak_boundary_ratio") or 0.035),
+        "loop_bridge_p10": float(tuning.get("loop_bridge_p10") or 20.0),
+        "loop_bridge_min": float(tuning.get("loop_bridge_min") or 12.0),
+        "loop_weak_boundary_ratio": float(tuning.get("loop_weak_boundary_ratio") or 0.03),
+        "light_pair_coverage_scale": float(tuning.get("light_pair_coverage_scale") or 1.0),
+    }
+
+
 def _budgeted_max_matches(
     final_max_matches: int,
     ratio: float,
@@ -94,6 +109,8 @@ def build_progressive_sequential_matching_plan(
     if final_overlap <= 12 and not quadratic_enabled and not loop_detection_enabled:
         return None
 
+    thresholds = _progressive_tuning(colmap_cfg)
+
     if gpu_total_vram_mb is not None and gpu_total_vram_mb < 8192:
         resource_tier = "tight"
     elif gpu_total_vram_mb is not None and gpu_total_vram_mb < 12288:
@@ -136,10 +153,11 @@ def build_progressive_sequential_matching_plan(
                 resource_tier=resource_tier,
                 feature_pressure=feature_pressure,
             ),
-            "continue_if": "weak_boundaries",
-            "checkpoint_note": "cheap local temporal pairs first",
-        }
-    )
+                "continue_if": "weak_boundaries",
+                "checkpoint_note": "cheap local temporal pairs first",
+                "auto_tuning_thresholds": thresholds,
+            }
+        )
 
     bridge_params = dict(matcher_params)
     bridge_params["SequentialMatching.overlap"] = str(bridge_overlap)
@@ -162,6 +180,7 @@ def build_progressive_sequential_matching_plan(
                 ),
                 "continue_if": "persistent_weak_boundaries",
                 "checkpoint_note": "expand across weak transitions before heavier recovery",
+                "auto_tuning_thresholds": thresholds,
             }
         )
 
@@ -185,6 +204,7 @@ def build_progressive_sequential_matching_plan(
                 ),
                 "continue_if": "severe_boundary_gaps",
                 "checkpoint_note": "reach the planned overlap only if earlier passes still look weak",
+                "auto_tuning_thresholds": thresholds,
             }
         )
 
@@ -205,6 +225,7 @@ def build_progressive_sequential_matching_plan(
                 ),
                 "continue_if": "never",
                 "checkpoint_note": "bounded loop closure only if boundary gaps remain",
+                "auto_tuning_thresholds": thresholds,
             }
         )
 
@@ -221,6 +242,7 @@ def build_progressive_sequential_matching_plan(
         "peak_feature_count": peak_feature_count,
         "gpu_total_vram_mb": gpu_total_vram_mb,
         "final_overlap": final_overlap,
+        "auto_tuning_thresholds": thresholds,
         "passes": passes,
     }
 
@@ -260,25 +282,34 @@ def should_continue_progressive_matching(
     weak_boundary_ratio = float(geometry_stats.get("weak_boundary_ratio") or 0.0)
     bridge_p10 = float(geometry_stats.get("bridge_p10") or 0.0)
     bridge_min = float(geometry_stats.get("bridge_min") or 0.0)
+    thresholds = dict(next_pass.get("auto_tuning_thresholds") or {})
+    strong_bridge_p10 = float(thresholds.get("strong_bridge_p10") or 28.0)
+    strong_weak_boundary_ratio = float(thresholds.get("strong_weak_boundary_ratio") or 0.015)
+    stable_bridge_p10 = float(thresholds.get("stable_bridge_p10") or 22.0)
+    stable_weak_boundary_ratio = float(thresholds.get("stable_weak_boundary_ratio") or 0.035)
+    loop_bridge_p10 = float(thresholds.get("loop_bridge_p10") or 20.0)
+    loop_bridge_min = float(thresholds.get("loop_bridge_min") or 12.0)
+    loop_weak_boundary_ratio = float(thresholds.get("loop_weak_boundary_ratio") or 0.03)
+    light_pair_scale = float(thresholds.get("light_pair_coverage_scale") or 1.0)
 
     strong_geometry = (
         zero_boundary_count == 0
-        and weak_boundary_ratio <= 0.015
-        and bridge_p10 >= 28.0
+        and weak_boundary_ratio <= strong_weak_boundary_ratio
+        and bridge_p10 >= strong_bridge_p10
     )
     stable_geometry = (
         zero_boundary_count == 0
-        and weak_boundary_ratio <= 0.035
-        and bridge_p10 >= 22.0
+        and weak_boundary_ratio <= stable_weak_boundary_ratio
+        and bridge_p10 >= stable_bridge_p10
     )
-    light_pair_coverage = verified_pairs < max(image_count * 3, 120)
+    light_pair_coverage = verified_pairs < max(int(round(image_count * 3 * light_pair_scale)), 120)
 
     if next_pass.get("kind") == "loop":
         should_continue = (
             zero_boundary_count > 0
-            or weak_boundary_ratio >= 0.03
-            or bridge_min < 12.0
-            or bridge_p10 < 20.0
+            or weak_boundary_ratio >= loop_weak_boundary_ratio
+            or bridge_min < loop_bridge_min
+            or bridge_p10 < loop_bridge_p10
         )
         if should_continue:
             return True, "boundary gaps remain severe enough to justify bounded loop expansion"

@@ -1558,6 +1558,14 @@ def list_projects():
                 "input_type": data.get("input_type", "images"),
                 "file_count": data.get("file_count", 0),
                 "created_at": data.get("start_time"),
+                "quality_mode": (data.get("config") or {}).get("quality_mode"),
+                "reconstruction_framework": data.get("reconstruction_framework"),
+                "resource_coordination": data.get("resource_coordination"),
+                "auto_tuning_summary": (
+                    (data.get("reconstruction_framework") or {}).get("auto_tuning_summary")
+                    or (data.get("resource_coordination") or {}).get("auto_tuning_summary")
+                    or data.get("auto_tuning_summary")
+                ),
             }
             for pid, data in project_store.processing_status.items()
         ]

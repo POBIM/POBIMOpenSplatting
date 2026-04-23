@@ -75,6 +75,15 @@ RESOURCE_LANES: List[str] = [
     "waiting_for_heavy_slot",
 ]
 
+RESOURCE_REQUIRED_FIELDS: List[str] = [
+    "resource_profile",
+    "resource_lane",
+    "capture_budget_summary",
+    "recovery_loop_summary",
+    "training_budget_summary",
+    "auto_tuning_summary",
+]
+
 HEAVY_STAGE_KEYS: List[str] = [
     "feature_matching",
     "sparse_reconstruction",
@@ -92,4 +101,15 @@ def build_resource_aware_contract() -> Dict[str, Any]:
         "resource_profile_classes": list(RESOURCE_PROFILE_CLASSES),
         "resource_lanes": list(RESOURCE_LANES),
         "heavy_stage_keys": list(HEAVY_STAGE_KEYS),
+        "required_fields": list(RESOURCE_REQUIRED_FIELDS),
     }
+
+
+def missing_required_resource_fields(
+    payload: Dict[str, Any],
+    *,
+    required_fields: List[str] | None = None,
+) -> List[str]:
+    payload = dict(payload or {})
+    fields = list(required_fields or RESOURCE_REQUIRED_FIELDS)
+    return [field for field in fields if payload.get(field) is None]

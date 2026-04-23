@@ -9,6 +9,53 @@ import ProjectCard from '@/components/ProjectCard';
 type StatusFilter = 'all' | Project['status'];
 type SortMode = 'newest' | 'oldest' | 'name';
 
+const getProjectAutoTuningSummary = (project: Project) =>
+  project.reconstruction_framework?.auto_tuning_summary
+  ?? project.resource_coordination?.auto_tuning_summary
+  ?? project.auto_tuning_summary;
+
+const getProjectResourceLane = (project: Project) =>
+  project.reconstruction_framework?.resource_lane
+  ?? project.resource_coordination?.resource_lane
+  ?? null;
+
+const getProjectLaneState = (project: Project) =>
+  project.reconstruction_framework?.resource_lane_state
+  ?? project.resource_coordination?.resource_lane_state
+  ?? null;
+
+const getAutoTuningBadge = (project: Project) => {
+  const summary = getProjectAutoTuningSummary(project);
+  if (!summary) {
+    return null;
+  }
+
+  const label = summary.active_label
+    ?? summary.source_label
+    ?? summary.active_snapshot
+    ?? summary.mode
+    ?? 'auto tuning';
+
+  if (summary.fallback_to_stable) {
+    return {
+      label,
+      tone: 'border-amber-200 bg-amber-50 text-amber-900',
+    };
+  }
+
+  if ((summary.active_snapshot || summary.mode || '').toLowerCase().includes('tuned')) {
+    return {
+      label,
+      tone: 'border-emerald-200 bg-emerald-50 text-emerald-900',
+    };
+  }
+
+  return {
+    label,
+    tone: 'border-slate-200 bg-slate-50 text-slate-700',
+  };
+};
+
 export default function ProjectsPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
@@ -98,6 +145,58 @@ export default function ProjectsPage() {
       },
     );
   }, [projects]);
+
+  const operatorSummary = useMemo(() => {
+    return filteredProjects.reduce(
+      (acc, project) => {
+        const lane = getProjectResourceLane(project);
+        const laneState = getProjectLaneState(project);
+        const tuning = getProjectAutoTuningSummary(project);
+
+        if (lane) {
+          acc.laneVisible += 1;
+        }
+        if (laneState === 'waiting_for_heavy_slot') {
+          acc.waiting += 1;
+        }
+        if (laneState === 'downgraded') {
+          acc.downgraded += 1;
+        }
+        if (laneState === 'deferred') {
+          acc.deferred += 1;
+        }
+        if (tuning?.fallback_to_stable) {
+          acc.stableFallback += 1;
+        } else if ((tuning?.active_snapshot || tuning?.mode || '').toLowerCase().includes('tuned')) {
+          acc.tuned += 1;
+        } else if (tuning) {
+          acc.stable += 1;
+        }
+        return acc;
+      },
+      {
+        laneVisible: 0,
+        waiting: 0,
+        downgraded: 0,
+        deferred: 0,
+        tuned: 0,
+        stable: 0,
+        stableFallback: 0,
+      },
+    );
+  }, [filteredProjects]);
+
+  const operatorProjects = useMemo(() => {
+    return filteredProjects
+      .map((project) => ({
+        project,
+        lane: getProjectResourceLane(project),
+        laneState: getProjectLaneState(project),
+        tuningBadge: getAutoTuningBadge(project),
+      }))
+      .filter(({ lane, laneState, tuningBadge, project }) => Boolean(lane || laneState || tuningBadge || project.status === 'processing' || project.status === 'pending'))
+      .slice(0, 8);
+  }, [filteredProjects]);
 
   if (loading) {
     return (
@@ -192,6 +291,57 @@ export default function ProjectsPage() {
               </div>
             </div>
           </div>
+
+          {operatorProjects.length > 0 && (
+            <div className="brutal-card p-4 md:p-5">
+              <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                <div>
+                  <p className="brutal-label mb-1">Operator Summary</p>
+                  <h2 className="brutal-h3">Lane And Tuning Watch</h2>
+                  <p className="mt-2 max-w-2xl text-sm text-[color:var(--text-secondary)]">
+                    Concise visibility for projects already carrying resource-lane or auto-tuning state.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2 text-xs font-semibold">
+                  <span className="border border-[color:var(--ink)] bg-white px-2 py-1">lanes {operatorSummary.laneVisible}</span>
+                  <span className="border border-emerald-200 bg-emerald-50 px-2 py-1 text-emerald-900">tuned {operatorSummary.tuned}</span>
+                  <span className="border border-slate-200 bg-slate-50 px-2 py-1 text-slate-700">stable {operatorSummary.stable}</span>
+                  <span className="border border-amber-200 bg-amber-50 px-2 py-1 text-amber-900">fallback {operatorSummary.stableFallback}</span>
+                  <span className="border border-[color:var(--ink)] bg-white px-2 py-1">waiting {operatorSummary.waiting}</span>
+                  <span className="border border-[color:var(--ink)] bg-white px-2 py-1">downgraded {operatorSummary.downgraded}</span>
+                  <span className="border border-[color:var(--ink)] bg-white px-2 py-1">deferred {operatorSummary.deferred}</span>
+                </div>
+              </div>
+
+              {operatorProjects.length > 0 && (
+                <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                  {operatorProjects.map(({ project, lane, laneState, tuningBadge }) => (
+                    <Link
+                      key={`operator-${project.id}`}
+                      href={`/projects/${project.id}`}
+                      className="border border-[color:var(--ink)] bg-[color:var(--paper-card)] p-4 shadow-[var(--shadow-sm)] transition-transform hover:-translate-y-0.5"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-black uppercase tracking-tight text-[color:var(--ink)]">
+                            {project.metadata?.name || project.id}
+                          </p>
+                          <p className="mt-1 text-xs text-[color:var(--text-secondary)]">
+                            {project.status} • {project.input_type}
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap justify-end gap-2 text-[11px] font-semibold uppercase tracking-[0.14em]">
+                          {lane && <span className="border border-[color:var(--ink)] bg-white px-2 py-1">{lane}</span>}
+                          {laneState && <span className="border border-[color:var(--ink)] bg-white px-2 py-1">{laneState}</span>}
+                          {tuningBadge && <span className={`border px-2 py-1 ${tuningBadge.tone}`}>{tuningBadge.label}</span>}
+                        </div>
+                      </div>
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {error && (
             <div

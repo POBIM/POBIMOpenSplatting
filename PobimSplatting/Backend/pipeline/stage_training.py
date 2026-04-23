@@ -78,12 +78,16 @@ def run_opensplat_training(
         framework = project_entry.get("reconstruction_framework") or {}
         resource_coordination = project_entry.get("resource_coordination") or {}
         recovery_history = framework.get("recovery_history") or []
+        auto_tuning_summary = framework.get('auto_tuning_summary') or config.get('auto_tuning_summary') or {}
+        capture_budget_summary = framework.get('capture_budget_summary') or resource_coordination.get('capture_budget_summary') or {}
+        recovery_loop_summary = framework.get('recovery_loop_summary') or {}
         training_budget_summary = {
             'resource_profile_class': (
                 (framework.get('resource_profile') or {}).get('profile_class')
                 or resource_coordination.get('profile_class')
             ),
             'resource_lane': framework.get('resource_lane') or resource_coordination.get('resource_lane'),
+            'resource_lane_state': framework.get('resource_lane_state') or resource_coordination.get('resource_lane_state'),
             'training_resolution': config.get('training_resolution', '4K'),
             'colmap_resolution': config.get('colmap_resolution', '2K'),
             'use_separate_training_images': bool(config.get('use_separate_training_images', False)),
@@ -91,6 +95,12 @@ def run_opensplat_training(
             'adaptive_pair_scheduling': bool(config.get('adaptive_pair_scheduling', True)),
             'repair_step_count': len(recovery_history),
             'uses_repaired_capture': len(recovery_history) > 0,
+            'repair_depth': recovery_loop_summary.get('state'),
+            'recovery_final_path': recovery_loop_summary.get('final_path'),
+            'auto_tuning_mode': auto_tuning_summary.get('active_mode'),
+            'auto_tuning_confidence': auto_tuning_summary.get('confidence'),
+            'effective_image_budget': capture_budget_summary.get('num_images') or num_images,
+            'effective_oversample_factor': capture_budget_summary.get('effective_oversample_factor'),
         }
         update_reconstruction_framework(
             project_id,

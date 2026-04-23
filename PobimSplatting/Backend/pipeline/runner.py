@@ -32,6 +32,11 @@ from .config_builders import (
     get_opensplat_config,
     should_prefer_incremental_sfm,
 )
+from .auto_tuning import (
+    attach_auto_tuning_to_colmap_cfg,
+    attach_auto_tuning_to_config,
+    record_project_evidence,
+)
 from .frame_manifest import (
     get_frame_selection_manifest_path,
     load_frame_selection_manifest,
@@ -77,6 +82,36 @@ from .stage_training import (
 logger = logging.getLogger(__name__)
 
 video_processor = VideoProcessor()
+
+
+def _persist_auto_tuning_summary(project_id, config):
+    summary = dict((config or {}).get("auto_tuning_summary") or {})
+    if not summary:
+        return
+    framework = project_store.processing_status.get(project_id, {}).get("reconstruction_framework") or {}
+    merged_framework = dict(framework)
+    merged_framework["auto_tuning_summary"] = summary
+    project_store.update_reconstruction_framework(project_id, merged_framework)
+    update_resource_coordination(project_id, {"auto_tuning_summary": summary})
+
+
+def _record_project_auto_tuning_evidence(project_id):
+    project_entry = project_store.processing_status.get(project_id)
+    if not project_entry:
+        return None
+    result = record_project_evidence(project_id, project_entry)
+    if not result:
+        return None
+    tuned_snapshot = dict(result.get("tuned_snapshot") or {})
+    framework = project_entry.get("reconstruction_framework") or {}
+    summary = dict(framework.get("auto_tuning_summary") or {})
+    summary["tuned_snapshot_updated_at"] = tuned_snapshot.get("updated_at")
+    summary["derived_from_runs"] = tuned_snapshot.get("derived_from_runs", summary.get("derived_from_runs", 0))
+    summary["confidence"] = tuned_snapshot.get("confidence", summary.get("confidence"))
+    merged_framework = dict(framework)
+    merged_framework["auto_tuning_summary"] = summary
+    project_store.update_reconstruction_framework(project_id, merged_framework)
+    return result
 
 
 def _build_resource_coordination_updates(
@@ -126,10 +161,13 @@ def _persist_resource_coordination(project_id, updates):
         'summary': updates.get('summary'),
     }
     merged_framework['resource_lane'] = updates.get('resource_lane')
+    merged_framework['resource_lane_state'] = updates.get('resource_lane_state')
     merged_framework['admission_reason'] = updates.get('admission_reason')
     merged_framework['downgrade_reason'] = updates.get('downgrade_reason')
     merged_framework['estimated_start_delay'] = updates.get('estimated_start_delay')
     merged_framework['capture_budget_summary'] = updates.get('capture_budget_summary')
+    if updates.get('auto_tuning_summary') is not None:
+        merged_framework['auto_tuning_summary'] = updates.get('auto_tuning_summary')
     project_store.update_reconstruction_framework(project_id, merged_framework)
 
 
@@ -224,8 +262,11 @@ def _training_stage_helpers():
 def run_processing_pipeline_from_stage(project_id, paths, config, video_files, image_files, from_stage='ingest'):
     """Run the processing pipeline from a specific stage."""
     try:
+        config = attach_auto_tuning_to_config(config)
+        _persist_auto_tuning_summary(project_id, config)
         with project_store.status_lock:
             project_store.processing_status[project_id]['status'] = 'processing'
+            project_store.processing_status[project_id]['config'] = config
 
         # Skip to the specified stage
         stage_order = [s['key'] for s in app_config.PIPELINE_STAGES]
@@ -369,6 +410,7 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
                         'replacement_search_radius': config.get('replacement_search_radius', 4),
                         'ffmpeg_cpu_workers': config.get('ffmpeg_cpu_workers', 4),
                         'source_video_path': str(video_path),
+                        'auto_tuning_policy': config.get('_auto_tuning_policy'),
                     }
                     
                     if config.get('extraction_mode') == 'fps':
@@ -665,9 +707,11 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
                 raise Exception("No valid sparse reconstruction found. Please retry from an earlier stage.")
 
             run_opensplat_training(project_id, paths, config, processing_start_time, time_estimate, time_estimator)
+            _record_project_auto_tuning_evidence(project_id)
         else:
             # Just finalize
             finalize_project(project_id)
+            _record_project_auto_tuning_evidence(project_id)
 
     except Exception as e:
         logger.error(f"Processing failed for {project_id}: {e}")
@@ -678,6 +722,7 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
             project_store.processing_status[project_id]['error'] = str(e)
             project_store.processing_status[project_id]['end_time'] = datetime.now().isoformat()
             save_projects_db()
+        _record_project_auto_tuning_evidence(project_id)
 
 
 def run_processing_pipeline(project_id, paths, config, video_files, image_files):
@@ -1054,6 +1099,10 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
             orbit_safe_mode,
             orbit_safe_policy,
         )
+        colmap_config = attach_auto_tuning_to_colmap_cfg(
+            colmap_config,
+            config.get("_auto_tuning_policy"),
+        )
 
         colmap_stages = ['feature_extraction', 'feature_matching', 'sparse_reconstruction', 'model_conversion']
         start_index = colmap_stages.index(from_stage) if from_stage in colmap_stages else 0
@@ -1081,6 +1130,10 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
                 stage_key='feature_extraction',
                 manual_override=manual_override,
             ),
+        )
+        update_resource_coordination(
+            project_id,
+            {"auto_tuning_summary": dict(config.get("auto_tuning_summary") or {})},
         )
 
         if feature_method == 'superpoint':
@@ -1113,6 +1166,10 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
                     use_hloc = False
             else:
                 colmap_config = run_feature_extraction_stage(project_id, paths, config, colmap_config)
+            colmap_config = attach_auto_tuning_to_colmap_cfg(
+                colmap_config,
+                config.get("_auto_tuning_policy"),
+            )
 
         if start_index <= colmap_stages.index('feature_matching'):
             _wait_for_stage_lane(
@@ -1130,6 +1187,10 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
                 colmap_config = run_hloc_feature_matching_stage(project_id, paths, config, hloc_data)
             else:
                 colmap_config = run_feature_matching_stage(project_id, paths, config, colmap_config)
+            colmap_config = attach_auto_tuning_to_colmap_cfg(
+                colmap_config,
+                config.get("_auto_tuning_policy"),
+            )
 
         if start_index <= colmap_stages.index('sparse_reconstruction'):
             _wait_for_stage_lane(
@@ -1143,6 +1204,10 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
                 manual_override=manual_override,
             )
             colmap_config = run_sparse_reconstruction_stage(project_id, paths, config, colmap_config)
+            colmap_config = attach_auto_tuning_to_colmap_cfg(
+                colmap_config,
+                config.get("_auto_tuning_policy"),
+            )
 
         if start_index <= colmap_stages.index('model_conversion'):
             run_model_conversion_stage(project_id, paths)
@@ -1166,6 +1231,7 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
             time_estimate,
             time_estimator,
         )
+        _record_project_auto_tuning_evidence(project_id)
 
     except Exception as e:
         logger.error(f"COLMAP pipeline failed for {project_id}: {e}")
@@ -1176,6 +1242,7 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
             project_store.processing_status[project_id]['error'] = str(e)
             project_store.processing_status[project_id]['end_time'] = datetime.now().isoformat()
             save_projects_db()
+        _record_project_auto_tuning_evidence(project_id)
 
         raise
 

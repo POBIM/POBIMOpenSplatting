@@ -24,6 +24,7 @@ BACKEND_ROOT: Path = Path(__file__).resolve().parent.parent
 PROJECT_ROOT: Path = BACKEND_ROOT.parent
 REPO_ROOT: Path = PROJECT_ROOT.parent
 FRONTEND_ROOT: Path = PROJECT_ROOT / "Frontend"
+RUNTIME_ROOT: Path = PROJECT_ROOT / "runtime"
 
 NEXT_BUILD_DIR: Path = FRONTEND_ROOT / ".next"
 NEXT_STATIC_DIR: Path = NEXT_BUILD_DIR / "static"
@@ -105,6 +106,10 @@ FRAMES_FOLDER: Path = BACKEND_ROOT / "frames"
 VOCAB_TREE_FOLDER: Path = BACKEND_ROOT / "vocab_trees"
 VOCAB_TREE_CACHE_FOLDER: Path = VOCAB_TREE_FOLDER / "cache"
 PROJECTS_DB_FILE: Path = BACKEND_ROOT / "projects_db.json"
+AUTO_TUNING_DIR: Path = RUNTIME_ROOT / "auto_tuning"
+ORDERED_VIDEO_EVIDENCE_FILE: Path = AUTO_TUNING_DIR / "ordered_video_evidence.json"
+ORDERED_VIDEO_TUNED_SNAPSHOT_FILE: Path = AUTO_TUNING_DIR / "ordered_video_tuned_snapshot.json"
+ORDERED_VIDEO_STABLE_SNAPSHOT_FILE: Path = AUTO_TUNING_DIR / "ordered_video_stable_snapshot.json"
 
 
 def ensure_runtime_directories() -> None:
@@ -113,6 +118,8 @@ def ensure_runtime_directories() -> None:
         UPLOAD_FOLDER,
         RESULTS_FOLDER,
         FRAMES_FOLDER,
+        RUNTIME_ROOT,
+        AUTO_TUNING_DIR,
         VOCAB_TREE_FOLDER,
         VOCAB_TREE_CACHE_FOLDER,
     ):

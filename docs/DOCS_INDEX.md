@@ -20,6 +20,7 @@ Start with the repo root [README.md](../README.md) for the project overview. Use
 | See the full processing workflow stage by stage | [WORKFLOW.md](WORKFLOW.md) |
 | Run the system day to day | [QUICK_REFERENCE.md](QUICK_REFERENCE.md) |
 | See what is still missing in the ordered-video resource-aware work | [ORDERED_VIDEO_NEXT_STEPS.md](ORDERED_VIDEO_NEXT_STEPS.md) |
+| Review ordered-video evidence and signoff expectations | [ORDERED_VIDEO_BENCHMARK_BASELINE.md](ORDERED_VIDEO_BENCHMARK_BASELINE.md) |
 | Install on a new machine | [INSTALLATION.md](INSTALLATION.md) |
 | Read the Thai installation guide | [INSTALLATION_TH.md](INSTALLATION_TH.md) |
 | Understand the installation scripts themselves | [INSTALLATION_SYSTEM.md](INSTALLATION_SYSTEM.md) |
@@ -75,7 +76,7 @@ The real product is a pipeline platform made of:
 
 - [ORDERED_VIDEO_NEXT_STEPS.md](ORDERED_VIDEO_NEXT_STEPS.md): current status, remaining work, and recommended next execution order for the ordered-video resource-aware pipeline
 - [ORDERED_VIDEO_RESOURCE_AWARE_ROADMAP.md](ORDERED_VIDEO_RESOURCE_AWARE_ROADMAP.md): full roadmap and phase map
-- [ORDERED_VIDEO_BENCHMARK_BASELINE.md](ORDERED_VIDEO_BENCHMARK_BASELINE.md): benchmark contract and threshold note sheet
+- [ORDERED_VIDEO_BENCHMARK_BASELINE.md](ORDERED_VIDEO_BENCHMARK_BASELINE.md): evidence review contract, optional benchmark signoff sheet, and promotion gate
 - [../PobimSplatting/MESH_EXPORT_GUIDE.md](../PobimSplatting/MESH_EXPORT_GUIDE.md): mesh export flow and formats
 - [../PobimSplatting/QUICK_PERFORMANCE_GUIDE.md](../PobimSplatting/QUICK_PERFORMANCE_GUIDE.md): performance tuning notes
 - [compile-cuda.md](compile-cuda.md): native CUDA compile reference
@@ -105,6 +106,7 @@ These are the main focused helpers under `scripts/`:
 - `monitor.sh`
 - `simple_gpu_test.sh`
 - `compile-opensplat-cuda126.sh`
+- `report_ordered_video_evidence.py`
 
 ## Health And Debug Entry Points
 

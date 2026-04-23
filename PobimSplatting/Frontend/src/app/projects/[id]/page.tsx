@@ -289,7 +289,7 @@ export default function ProjectDetailPage() {
     // COLMAP Sparse Reconstruction params
     min_num_matches: '',
     max_num_models: '',
-    force_cpu_sparse_reconstruction: false,
+    force_cpu_sparse_reconstruction: true,
     sparse_retry_sfm_engine: '',
     // Resolution settings
     extraction_mode: '',
@@ -921,7 +921,7 @@ export default function ProjectDetailPage() {
         sequential_overlap: '',
         min_num_matches: '',
         max_num_models: '',
-        force_cpu_sparse_reconstruction: false,
+        force_cpu_sparse_reconstruction: true,
         sparse_retry_sfm_engine: '',
         extraction_mode: '',
         max_frames: '',
@@ -977,7 +977,8 @@ export default function ProjectDetailPage() {
         sequential_overlap: '',
         min_num_matches: '',
         max_num_models: '',
-        force_cpu_sparse_reconstruction: false,
+        force_cpu_sparse_reconstruction:
+          project?.config?.force_cpu_sparse_reconstruction !== false,
         sparse_retry_sfm_engine: '',
         extraction_mode: project?.config?.extraction_mode || '',
         max_frames: project?.config?.max_frames?.toString() || '',

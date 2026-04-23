@@ -810,10 +810,10 @@ def should_prefer_incremental_sfm(config, paths, num_images):
     if config.get("fast_sfm", False):
         return False, None
 
-    if bool(config.get("force_cpu_sparse_reconstruction", False)):
+    if bool(config.get("force_cpu_sparse_reconstruction", True)):
         return (
             True,
-            "Sparse retry is explicitly pinned to the CPU incremental COLMAP path",
+            "CPU-only sparse reconstruction is enabled, so the stable incremental COLMAP path is preferred",
         )
 
     # Ordered video / orbit-style captures stay CPU-first by default for stability.

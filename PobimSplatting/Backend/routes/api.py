@@ -762,6 +762,9 @@ def upload_policy_preview():
         "adaptive_pair_scheduling": parse_bool(
             payload.get("adaptive_pair_scheduling"), True
         ),
+        "force_cpu_sparse_reconstruction": parse_bool(
+            payload.get("force_cpu_sparse_reconstruction"), True
+        ),
         "input_type": input_type,
         "resource_override_source": "automatic",
     }
@@ -937,6 +940,10 @@ def upload_files():
         == "true",
         "adaptive_pair_scheduling": request.form.get(
             "adaptive_pair_scheduling", "true"
+        ).lower()
+        == "true",
+        "force_cpu_sparse_reconstruction": request.form.get(
+            "force_cpu_sparse_reconstruction", "true"
         ).lower()
         == "true",
         "resource_override_source": "automatic",

@@ -201,13 +201,13 @@ def run_sparse_reconstruction_stage(
         )
 
     force_cpu_sparse_reconstruction = bool(
-        config.get("force_cpu_sparse_reconstruction", False)
+        config.get("force_cpu_sparse_reconstruction", True)
     )
     sparse_has_cuda = has_cuda and not force_cpu_sparse_reconstruction
     if force_cpu_sparse_reconstruction:
         append_log_line(
             project_id,
-            "🧪 Sparse retry override: forcing CPU-only sparse reconstruction for this pass",
+            "ℹ️ CPU-only sparse reconstruction is enabled for this pass",
         )
 
     sfm_backend = normalize_sfm_backend(config.get("sfm_backend"))
@@ -274,7 +274,7 @@ def run_sparse_reconstruction_stage(
                 cmd.extend(["--device", "cuda:0"])
                 append_log_line(project_id, "🎮 CUDA acceleration enabled")
             elif force_cpu_sparse_reconstruction:
-                append_log_line(project_id, "ℹ️ FastMap retry is running on CPU")
+                append_log_line(project_id, "ℹ️ FastMap is running on CPU")
         except ImportError:
             pass
         append_log_line(project_id, f"🔧 FastMap path: {FASTMAP_PATH}")

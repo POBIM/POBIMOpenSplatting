@@ -29,20 +29,23 @@ logger = logging.getLogger(__name__)
 
 TRAINING_PREVIEW_FILENAME = "preview_latest.ply"
 TRAINING_PREVIEW_METADATA_FILENAME = "preview_latest.json"
-MIN_TRAINING_PREVIEW_SAVE_EVERY = 500
-MAX_TRAINING_PREVIEW_SAVE_EVERY = 2500
-TRAINING_PREVIEW_TARGET_UPDATES = 8
+TRAINING_PREVIEW_UPDATE_PERCENT_STEP = 5
 
 
 def _choose_training_preview_save_every(iteration_total: int) -> int:
     if iteration_total <= 0:
-        return MIN_TRAINING_PREVIEW_SAVE_EVERY
+        return 1
 
-    target = max(1, round(iteration_total / TRAINING_PREVIEW_TARGET_UPDATES))
     return max(
-        MIN_TRAINING_PREVIEW_SAVE_EVERY,
-        min(MAX_TRAINING_PREVIEW_SAVE_EVERY, target),
+        1,
+        int(iteration_total * (TRAINING_PREVIEW_UPDATE_PERCENT_STEP / 100.0) + 0.5),
     )
+
+
+def _calculate_progress_percent(current: int, total: int) -> int:
+    if total <= 0:
+        return 0
+    return max(0, min(100, int((min(current, total) / total) * 100)))
 
 
 def _write_training_preview_metadata(
@@ -50,6 +53,7 @@ def _write_training_preview_metadata(
     *,
     iteration: int,
     total_iterations: int,
+    progress_percent: int,
     file_path: Path,
     source_filename: str,
     is_final: bool,
@@ -59,6 +63,8 @@ def _write_training_preview_metadata(
         "source_filename": source_filename,
         "iteration": iteration,
         "total_iterations": total_iterations,
+        "progress_percent": progress_percent,
+        "update_interval_percent": TRAINING_PREVIEW_UPDATE_PERCENT_STEP,
         "is_final": is_final,
         "updated_at": datetime.now().isoformat(),
         "size_bytes": file_path.stat().st_size if file_path.exists() else 0,
@@ -74,6 +80,7 @@ def _promote_training_preview_snapshot(
     *,
     iteration: int,
     total_iterations: int,
+    progress_percent: int,
     is_final: bool,
 ) -> None:
     preview_path.parent.mkdir(parents=True, exist_ok=True)
@@ -89,6 +96,7 @@ def _promote_training_preview_snapshot(
         metadata_path,
         iteration=iteration,
         total_iterations=total_iterations,
+        progress_percent=progress_percent,
         file_path=preview_path,
         source_filename=source_path.name,
         is_final=is_final,
@@ -254,7 +262,8 @@ def run_opensplat_training(
         ]
         append_log_line(
             project_id,
-            f"🪟 Training preview snapshots enabled every {preview_save_every} iterations",
+            f"🪟 Training preview snapshots enabled every {TRAINING_PREVIEW_UPDATE_PERCENT_STEP}% "
+            f"({preview_save_every} iterations per update)",
         )
 
         crop_size = config.get("crop_size", 0)
@@ -463,6 +472,7 @@ def run_opensplat_training(
                             preview_metadata_path,
                             iteration=iteration_total,
                             total_iterations=iteration_total,
+                            progress_percent=100,
                             is_final=True,
                         )
                         preview_state["latest_iteration"] = iteration_total
@@ -479,12 +489,19 @@ def run_opensplat_training(
                                 preview_metadata_path,
                                 iteration=preview_iteration,
                                 total_iterations=iteration_total,
+                                progress_percent=_calculate_progress_percent(
+                                    preview_iteration, iteration_total
+                                ),
                                 is_final=False,
                             )
                             preview_state["latest_iteration"] = preview_iteration
+                            preview_percent = _calculate_progress_percent(
+                                preview_iteration, iteration_total
+                            )
                             append_log_line(
                                 project_id,
-                                f"🪟 Training preview updated at iteration {preview_iteration}/{iteration_total}",
+                                f"🪟 Training preview updated at {preview_percent}% "
+                                f"({preview_iteration}/{iteration_total} iterations)",
                             )
             patterns = [
                 r"Iteration\s+(\d+)/(\d+)",

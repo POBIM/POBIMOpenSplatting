@@ -56,6 +56,24 @@ video_processor = VideoProcessor()
 
 TRAINING_PREVIEW_FILENAME = "preview_latest.ply"
 TRAINING_PREVIEW_METADATA_FILENAME = "preview_latest.json"
+LIVE_PREVIEW_PERCENT_STEP = 5
+
+
+def _calculate_progress_percent(current: int, total: int) -> int:
+    if total <= 0:
+        return 0
+    return max(0, min(100, int((min(current, total) / total) * 100)))
+
+
+def _count_project_images(project_id: str) -> int:
+    images_path = app_config.UPLOAD_FOLDER / project_id / "images"
+    if not images_path.exists():
+        return 0
+    return sum(
+        1
+        for child in images_path.iterdir()
+        if child.is_file() and child.suffix.lower() in app_config.IMAGE_EXTENSIONS
+    )
 
 
 def _clear_directory_contents(path: Path) -> None:
@@ -125,6 +143,14 @@ def _load_training_preview_metadata(project_id: str):
     metadata.setdefault("filename", preview_path.name)
     metadata.setdefault("iteration", 0)
     metadata.setdefault("total_iterations", 0)
+    metadata.setdefault(
+        "progress_percent",
+        _calculate_progress_percent(
+            int(metadata.get("iteration") or 0),
+            int(metadata.get("total_iterations") or 0),
+        ),
+    )
+    metadata.setdefault("update_interval_percent", LIVE_PREVIEW_PERCENT_STEP)
     metadata.setdefault("is_final", False)
     metadata.setdefault("updated_at", datetime.fromtimestamp(stat.st_mtime).isoformat())
     metadata["size_bytes"] = stat.st_size
@@ -1878,6 +1904,21 @@ def get_camera_poses(project_id):
         project_data = project_store.processing_status.get(project_id, {})
         metadata = project_data.get("metadata") or {}
         config = project_data.get("config") or {}
+        total_images = _count_project_images(project_id)
+        capture_progress_percent = _calculate_progress_percent(len(cameras), total_images)
+        if source_type == "snapshot":
+            source_label = (
+                f"Live sparse snapshot at {capture_progress_percent}% "
+                f"({len(cameras)}/{total_images} cameras)"
+                if total_images > 0
+                else "Live sparse snapshot"
+            )
+        else:
+            source_label = (
+                f"Final sparse model with {len(cameras)}/{total_images} cameras"
+                if total_images > 0
+                else "Final sparse model"
+            )
 
         return jsonify(
             {
@@ -1885,17 +1926,16 @@ def get_camera_poses(project_id):
                 "project_name": metadata.get("name"),
                 "sfm_engine": config.get("sfm_engine"),
                 "camera_count": len(cameras),
+                "total_images": total_images,
+                "capture_progress_percent": capture_progress_percent,
+                "update_interval_percent": LIVE_PREVIEW_PERCENT_STEP,
                 "sparse_model_path": sparse_model_path,
                 "sparse_point_count": sparse_point_count,
                 "sparse_points": sparse_points,
                 "cameras": cameras,
                 "is_live": bool(prefer_live and source_type == "snapshot"),
                 "source_type": source_type,
-                "source_label": (
-                    "Live sparse snapshot"
-                    if source_type == "snapshot"
-                    else "Final sparse model"
-                ),
+                "source_label": source_label,
             }
         )
     except FileNotFoundError as exc:

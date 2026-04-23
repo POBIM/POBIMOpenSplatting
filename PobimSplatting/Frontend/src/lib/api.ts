@@ -430,6 +430,9 @@ export interface CameraPosesData {
   project_name?: string;
   sfm_engine?: string;
   camera_count: number;
+  total_images?: number;
+  capture_progress_percent?: number;
+  update_interval_percent?: number;
   cameras: CameraPose[];
   sparse_point_count?: number;
   sparse_points?: SparsePoint[];
@@ -446,6 +449,8 @@ export interface TrainingPreview {
   filename: string;
   iteration: number;
   total_iterations: number;
+  progress_percent?: number;
+  update_interval_percent?: number;
   is_final: boolean;
   updated_at: string;
   size_bytes: number;

@@ -35,7 +35,16 @@ from .runtime_support import (
     should_log_subprocess_line,
 )
 
-LIVE_SPARSE_SNAPSHOT_FREQ = 5
+LIVE_SPARSE_SNAPSHOT_PERCENT_STEP = 5
+
+
+def _choose_live_sparse_snapshot_frequency(num_images: int) -> int:
+    if num_images <= 0:
+        return 1
+    return max(
+        1,
+        int(num_images * (LIVE_SPARSE_SNAPSHOT_PERCENT_STEP / 100.0) + 0.5),
+    )
 
 
 def _log_colmap_ba_plan(project_id, ba_plan):
@@ -363,6 +372,7 @@ def run_sparse_reconstruction_stage(
         ]
         snapshot_path = paths.get("sparse_snapshots_path")
         if snapshot_path:
+            snapshot_frequency = _choose_live_sparse_snapshot_frequency(num_images)
             snapshot_path = Path(snapshot_path)
             shutil.rmtree(snapshot_path, ignore_errors=True)
             snapshot_path.mkdir(parents=True, exist_ok=True)
@@ -371,12 +381,13 @@ def run_sparse_reconstruction_stage(
                     "--Mapper.snapshot_path",
                     str(snapshot_path),
                     "--Mapper.snapshot_frames_freq",
-                    str(LIVE_SPARSE_SNAPSHOT_FREQ),
+                    str(snapshot_frequency),
                 ]
             )
             append_log_line(
                 project_id,
-                f"📸 Live sparse snapshots enabled every {LIVE_SPARSE_SNAPSHOT_FREQ} registered images",
+                f"📸 Live sparse snapshots enabled every {LIVE_SPARSE_SNAPSHOT_PERCENT_STEP}% "
+                f"({snapshot_frequency} registered images per update)",
             )
         for param, value in colmap_cfg.get("mapper_params", {}).items():
             cmd.extend([f"--{param}", str(value)])
@@ -733,9 +744,11 @@ def run_sparse_reconstruction_stage(
 
         if not use_global_sfm and "creating snapshot" in line_lower:
             registered = max(int(sparse_tracker.get("registered", 0)), 0)
+            snapshot_percent = int((registered / max(num_images, 1)) * 100)
             append_log_line(
                 project_id,
-                f"[COLMAP] Live sparse snapshot exported ({registered}/{num_images} images registered)",
+                f"[COLMAP] Live sparse snapshot exported "
+                f"({registered}/{num_images} images registered, {snapshot_percent}%)",
             )
             return
 

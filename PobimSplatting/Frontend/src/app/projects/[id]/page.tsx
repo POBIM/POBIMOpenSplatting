@@ -2083,6 +2083,11 @@ export default function ProjectDetailPage() {
                       {liveCameraPoses?.is_live && (
                         <span className="brutal-badge brutal-badge-success">Live snapshot</span>
                       )}
+                      {liveCameraPoses?.capture_progress_percent !== undefined && (
+                        <span className="brutal-badge">
+                          {liveCameraPoses.capture_progress_percent}% coverage
+                        </span>
+                      )}
                       {liveCameraPoses && (
                         <span className="brutal-badge">
                           {liveCameraPoses.camera_count.toLocaleString()} cameras
@@ -2095,6 +2100,11 @@ export default function ProjectDetailPage() {
                     <span className="brutal-badge brutal-badge-info">
                       {liveCameraPoses?.source_label || 'Waiting for sparse snapshot...'}
                     </span>
+                    {liveCameraPoses?.update_interval_percent ? (
+                      <span className="brutal-badge">
+                        Updates every {liveCameraPoses.update_interval_percent}%
+                      </span>
+                    ) : null}
                     {liveCameraPoses?.sparse_point_count ? (
                       <span className="brutal-badge">
                         {liveCameraPoses.sparse_point_count.toLocaleString()} points
@@ -2183,6 +2193,11 @@ export default function ProjectDetailPage() {
                       {trainingPreview?.is_live && (
                         <span className="brutal-badge brutal-badge-success">Live</span>
                       )}
+                      {trainingPreview?.progress_percent !== undefined ? (
+                        <span className="brutal-badge">
+                          {trainingPreview.progress_percent}% trained
+                        </span>
+                      ) : null}
                       {trainingPreview?.iteration ? (
                         <span className="brutal-badge">
                           {trainingPreview.iteration.toLocaleString()}/{(trainingPreview.total_iterations || 0).toLocaleString()} iter
@@ -2194,9 +2209,16 @@ export default function ProjectDetailPage() {
                   <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-[var(--text-secondary)]">
                     <span className="brutal-badge brutal-badge-info">
                       {trainingPreview
-                        ? (trainingPreview.is_final ? 'Final training preview' : `Latest preview at iteration ${trainingPreview.iteration.toLocaleString()}`)
+                        ? (trainingPreview.is_final
+                            ? 'Final training preview'
+                            : `Latest preview at ${trainingPreview.progress_percent ?? 0}% training`)
                         : 'Waiting for the first training preview snapshot...'}
                     </span>
+                    {trainingPreview?.update_interval_percent ? (
+                      <span className="brutal-badge">
+                        Updates every {trainingPreview.update_interval_percent}%
+                      </span>
+                    ) : null}
                     {trainingPreview?.preview_url && (
                       <button
                         type="button"

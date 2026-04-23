@@ -52,6 +52,7 @@ from .recovery_planners import (
     build_densified_overlap_retry_pass,
     clear_sparse_reconstruction_outputs,
     refine_orbit_safe_profile_from_geometry,
+    run_automatic_split_retry,
     run_boundary_frame_densification_recovery as _run_boundary_frame_densification_recovery_impl,
     run_orbit_safe_bridge_recovery_matching_pass,
     should_run_final_loop_detection_recovery,
@@ -238,12 +239,16 @@ def _feature_stage_helpers():
 
 def _sparse_stage_helpers():
     return {
+        'build_ordered_split_auto_retry': run_automatic_split_retry,
         'build_weak_window_subset_recovery_pass': build_weak_window_subset_recovery_pass,
         'build_densified_overlap_retry_pass': build_densified_overlap_retry_pass,
         'clear_sparse_reconstruction_outputs': clear_sparse_reconstruction_outputs,
         'get_colmap_config_for_pipeline': get_colmap_config_for_pipeline,
         'refine_orbit_safe_profile_from_geometry': refine_orbit_safe_profile_from_geometry,
         'report_sparse_model_coverage': report_sparse_model_coverage,
+        'rerun_feature_extraction_stage': run_feature_extraction_stage,
+        'rerun_feature_matching_stage': run_feature_matching_stage,
+        'rerun_sparse_reconstruction_stage': run_sparse_reconstruction_stage,
         'run_boundary_frame_densification_recovery': run_boundary_frame_densification_recovery,
         'run_orbit_safe_bridge_recovery_matching_pass': run_orbit_safe_bridge_recovery_matching_pass,
         'select_best_sparse_model': select_best_sparse_model,
@@ -701,6 +706,17 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
             # Start from gaussian splatting (skip COLMAP stages)
             # First, ensure we select the best sparse model, rename to 0/, and clean up inferior ones
             append_log_line(project_id, "🔍 Checking sparse reconstruction models...")
+            project_state = project_store.processing_status.get(project_id, {})
+            framework = dict(project_state.get('reconstruction_framework') or {})
+            sparse_summary = dict(framework.get('sparse_model_summary') or {})
+            is_ordered_video = config.get('input_type') in {'video', 'mixed'} or bool(
+                framework.get('orbit_safe_mode')
+            )
+            if is_ordered_video and sparse_summary.get('has_multiple_models'):
+                raise Exception(
+                    "Sparse reconstruction is still split for this ordered video project. "
+                    "Rerun from sparse reconstruction so the automatic repair loop can resolve it before training."
+                )
             sparse_model_path = select_best_sparse_model(paths['sparse_path'], project_id)
 
             if not sparse_model_path:
@@ -1208,6 +1224,15 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
                 colmap_config,
                 config.get("_auto_tuning_policy"),
             )
+            sparse_summary = dict(colmap_config.get('last_sparse_summary') or {})
+            is_ordered_video = config.get('input_type') in {'video', 'mixed'} or bool(
+                colmap_config.get('orbit_safe_mode')
+            )
+            if is_ordered_video and sparse_summary.get('has_multiple_models'):
+                raise Exception(
+                    "Sparse reconstruction remains split after automatic recovery; "
+                    "training has been stopped before using a fragmented model."
+                )
 
         if start_index <= colmap_stages.index('model_conversion'):
             run_model_conversion_stage(project_id, paths)

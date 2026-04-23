@@ -731,11 +731,13 @@ def upload_policy_preview():
             return default
         return bool(value)
 
+    default_sfm_engine = "colmap" if input_type in {"video", "mixed"} else "glomap"
+
     config = {
         "camera_model": payload.get("camera_model", "SIMPLE_RADIAL"),
         "matcher_type": payload.get("matcher_type"),
         "quality_mode": payload.get("quality_mode", "balanced"),
-        "sfm_engine": payload.get("sfm_engine", "glomap"),
+        "sfm_engine": payload.get("sfm_engine", default_sfm_engine),
         "sfm_backend": payload.get("sfm_backend", "cli"),
         "fast_sfm": parse_bool(payload.get("fast_sfm"), False),
         "feature_method": payload.get("feature_method", "sift"),
@@ -885,11 +887,13 @@ def upload_files():
     if matcher_type and matcher_type.strip().lower() == "auto":
         matcher_type = None
 
+    default_sfm_engine = "colmap" if input_type in {"video", "mixed"} else "glomap"
+
     config = {
         "camera_model": request.form.get("camera_model", "SIMPLE_RADIAL"),
         "matcher_type": matcher_type,
         "quality_mode": quality_mode,
-        "sfm_engine": request.form.get("sfm_engine", "glomap"),
+        "sfm_engine": request.form.get("sfm_engine", default_sfm_engine),
         "sfm_backend": request.form.get("sfm_backend", "cli"),
         "fast_sfm": request.form.get("fast_sfm", "false").lower() == "true",
         "feature_method": request.form.get("feature_method", "sift"),

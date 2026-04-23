@@ -1,4 +1,5 @@
 #include "cv_utils.hpp"
+#include <algorithm>
 #include <stdexcept>
 
 cv::Mat imreadRGB(const std::string &filename){
@@ -27,15 +28,24 @@ torch::Tensor floatNxNMatToTensor(const cv::Mat &m){
 }
 
 cv::Mat tensorToImage(const torch::Tensor &t){
-    int h = t.sizes()[0];
-    int w = t.sizes()[1];
-    int c = t.sizes()[2];
+    torch::Tensor cpuTensor = t.detach().cpu().contiguous();
+    int h = cpuTensor.sizes()[0];
+    int w = cpuTensor.sizes()[1];
+    int c = cpuTensor.sizes()[2];
 
     int type = CV_8UC3;
     if (c != 3) throw std::runtime_error("Only images with 3 channels are supported");
 
     cv::Mat image(h, w, type);
-    torch::Tensor scaledTensor = (t * 255.0).toType(torch::kU8);
+    torch::Tensor scaledTensor;
+    if (cpuTensor.scalar_type() == torch::kUInt8) {
+        scaledTensor = cpuTensor;
+    } else if (cpuTensor.is_floating_point()) {
+        scaledTensor = torch::clamp(cpuTensor, 0.0, 1.0).mul(255.0).toType(torch::kU8).contiguous();
+    } else {
+        throw std::runtime_error("Unsupported tensor type for image conversion");
+    }
+
     uint8_t* dataPtr = static_cast<uint8_t*>(scaledTensor.data_ptr());
     std::copy(dataPtr, dataPtr + (w * h * c), image.data);
 
@@ -43,7 +53,11 @@ cv::Mat tensorToImage(const torch::Tensor &t){
 }
 
 torch::Tensor imageToTensor(const cv::Mat &image){
-    torch::Tensor img = torch::from_blob(image.data, { image.rows, image.cols, image.dims + 1 }, torch::kU8);
-    return (img.toType(torch::kFloat32) / 255.0f);
+    torch::Tensor img = torch::from_blob(
+        image.data,
+        { image.rows, image.cols, image.channels() },
+        torch::TensorOptions().dtype(torch::kUInt8)
+    );
+    return img.clone();
 }
 

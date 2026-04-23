@@ -155,9 +155,9 @@ int main(int argc, char *argv[]){
             throw std::runtime_error(errorMsg);
         }
 
-        parallel_for(inputData.cameras.begin(), inputData.cameras.end(), [&downScaleFactor](Camera &cam){
+        for (Camera &cam : inputData.cameras) {
             cam.loadImage(downScaleFactor);
-        });
+        }
 
         // Withhold a validation camera if necessary
         auto t = inputData.getCameras(validate, valImage);

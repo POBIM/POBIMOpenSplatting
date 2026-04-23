@@ -12,6 +12,12 @@ namespace cm{ InputData inputDataFromColmap(const std::string &projectRoot, cons
 namespace osfm { InputData inputDataFromOpenSfM(const std::string &projectRoot); }
 namespace omvg { InputData inputDataFromOpenMVG(const std::string &projectRoot); }
 
+namespace {
+torch::Tensor normalizedImageTensor(const torch::Tensor &compactImage) {
+    return compactImage.toType(torch::kFloat32) / 255.0f;
+}
+}
+
 InputData inputDataFromX(const std::string &projectRoot, const std::string& colmapImageSourcePath){
     fs::path root(projectRoot);
 
@@ -38,13 +44,12 @@ torch::Tensor Camera::getIntrinsicsMatrix(){
 }
 
 void Camera::loadImage(float downscaleFactor){
-    // Populates image and K, then updates the camera parameters
-    // Caution: this function has destructive behaviors
-    // and should be called only once
-    if (image.numel()) std::runtime_error("loadImage already called");
-    std::cout << "Loading " << filePath << std::endl;
+    // Prepares camera metadata and defers pixel materialization until getImage().
+    if (imageMetadataPrepared) throw std::runtime_error("loadImage already called");
+    std::cout << "Preparing " << filePath << std::endl;
 
     cv::Mat cImg = imreadRGB(filePath);
+    imageLoadDownscaleFactor = downscaleFactor;
     
     float rescaleF = 1.0f;
     // If camera intrinsics don't match the image dimensions 
@@ -65,54 +70,83 @@ void Camera::loadImage(float downscaleFactor){
         cy *= scaleFactor;
     }
 
-    K = getIntrinsicsMatrix();
+    decodeK = getIntrinsicsMatrix();
     cv::Rect roi;
 
     if (hasDistortionParameters()){
-        // Undistort
+        // Pre-compute the undistortion camera matrices and crop ROI. The actual
+        // pixel undistortion stays lazy to avoid holding the full dataset in RAM.
         std::vector<float> distCoeffs = undistortionParameters();
-        cv::Mat cK = floatNxNtensorToMat(K);
+        cv::Mat cK = floatNxNtensorToMat(decodeK);
         cv::Mat newK = cv::getOptimalNewCameraMatrix(cK, distCoeffs, cv::Size(cImg.cols, cImg.rows), 0, cv::Size(), &roi);
-
-        cv::Mat undistorted = cv::Mat::zeros(cImg.rows, cImg.cols, cImg.type());
-        cv::undistort(cImg, undistorted, cK, distCoeffs, newK);
-        
-        image = imageToTensor(undistorted);
         K = floatNxNMatToTensor(newK);
     }else{
         roi = cv::Rect(0, 0, cImg.cols, cImg.rows);
-        image = imageToTensor(cImg);
+        K = decodeK.clone();
     }
 
-    // Crop to ROI
-    image = image.index({Slice(roi.y, roi.y + roi.height), Slice(roi.x, roi.x + roi.width), Slice()});
+    roiX = roi.x;
+    roiY = roi.y;
+    roiWidth = roi.width;
+    roiHeight = roi.height;
+
+    image = torch::Tensor();
+    imagePyramids.clear();
+    imageMetadataPrepared = true;
 
     // Update parameters
-    height = image.size(0);
-    width = image.size(1);
+    height = roi.height;
+    width = roi.width;
     fx = K[0][0].item<float>();
     fy = K[1][1].item<float>();
     cx = K[0][2].item<float>();
     cy = K[1][2].item<float>();
 }
 
+void Camera::materializeImage(){
+    if (image.numel()) return;
+    if (!imageMetadataPrepared) throw std::runtime_error("Image metadata not prepared before materialization");
+
+    std::cout << "Loading " << filePath << std::endl;
+    cv::Mat cImg = imreadRGB(filePath);
+
+    if (imageLoadDownscaleFactor > 1.0f){
+        float scaleFactor = 1.0f / imageLoadDownscaleFactor;
+        cv::resize(cImg, cImg, cv::Size(), scaleFactor, scaleFactor, cv::INTER_AREA);
+    }
+
+    if (hasDistortionParameters()){
+        std::vector<float> distCoeffs = undistortionParameters();
+        cv::Mat cK = floatNxNtensorToMat(decodeK);
+        cv::Mat newK = floatNxNtensorToMat(K);
+        cv::Mat undistorted = cv::Mat::zeros(cImg.rows, cImg.cols, cImg.type());
+        cv::undistort(cImg, undistorted, cK, distCoeffs, newK);
+        image = imageToTensor(undistorted);
+    }else{
+        image = imageToTensor(cImg);
+    }
+
+    image = image.index({Slice(roiY, roiY + roiHeight), Slice(roiX, roiX + roiWidth), Slice()}).contiguous();
+    imagePyramids.clear();
+}
+
 torch::Tensor Camera::getImage(int downscaleFactor){
-    if (downscaleFactor <= 1) return image;
+    if (!image.numel()) materializeImage();
+    if (downscaleFactor <= 1) return normalizedImageTensor(image);
     else{
-
-        // torch::jit::script::Module container = torch::jit::load("gt.pt");
-        // return container.attr("val").toTensor();
-
-        if (imagePyramids.find(downscaleFactor) != imagePyramids.end()){
-            return imagePyramids[downscaleFactor];
+        auto it = imagePyramids.find(downscaleFactor);
+        if (it != imagePyramids.end()){
+            return normalizedImageTensor(it->second);
         }
 
-        // Rescale, store and return
+        // Cache only the currently requested derived scale so RAM does not grow
+        // with every resolution stage visited during training.
         cv::Mat cImg = tensorToImage(image);
         cv::resize(cImg, cImg, cv::Size(cImg.cols / downscaleFactor, cImg.rows / downscaleFactor), 0.0, 0.0, cv::INTER_AREA);
         torch::Tensor t = imageToTensor(cImg);
-        imagePyramids[downscaleFactor] = t;
-        return t;
+        imagePyramids.clear();
+        auto cached = imagePyramids.emplace(downscaleFactor, std::move(t));
+        return normalizedImageTensor(cached.first->second);
     }
 }
 

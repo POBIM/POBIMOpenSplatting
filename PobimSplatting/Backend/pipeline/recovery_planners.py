@@ -166,6 +166,170 @@ def _recovery_step_order(kind):
     return 0
 
 
+def _is_ordered_video_split_retry_candidate(config, colmap_cfg, sparse_summary):
+    if not sparse_summary or not sparse_summary.get("has_multiple_models"):
+        return False
+
+    if colmap_cfg.get("automatic_split_retry_attempted"):
+        return False
+
+    input_type = str((config or {}).get("input_type") or "").lower()
+    if input_type not in {"video", "mixed"} and not bool(
+        (colmap_cfg or {}).get("orbit_safe_mode")
+    ):
+        return False
+
+    alternate_registered = int(sparse_summary.get("alternate_registered") or 0)
+    return alternate_registered >= 5
+
+
+def run_automatic_split_retry(
+    project_id,
+    paths,
+    config,
+    colmap_cfg,
+    sparse_summary,
+    *,
+    rerun_feature_extraction_stage,
+    rerun_feature_matching_stage,
+    rerun_sparse_reconstruction_stage,
+):
+    if not _is_ordered_video_split_retry_candidate(config, colmap_cfg, sparse_summary):
+        return None
+
+    append_log_line(
+        project_id,
+        "🧠 Ordered video sparse reconstruction is still split after the normal recovery ladder; "
+        "automatically rerunning extraction, matching, and sparse reconstruction once with a stronger single-model repair profile",
+    )
+
+    geometry_stats = colmap_cfg.get("pair_geometry_stats") or analyze_pair_geometry_stats(
+        paths["database_path"]
+    )
+    matcher_params = dict(colmap_cfg.get("matcher_params") or {})
+    overlap_plan = derive_data_driven_overlap_plan(
+        geometry_stats,
+        matcher_params,
+        sparse_summary=sparse_summary,
+        frame_spacing_stats=summarize_frame_selection_spacing(paths),
+    )
+
+    clear_sparse_reconstruction_outputs(paths["sparse_path"])
+    clear_colmap_database(paths["database_path"])
+
+    _, rerun_colmap_cfg, _, _ = get_colmap_config_for_pipeline(paths, config)
+    rerun_colmap_cfg["automatic_split_retry_attempted"] = True
+    rerun_colmap_cfg["boundary_frame_densification_attempted"] = bool(
+        colmap_cfg.get("boundary_frame_densification_attempted")
+    )
+    rerun_colmap_cfg["weak_window_recovery_attempted"] = False
+    rerun_colmap_cfg["stubborn_boundary_recovery_attempted"] = False
+    rerun_colmap_cfg["densified_overlap_retry_attempted"] = False
+    rerun_colmap_cfg["loop_detection_fallback_attempted"] = False
+    rerun_colmap_cfg["pair_geometry_stats"] = None
+    rerun_colmap_cfg["recovery_matching_pass"] = None
+    rerun_colmap_cfg["final_recovery_matching_pass"] = None
+    rerun_colmap_cfg["last_sparse_summary"] = dict(sparse_summary)
+    rerun_colmap_cfg["no_regression_floor"] = merge_no_regression_floors(
+        colmap_cfg.get("no_regression_floor"),
+        capture_no_regression_floor(colmap_cfg),
+    )
+    rerun_colmap_cfg["recovery_history"] = list(colmap_cfg.get("recovery_history") or [])
+
+    retry_matcher_params = dict(rerun_colmap_cfg.get("matcher_params") or {})
+    current_overlap = max(
+        6,
+        int(
+            retry_matcher_params.get(
+                "SequentialMatching.overlap",
+                matcher_params.get("SequentialMatching.overlap", "16"),
+            )
+        ),
+    )
+    target_overlap = current_overlap + 6
+    if overlap_plan:
+        target_overlap = max(
+            target_overlap,
+            int(overlap_plan.get("target_overlap") or current_overlap),
+        )
+    retry_matcher_params["SequentialMatching.overlap"] = str(min(60, target_overlap))
+    retry_matcher_params["SequentialMatching.quadratic_overlap"] = "1"
+    retry_matcher_params["SequentialMatching.loop_detection"] = "1"
+    rerun_colmap_cfg["matcher_params"] = retry_matcher_params
+
+    retry_mapper_params = dict(rerun_colmap_cfg.get("mapper_params") or {})
+    current_trials = int(retry_mapper_params.get("Mapper.max_reg_trials", "8"))
+    current_inliers = int(
+        retry_mapper_params.get("Mapper.abs_pose_min_num_inliers", "18")
+    )
+    current_ratio = float(
+        retry_mapper_params.get("Mapper.abs_pose_min_inlier_ratio", "0.12")
+    )
+    retry_mapper_params["Mapper.max_num_models"] = "1"
+    retry_mapper_params["Mapper.structure_less_registration_fallback"] = "1"
+    retry_mapper_params["Mapper.max_reg_trials"] = str(max(current_trials, 14))
+    retry_mapper_params["Mapper.abs_pose_min_num_inliers"] = str(
+        min(current_inliers, 12)
+    )
+    retry_mapper_params["Mapper.abs_pose_min_inlier_ratio"] = f"{min(current_ratio, 0.08):.2f}"
+    rerun_colmap_cfg["mapper_params"] = retry_mapper_params
+
+    _append_recovery_history(
+        rerun_colmap_cfg,
+        {
+            "kind": "automatic_split_retry",
+            "label": "Automatic split retry",
+            "reason_code": "unresolved_split_model",
+            "step_order": _recovery_step_order("final_loop_detection_subset"),
+            "status": "completed",
+            "outcome": "rerun_started",
+            "reason": (
+                "ordered video remained split after the recovery ladder, so the pipeline "
+                "automatically reran extraction/matching/sparse with stronger overlap, "
+                "loop detection, and a single-model mapper cap"
+            ),
+            "failed_step_key": None,
+            "fallback_step": None,
+            "fallback_reason": None,
+            "subset_image_count": None,
+            "weak_boundary_count": int(
+                (geometry_stats or {}).get("weak_boundary_count") or 0
+            ),
+            "target_boundary_count": None,
+            "surviving_target_boundary_count": None,
+            "padding": None,
+            "overlap": retry_matcher_params.get("SequentialMatching.overlap"),
+            "quadratic_overlap": retry_matcher_params.get(
+                "SequentialMatching.quadratic_overlap"
+            ),
+            "loop_detection": retry_matcher_params.get(
+                "SequentialMatching.loop_detection"
+            ),
+            "runtime_mode": "automatic_rerun",
+            "tuned_decision_used": _tuned_decision_used(colmap_cfg),
+        },
+    )
+
+    append_log_line(
+        project_id,
+        "🔁 Automatic split retry: "
+        f"overlap={retry_matcher_params.get('SequentialMatching.overlap')} | "
+        f"loop={retry_matcher_params.get('SequentialMatching.loop_detection')} | "
+        f"min_inliers={retry_mapper_params.get('Mapper.abs_pose_min_num_inliers')} | "
+        f"min_ratio={retry_mapper_params.get('Mapper.abs_pose_min_inlier_ratio')} | "
+        f"max_reg_trials={retry_mapper_params.get('Mapper.max_reg_trials')} | "
+        "max_models=1",
+    )
+
+    rerun_colmap_cfg = rerun_feature_extraction_stage(
+        project_id, paths, config, rerun_colmap_cfg
+    )
+    rerun_colmap_cfg = rerun_feature_matching_stage(
+        project_id, paths, config, rerun_colmap_cfg
+    )
+    return rerun_sparse_reconstruction_stage(project_id, paths, config, rerun_colmap_cfg)
+
+
 def _estimate_targeted_pair_budget(
     *,
     gpu_total_vram_mb,
@@ -741,8 +905,13 @@ def refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id=None):
         or geometry_stats['adjacent_p10'] < 25
     ):
         suggested_profile = 'bridge-balanced'
-    elif geometry_stats['bridge_p10'] >= 55 and geometry_stats['weak_boundary_count'] == 0:
-        suggested_profile = 'local-conservative'
+    elif (
+        geometry_stats['bridge_p10'] >= 55
+        and geometry_stats['adjacent_p10'] >= 40
+        and geometry_stats['weak_boundary_count'] == 0
+        and geometry_stats['zero_boundary_count'] == 0
+    ):
+        suggested_profile = 'bridge-balanced'
 
     if profile_rank[suggested_profile] < profile_rank[current_profile]:
         suggested_profile = current_profile

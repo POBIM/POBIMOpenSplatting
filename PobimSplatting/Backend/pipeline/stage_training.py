@@ -458,8 +458,19 @@ def run_opensplat_training(
             _update_splats_from_line(line)
             line_stripped = line.strip()
             if line_stripped:
-                preview_candidate = Path(line_stripped)
-                if preview_candidate.suffix.lower() == ".ply" and preview_candidate.exists():
+                preview_candidate_path = None
+                direct_candidate = Path(line_stripped)
+                if direct_candidate.suffix.lower() == ".ply" and direct_candidate.exists():
+                    preview_candidate_path = direct_candidate
+                else:
+                    wrote_match = re.search(r"\bWrote\s+(.+?\.ply)\s*$", line_stripped)
+                    if wrote_match:
+                        wrote_candidate = Path(wrote_match.group(1).strip())
+                        if wrote_candidate.exists():
+                            preview_candidate_path = wrote_candidate
+
+                preview_candidate = preview_candidate_path
+                if preview_candidate is not None:
                     preview_iteration_match = re.search(
                         r"(?:^|[_-])(\d+)(?:iter|iters|steps?)?\.ply$",
                         preview_candidate.name,

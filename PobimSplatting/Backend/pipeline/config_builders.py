@@ -1145,6 +1145,15 @@ def get_colmap_config(
             )
         )
 
+        capture_pattern = dict((orbit_safe_policy or {}).get("capture_pattern") or {})
+        if capture_pattern.get("looks_like_video_orbit"):
+            max_num_models = 1
+            if project_id:
+                append_log_line(
+                    project_id,
+                    "🧠 Ordered video/orbit default: forcing incremental COLMAP to keep a single sparse model",
+                )
+
     if custom_params and quality_mode == "custom":
         if (
             "min_num_matches" in custom_params

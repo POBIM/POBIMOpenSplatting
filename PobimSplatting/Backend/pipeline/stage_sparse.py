@@ -924,6 +924,19 @@ def run_sparse_reconstruction_stage(
             project_id, paths, config, colmap_cfg, helpers=helpers
         )
 
+    automatic_split_retry = helpers["build_ordered_split_auto_retry"](
+        project_id,
+        paths,
+        config,
+        colmap_cfg,
+        sparse_summary,
+        rerun_feature_extraction_stage=helpers["rerun_feature_extraction_stage"],
+        rerun_feature_matching_stage=helpers["rerun_feature_matching_stage"],
+        rerun_sparse_reconstruction_stage=helpers["rerun_sparse_reconstruction_stage"],
+    )
+    if automatic_split_retry is not None:
+        return automatic_split_retry
+
     return colmap_cfg
 
 

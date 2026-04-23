@@ -39,8 +39,17 @@ struct Camera{
     torch::Tensor getImage(int downscaleFactor);
 
     void loadImage(float downscaleFactor);
+    void materializeImage();
     torch::Tensor K;
     torch::Tensor image;
+    torch::Tensor decodeK;
+
+    float imageLoadDownscaleFactor = 1.0f;
+    int roiX = 0;
+    int roiY = 0;
+    int roiWidth = 0;
+    int roiHeight = 0;
+    bool imageMetadataPrepared = false;
 
     std::unordered_map<int, torch::Tensor> imagePyramids;
 };

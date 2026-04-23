@@ -582,7 +582,7 @@ class VideoProcessor:
             if parallel_workers <= 0:
                 cpu_count = os.cpu_count() or 4
                 auto_workers = max(1, cpu_count // 6)
-                parallel_workers = min(4, auto_workers)
+                parallel_workers = min(8, auto_workers)
 
             # Parallel chunk extraction helps long HEVC videos use more CPU cores.
             if parallel_workers > 1 and duration >= 45 and expected_frames >= 60:
@@ -737,7 +737,7 @@ class VideoProcessor:
         requested_workers = int(extraction_config.get('ffmpeg_cpu_workers') or 0)
         cpu_count = os.cpu_count() or 4
         if requested_workers <= 0:
-            requested_workers = min(4, max(1, cpu_count // 6))
+            requested_workers = min(8, max(1, cpu_count // 6))
 
         chunk_count = min(requested_workers, max(1, int(duration // 20)))
         if chunk_count <= 1:
@@ -863,7 +863,7 @@ class VideoProcessor:
         status_callback = extraction_config.get('status_callback')
         requested_workers = int(extraction_config.get('ffmpeg_cpu_workers') or 0)
         if requested_workers <= 0:
-            requested_workers = min(4, max(1, (os.cpu_count() or 4) // 2))
+            requested_workers = min(8, max(1, (os.cpu_count() or 4) // 2))
         scoring_workers = min(max(1, requested_workers), max(1, candidate_count))
         candidate_source_indices = self._estimate_candidate_source_indices(total_frames, candidate_count)
 
@@ -1115,7 +1115,7 @@ class VideoProcessor:
         requested_workers = int(extraction_config.get('ffmpeg_cpu_workers') or 0)
         cpu_count = os.cpu_count() or 4
         if requested_workers <= 0:
-            requested_workers = min(4, max(1, cpu_count // 6))
+            requested_workers = min(8, max(1, cpu_count // 6))
 
         chunk_count = int(chunk_count_override or min(requested_workers, max(1, int(duration // 20))))
         if chunk_count <= 1:
@@ -1322,7 +1322,7 @@ class VideoProcessor:
             if parallel_workers <= 0:
                 cpu_count = os.cpu_count() or 4
                 auto_workers = max(1, cpu_count // 6)
-                parallel_workers = min(4, auto_workers)
+                parallel_workers = min(8, auto_workers)
 
             if parallel_workers > 1 and duration >= 45 and expected_frames >= 60:
                 requested_chunk_count = min(parallel_workers, max(1, int(duration // 20)))

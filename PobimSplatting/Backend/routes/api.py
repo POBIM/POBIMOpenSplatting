@@ -752,7 +752,7 @@ def upload_policy_preview():
         ),
         "oversample_factor": parse_int(payload.get("oversample_factor"), 10),
         "replacement_search_radius": parse_int(payload.get("replacement_search_radius"), 4),
-        "ffmpeg_cpu_workers": parse_int(payload.get("ffmpeg_cpu_workers"), 4),
+        "ffmpeg_cpu_workers": parse_int(payload.get("ffmpeg_cpu_workers"), 8),
         "use_gpu_extraction": parse_bool(payload.get("use_gpu_extraction"), True),
         "colmap_resolution": payload.get("colmap_resolution", "2K"),
         "training_resolution": payload.get("training_resolution", "4K"),
@@ -915,7 +915,7 @@ def upload_files():
         == "true",
         "oversample_factor": int(request.form.get("oversample_factor", 10)),
         "replacement_search_radius": int(request.form.get("replacement_search_radius", 4)),
-        "ffmpeg_cpu_workers": int(request.form.get("ffmpeg_cpu_workers", 4)),
+        "ffmpeg_cpu_workers": int(request.form.get("ffmpeg_cpu_workers", 8)),
         # GPU acceleration for video frame extraction (5-10x faster)
         "use_gpu_extraction": request.form.get("use_gpu_extraction", "true").lower()
         == "true",

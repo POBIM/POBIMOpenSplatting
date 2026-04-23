@@ -413,7 +413,7 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
                         'smart_frame_selection': config.get('smart_frame_selection', True),
                         'oversample_factor': config.get('oversample_factor', 10),
                         'replacement_search_radius': config.get('replacement_search_radius', 4),
-                        'ffmpeg_cpu_workers': config.get('ffmpeg_cpu_workers', 4),
+                        'ffmpeg_cpu_workers': config.get('ffmpeg_cpu_workers', 8),
                         'source_video_path': str(video_path),
                         'auto_tuning_policy': config.get('_auto_tuning_policy'),
                     }

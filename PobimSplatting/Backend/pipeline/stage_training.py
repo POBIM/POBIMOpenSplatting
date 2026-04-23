@@ -316,7 +316,7 @@ def run_opensplat_training(
                             "resolution": training_resolution,
                             "quality": 100,
                             "use_gpu": config.get("use_gpu_extraction", True),
-                            "ffmpeg_cpu_workers": config.get("ffmpeg_cpu_workers", 4),
+                            "ffmpeg_cpu_workers": config.get("ffmpeg_cpu_workers", 8),
                             "replacement_search_radius": config.get(
                                 "replacement_search_radius", 4
                             ),

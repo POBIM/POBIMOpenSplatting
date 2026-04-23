@@ -6,6 +6,7 @@ Use it together with:
 
 - [ORDERED_VIDEO_RESOURCE_AWARE_ROADMAP.md](ORDERED_VIDEO_RESOURCE_AWARE_ROADMAP.md) for the phase map and implementation history
 - [ORDERED_VIDEO_BENCHMARK_BASELINE.md](ORDERED_VIDEO_BENCHMARK_BASELINE.md) for the evidence and signoff contract
+- [ORDERED_VIDEO_SELF_TUNING_GUIDE.md](ORDERED_VIDEO_SELF_TUNING_GUIDE.md) for the intended runtime behavior and operator/developer workflow
 
 ## Closeout Strategy
 

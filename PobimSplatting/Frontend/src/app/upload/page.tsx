@@ -36,7 +36,7 @@ export default function UploadPage() {
     oversample_factor: 10,
     replacement_search_radius: 4,
     ffmpeg_cpu_workers: 4,
-    sfm_engine: 'glomap',  // Legacy alias kept for backend compatibility; UI shows COLMAP Global SfM
+    sfm_engine: 'glomap',  // Auto-shifted to COLMAP Incremental for video/mixed uploads below
     sfm_backend: 'cli' as SfmBackendMode,
     feature_method: 'sift',  // 'sift' (classic COLMAP), 'aliked' (native COLMAP neural), 'superpoint' (hloc)
     adaptive_pair_scheduling: true,
@@ -243,6 +243,15 @@ export default function UploadPage() {
   const hasImages = files.some(file => file.type.startsWith('image/'));
   const totalSize = files.reduce((sum, file) => sum + file.size, 0);
   const inputProfile = hasVideo && hasImages ? 'mixed' : hasVideo ? 'video' : hasImages ? 'images' : 'unknown';
+  useEffect(() => {
+    if ((inputProfile === 'video' || inputProfile === 'mixed') && config.sfm_engine === 'glomap') {
+      setConfig(prev => (
+        prev.sfm_engine === 'glomap'
+          ? { ...prev, sfm_engine: 'colmap' }
+          : prev
+      ));
+    }
+  }, [inputProfile, config.sfm_engine]);
   const estimatedSearchWindow =
     config.extraction_mode === 'fps' && config.target_fps > 0
       ? `up to ±${Math.max(config.replacement_search_radius, Math.round(30 / config.target_fps))} frames`

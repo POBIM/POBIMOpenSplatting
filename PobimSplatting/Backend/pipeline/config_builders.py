@@ -1060,6 +1060,9 @@ def get_colmap_config(
         "bridge_risk_score": orbit_safe_policy["bridge_risk_score"]
         if orbit_safe_policy
         else None,
+        "orbit_safe_tuning_context": orbit_safe_policy.get("tuning_context")
+        if orbit_safe_policy
+        else None,
         "capture_pattern": orbit_safe_policy["capture_pattern"]
         if orbit_safe_policy
         else None,

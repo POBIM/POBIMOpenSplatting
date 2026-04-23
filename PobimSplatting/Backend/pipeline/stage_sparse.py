@@ -35,6 +35,8 @@ from .runtime_support import (
     should_log_subprocess_line,
 )
 
+LIVE_SPARSE_SNAPSHOT_FREQ = 5
+
 
 def _log_colmap_ba_plan(project_id, ba_plan):
     if not ba_plan:
@@ -181,6 +183,24 @@ def run_sparse_reconstruction_stage(
     )
 
     sfm_engine = normalize_sfm_engine(config.get("sfm_engine", "glomap"))
+    sparse_retry_sfm_engine = config.get("sparse_retry_sfm_engine")
+    if sparse_retry_sfm_engine:
+        sfm_engine = normalize_sfm_engine(sparse_retry_sfm_engine)
+        append_log_line(
+            project_id,
+            f"🔁 Sparse retry override: using {sfm_engine} engine for this reconstruction pass",
+        )
+
+    force_cpu_sparse_reconstruction = bool(
+        config.get("force_cpu_sparse_reconstruction", False)
+    )
+    sparse_has_cuda = has_cuda and not force_cpu_sparse_reconstruction
+    if force_cpu_sparse_reconstruction:
+        append_log_line(
+            project_id,
+            "🧪 Sparse retry override: forcing CPU-only sparse reconstruction for this pass",
+        )
+
     sfm_backend = normalize_sfm_backend(config.get("sfm_backend"))
     global_backend = (
         resolve_global_sfm_backend(colmap_exe) if sfm_engine == "glomap" else None
@@ -241,9 +261,11 @@ def run_sparse_reconstruction_stage(
         try:
             import torch
 
-            if torch.cuda.is_available():
+            if sparse_has_cuda and torch.cuda.is_available():
                 cmd.extend(["--device", "cuda:0"])
                 append_log_line(project_id, "🎮 CUDA acceleration enabled")
+            elif force_cpu_sparse_reconstruction:
+                append_log_line(project_id, "ℹ️ FastMap retry is running on CPU")
         except ImportError:
             pass
         append_log_line(project_id, f"🔧 FastMap path: {FASTMAP_PATH}")
@@ -259,7 +281,7 @@ def run_sparse_reconstruction_stage(
             "--output_path",
             str(paths["sparse_path"]),
         ]
-        if has_cuda:
+        if sparse_has_cuda:
             if use_legacy_glomap:
                 cmd.extend(
                     [
@@ -290,6 +312,8 @@ def run_sparse_reconstruction_stage(
                 project_id,
                 "🚀 Global SfM GPU acceleration enabled (Global Positioning + Bundle Adjustment)",
             )
+        else:
+            append_log_line(project_id, "ℹ️ Global SfM retry is running on CPU")
         if config.get("fast_sfm", False):
             cmd.extend(
                 ["--ba_iteration_num", "2", "--retriangulation_iteration_num", "0"]
@@ -337,16 +361,33 @@ def run_sparse_reconstruction_stage(
             "--Mapper.num_threads",
             str(os.cpu_count() or 8),
         ]
+        snapshot_path = paths.get("sparse_snapshots_path")
+        if snapshot_path:
+            snapshot_path = Path(snapshot_path)
+            shutil.rmtree(snapshot_path, ignore_errors=True)
+            snapshot_path.mkdir(parents=True, exist_ok=True)
+            cmd.extend(
+                [
+                    "--Mapper.snapshot_path",
+                    str(snapshot_path),
+                    "--Mapper.snapshot_frames_freq",
+                    str(LIVE_SPARSE_SNAPSHOT_FREQ),
+                ]
+            )
+            append_log_line(
+                project_id,
+                f"📸 Live sparse snapshots enabled every {LIVE_SPARSE_SNAPSHOT_FREQ} registered images",
+            )
         for param, value in colmap_cfg.get("mapper_params", {}).items():
             cmd.extend([f"--{param}", str(value)])
-        if has_cuda:
+        if sparse_has_cuda:
             ba_plan = describe_colmap_bundle_adjustment_mode(
-                colmap_exe, num_images, has_cuda
+                colmap_exe, num_images, sparse_has_cuda
             )
             cmd.extend(["--Mapper.ba_use_gpu", "1", "--Mapper.ba_gpu_index", "0"])
             _log_colmap_ba_plan(project_id, ba_plan)
         else:
-            append_log_line(project_id, "ℹ️ Using CPU-only COLMAP")
+            append_log_line(project_id, "ℹ️ Using CPU-only COLMAP sparse reconstruction")
         append_log_line(
             project_id, f"🔧 Using {os.cpu_count() or 8} CPU threads for mapper"
         )
@@ -690,6 +731,14 @@ def run_sparse_reconstruction_stage(
         ):
             return
 
+        if not use_global_sfm and "creating snapshot" in line_lower:
+            registered = max(int(sparse_tracker.get("registered", 0)), 0)
+            append_log_line(
+                project_id,
+                f"[COLMAP] Live sparse snapshot exported ({registered}/{num_images} images registered)",
+            )
+            return
+
     pycolmap_completed = False
     if use_pycolmap_global:
         pycolmap_completed = try_run_pycolmap_global_mapping(
@@ -787,7 +836,7 @@ def run_sparse_reconstruction_stage(
         )
         helpers["clear_sparse_reconstruction_outputs"](paths["sparse_path"])
         colmap_cfg = helpers["run_orbit_safe_bridge_recovery_matching_pass"](
-            project_id, paths, config, colmap_exe, colmap_cfg, has_cuda
+            project_id, paths, config, colmap_exe, colmap_cfg, sparse_has_cuda
         )
         return run_sparse_reconstruction_stage(
             project_id, paths, config, colmap_cfg, helpers=helpers
@@ -806,7 +855,7 @@ def run_sparse_reconstruction_stage(
         )
         helpers["clear_sparse_reconstruction_outputs"](paths["sparse_path"])
         colmap_cfg = helpers["run_orbit_safe_bridge_recovery_matching_pass"](
-            project_id, paths, config, colmap_exe, colmap_cfg, has_cuda
+            project_id, paths, config, colmap_exe, colmap_cfg, sparse_has_cuda
         )
         return run_sparse_reconstruction_stage(
             project_id, paths, config, colmap_cfg, helpers=helpers

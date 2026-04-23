@@ -35,8 +35,9 @@ export default function UploadPage() {
     oversample_factor: 10,
     replacement_search_radius: 4,
     ffmpeg_cpu_workers: 4,
-    sfm_engine: 'glomap',  // Legacy alias kept for backend compatibility; UI shows COLMAP Global SfM
+    sfm_engine: 'colmap',
     sfm_backend: 'cli' as SfmBackendMode,
+    force_cpu_sparse_reconstruction: true,
     feature_method: 'sift',  // 'sift' (classic COLMAP), 'aliked' (native COLMAP neural), 'superpoint' (hloc)
     use_gpu_extraction: true,  // GPU-accelerated video frame extraction (5-10x faster)
     mixed_precision: false,
@@ -620,1269 +621,1251 @@ export default function UploadPage() {
     return info[mode as keyof typeof info] || info.balanced;
   };
 
+  const qualityInfo = getQualityInfo(config.quality_mode);
+  const minimumFilesReached = files.length >= 10;
+  const wizardSteps = [
+    {
+      key: 'media',
+      href: '#stage-media',
+      label: 'Media',
+      detail: files.length > 0 ? `${files.length} file${files.length > 1 ? 's' : ''}` : 'Add files',
+      icon: Upload,
+      status: files.length > 0 ? 'complete' : 'current',
+    },
+    {
+      key: 'setup',
+      href: '#stage-setup',
+      label: 'Setup',
+      detail: config.project_name || 'Name + preset',
+      icon: Settings,
+      status: files.length > 0 && !uploading ? 'current' : files.length > 0 ? 'complete' : 'upcoming',
+    },
+    {
+      key: 'pipeline',
+      href: '#stage-pipeline',
+      label: 'Pipeline',
+      detail: `${getSfmEngineCompactLabel(config.sfm_engine)} • ${config.feature_method}`,
+      icon: Sliders,
+      status: files.length > 0 ? 'current' : 'upcoming',
+    },
+    {
+      key: 'launch',
+      href: '#stage-launch',
+      label: 'Launch',
+      detail: uploading ? `${uploadProgress}% uploading` : 'Start processing',
+      icon: CheckCircle,
+      status: uploading ? 'current' : files.length > 0 ? 'upcoming' : 'upcoming',
+    },
+  ] as const;
+
   return (
     <div className="brutal-shell">
       <section className="brutal-section">
-        <div className="brutal-container max-w-5xl space-y-6">
-          <div className="space-y-3">
-            <span className="brutal-eyebrow rotate-1">Upload Wizard</span>
-            <div>
-              <h1 className="brutal-h1">Upload Media</h1>
-              <p className="mt-2 text-sm font-medium text-[color:var(--text-secondary)]">Upload images or videos for 3D reconstruction</p>
-            </div>
-          </div>
-
-      <div
-        className={`relative overflow-hidden border-2 border-dashed p-8 text-center transition-all md:p-10 ${isDragging
-          ? 'border-[color:var(--ink)] bg-[color:var(--paper-muted)] shadow-[var(--shadow-md)]'
-          : 'border-[color:var(--ink)] bg-[color:var(--paper-card)] shadow-[var(--shadow-sm)] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[var(--shadow-md)]'
-          }`}
-      >
-        {files.length === 0 ? (
-          <label
-            htmlFor="file-input"
-            className="block cursor-pointer"
-            onDragEnter={handleDragEnter}
-            onDragLeave={handleDragLeave}
-            onDragOver={handleDragOver}
-            onDrop={handleDrop}
-          >
-            <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center border border-[color:var(--ink)] bg-[color:var(--paper-muted)] shadow-[var(--shadow-sm)]">
-              <Upload className="h-7 w-7 text-[color:var(--ink)]" />
-            </div>
-            <p className="brutal-h2 mb-2">
-              Drop your files here or click to browse
-            </p>
-            <p className="mx-auto mb-6 max-w-xl text-sm font-medium text-[color:var(--text-secondary)]">
-              Supports MP4, AVI, MOV, JPG, PNG, WebP, TIFF files up to 5GB each
-            </p>
-            <input
-              type="file"
-              accept="video/*,image/*"
-              multiple
-              onChange={(e) => e.target.files && handleFileSelect(Array.from(e.target.files))}
-              className="hidden"
-              id="file-input"
-            />
-            <span className="brutal-btn brutal-btn-primary">
-              Choose Files
-            </span>
-          </label>
-        ) : (
-          <div className="space-y-6">
-            {/* File List */}
-            <div className="brutal-card-muted p-3 md:p-4 text-left">
-              <div className="flex items-center justify-between gap-3">
-                <h4 className="brutal-h3">Selected Files ({files.length})</h4>
-                <span className="brutal-badge -rotate-1">{formatFileSize(totalSize)}</span>
+        <div className="brutal-container max-w-7xl space-y-6">
+          <div className="grid gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
+            <aside className="space-y-4 lg:sticky lg:top-24 lg:self-start">
+              <div className="brutal-card-dark p-4">
+                <span className="brutal-eyebrow -rotate-1 text-[color:var(--text-on-ink-muted)]">Upload Wizard</span>
+                <h1 className="brutal-h2 mt-3 text-[color:var(--text-on-ink)]">Build your dataset in stages</h1>
+                <p className="mt-2 text-sm font-medium text-[color:var(--text-on-ink-muted)]">
+                  อ่านทีละขั้นตอน เลือกเฉพาะที่จำเป็น และเปิดรายละเอียดเพิ่มเมื่อจำเป็นเท่านั้น
+                </p>
               </div>
-              <div className="brutal-scroll mt-4 space-y-2 max-h-48 overflow-y-auto pr-1">
-                {files.map((file, index) => (
-                  <div key={`${file.name}-${file.size}-${index}`} className="flex items-center justify-between border border-[color:var(--ink)] bg-[color:var(--paper-card)] p-3">
-                    <div className="flex items-center space-x-3">
-                      {file.type.startsWith('video/') ? (
-                        <FileVideo className="h-4 w-4 text-[color:var(--ink)]" />
-                      ) : (
-                        <Image className="h-4 w-4 text-[color:var(--ink)]" />
-                      )}
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-black uppercase tracking-tight text-[color:var(--ink)] truncate">{file.name}</p>
-                        <p className="text-xs font-medium text-[color:var(--text-secondary)]">
-                          {formatFileSize(file.size)} • {file.type.startsWith('video/') ? 'Video' : 'Image'}
-                        </p>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => removeFile(index)}
-                      className="brutal-btn brutal-btn-xs"
-                    >
-                      <AlertCircle className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-              <p className="mt-3 text-xs font-medium uppercase tracking-wide text-[color:var(--text-secondary)]">Total size: {formatFileSize(totalSize)}</p>
-            </div>
 
-            {/* Configuration Options */}
-            <div className="space-y-6">
-              {/* Project Details */}
-              <div className="grid md:grid-cols-2 gap-4">
-                <div>
-                  <label htmlFor="project-name" className="brutal-label mb-2 inline-block">Project Name</label>
-                  <input
-                    id="project-name"
-                    type="text"
-                    value={config.project_name}
-                    onChange={(e) => setConfig({ ...config, project_name: e.target.value })}
-                    className="brutal-input"
-                    placeholder="My Awesome 3D Model"
-                  />
+              <nav className="brutal-card p-3">
+                <div className="space-y-2">
+                  {wizardSteps.map((step, index) => {
+                    const StepIcon = step.icon;
+                    const isCurrent = step.status === 'current';
+                    const isComplete = step.status === 'complete';
+
+                    return (
+                      <a
+                        key={step.key}
+                        href={step.href}
+                        className={`flex items-center gap-3 border p-3 transition-transform hover:-translate-y-0.5 ${
+                          isCurrent
+                            ? 'bg-[color:var(--ink)] text-[color:var(--text-on-ink)]'
+                            : isComplete
+                              ? 'border-emerald-300 bg-emerald-50 text-emerald-900'
+                              : 'bg-[color:var(--paper-muted)] text-[color:var(--text-secondary)]'
+                        }`}
+                      >
+                        <div className={`flex h-10 w-10 shrink-0 items-center justify-center border ${
+                          isCurrent
+                            ? 'border-[color:var(--text-on-ink)] bg-[color:var(--paper-card)] text-[color:var(--ink)]'
+                            : isComplete
+                              ? 'border-emerald-300 bg-white text-emerald-700'
+                              : 'border-[color:var(--ink)] bg-white text-[color:var(--ink)]'
+                        }`}>
+                          <StepIcon className="h-4 w-4" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-sm font-black uppercase tracking-wide">0{index + 1}</p>
+                            {isComplete ? <CheckCircle className="h-4 w-4" /> : null}
+                          </div>
+                          <p className="mt-1 text-sm font-bold">{step.label}</p>
+                          <p className="truncate text-xs opacity-80">{step.detail}</p>
+                        </div>
+                      </a>
+                    );
+                  })}
                 </div>
-                <div>
-                  <label htmlFor="quality-mode" className="brutal-label mb-2 inline-block">Quality Preset</label>
-                  <select
-                    id="quality-mode"
-                    value={config.quality_mode}
-                    onChange={(e) => setConfig({ ...config, quality_mode: e.target.value })}
-                    className="brutal-select"
+              </nav>
+
+              <div className="brutal-card-muted p-4">
+                <p className="brutal-label">Quick Signal</p>
+                <div className="mt-3 grid gap-3">
+                  <div className="flex items-center justify-between text-sm font-semibold text-[color:var(--ink)]">
+                    <span className="flex items-center gap-2">
+                      <PolicyIcon className="h-4 w-4" />
+                      Detected profile
+                    </span>
+                    <span className="uppercase">{resolvedInputProfile}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm font-semibold text-[color:var(--ink)]">
+                    <span className="flex items-center gap-2">
+                      <Sliders className="h-4 w-4" />
+                      Preview confidence
+                    </span>
+                    <span>{resolvedConfidence.score}/100</span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm font-semibold text-[color:var(--ink)]">
+                    <span className="flex items-center gap-2">
+                      <Settings className="h-4 w-4" />
+                      Time estimate
+                    </span>
+                    <span>{qualityInfo.time}</span>
+                  </div>
+                </div>
+              </div>
+            </aside>
+
+            <div className="space-y-6">
+              {error && (
+                <div className="flex items-center gap-2 border border-[color:var(--ink)] p-3" style={{ background: 'var(--error-bg)', color: 'var(--error-text)', boxShadow: 'var(--shadow-sm)' }}>
+                  <AlertCircle className="h-5 w-5" />
+                  <p className="text-sm font-bold">{error}</p>
+                </div>
+              )}
+
+              <section id="stage-media" className="brutal-card overflow-hidden">
+                <div className="border-b border-[color:var(--ink)] bg-[color:var(--paper-muted)] p-4 md:p-5">
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <p className="brutal-eyebrow rotate-1">Stage 01</p>
+                      <h2 className="brutal-h2 mt-2">เลือกไฟล์</h2>
+                      <p className="mt-2 text-sm font-medium text-[color:var(--text-secondary)]">
+                        เริ่มจากโยนไฟล์เข้ามา ระบบจะเดา profile และ policy ให้ทันที
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2 text-xs font-bold uppercase tracking-wide">
+                      <span className="border border-[color:var(--ink)] bg-white px-2 py-1">MP4</span>
+                      <span className="border border-[color:var(--ink)] bg-white px-2 py-1">MOV</span>
+                      <span className="border border-[color:var(--ink)] bg-white px-2 py-1">JPG</span>
+                      <span className="border border-[color:var(--ink)] bg-white px-2 py-1">PNG / WebP / TIFF</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-4 p-4 md:p-5">
+                  <div
+                    className={`relative overflow-hidden border-2 border-dashed p-6 text-center transition-all md:p-10 ${
+                      isDragging
+                        ? 'border-[color:var(--ink)] bg-[color:var(--paper-muted)] shadow-[var(--shadow-md)]'
+                        : 'border-[color:var(--ink)] bg-[color:var(--paper-card)] shadow-[var(--shadow-sm)] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[var(--shadow-md)]'
+                    }`}
                   >
-                    <option value="hard">🧱 Hard ({getQualityInfo('hard').iterations} iter) - {getQualityInfo('hard').time} - AGGRESSIVE COVERAGE</option>
-                    <option value="high">🎯 High ({getQualityInfo('high').iterations} iter) - {getQualityInfo('high').time}</option>
-                    <option value="ultra">✨ Ultra ({getQualityInfo('ultra').iterations} iter) - {getQualityInfo('ultra').time}</option>
-                    <option value="professional">💎 Professional ({getQualityInfo('professional').iterations} iter) - {getQualityInfo('professional').time} - 4K+ SUPPORT</option>
-                    <option value="ultra_professional">🏆 Ultra Professional ({getQualityInfo('ultra_professional').iterations} iter) - {getQualityInfo('ultra_professional').time} - HIGHEST QUALITY</option>
-                    <option value="custom">⚙️ Custom - Fine-tune all parameters</option>
-                  </select>
-                  <p className="mt-2 text-xs font-medium text-[color:var(--text-secondary)]">
-                    {config.quality_mode === 'custom' ? 'Fine-tune all parameters' : getQualityInfo(config.quality_mode).desc}
-                  </p>
-                  {config.quality_mode === 'hard' && (
-                    <div className="mt-3 border border-[color:var(--ink)] px-3 py-3 text-sm" style={{ background: 'var(--warning-bg)', color: 'var(--warning-text)' }}>
-                      <strong>Hard mode plan:</strong> เน้นเก็บ sparse coverage และ feature matching ให้กว้างก่อน โดยเริ่มเทรนเพียง 5000 รอบ
-                      ถ้าภาพรวมดีค่อย Retry ต่อเป็น Professional หรือเพิ่ม iterations ภายหลัง
+                    <label
+                      htmlFor="file-input"
+                      className="block cursor-pointer"
+                      onDragEnter={handleDragEnter}
+                      onDragLeave={handleDragLeave}
+                      onDragOver={handleDragOver}
+                      onDrop={handleDrop}
+                    >
+                      <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center border border-[color:var(--ink)] bg-[color:var(--paper-muted)] shadow-[var(--shadow-sm)]">
+                        <Upload className="h-8 w-8 text-[color:var(--ink)]" />
+                      </div>
+                      <p className="brutal-h2 mb-2">{files.length === 0 ? 'ลากไฟล์มาวาง หรือกดเพื่อเลือก' : 'เพิ่มไฟล์ได้อีกตลอด'}</p>
+                      <p className="mx-auto mb-6 max-w-xl text-sm font-medium text-[color:var(--text-secondary)]">
+                        จำกัดขนาดไฟล์ละ 5GB และรองรับทั้งวิดีโอหรือชุดภาพ
+                      </p>
+                      <input
+                        type="file"
+                        accept="video/*,image/*"
+                        multiple
+                        onChange={(e) => e.target.files && handleFileSelect(Array.from(e.target.files))}
+                        className="hidden"
+                        id="file-input"
+                      />
+                      <span className="brutal-btn brutal-btn-primary">Choose Files</span>
+                    </label>
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <div className="brutal-card-muted p-4">
+                      <div className="flex items-center gap-2">
+                        <Upload className="h-4 w-4" />
+                        <p className="brutal-label">Total files</p>
+                      </div>
+                      <p className="mt-2 text-2xl font-black text-[color:var(--ink)]">{files.length}</p>
+                    </div>
+                    <div className="brutal-card-muted p-4">
+                      <div className="flex items-center gap-2">
+                        <PolicyIcon className="h-4 w-4" />
+                        <p className="brutal-label">Input profile</p>
+                      </div>
+                      <p className="mt-2 text-2xl font-black uppercase text-[color:var(--ink)]">{resolvedInputProfile}</p>
+                    </div>
+                    <div className="brutal-card-muted p-4">
+                      <div className="flex items-center gap-2">
+                        <Info className="h-4 w-4" />
+                        <p className="brutal-label">Total size</p>
+                      </div>
+                      <p className="mt-2 text-2xl font-black text-[color:var(--ink)]">{formatFileSize(totalSize)}</p>
+                    </div>
+                  </div>
+
+                  {files.length > 0 && (
+                    <div className="brutal-card-muted p-4 text-left">
+                      <div className="flex items-center justify-between gap-3">
+                        <h3 className="brutal-h3">Selected Files</h3>
+                        <span className="brutal-badge -rotate-1">{files.length}</span>
+                      </div>
+                      <div className="brutal-scroll mt-4 max-h-64 space-y-2 overflow-y-auto pr-1">
+                        {files.map((file, index) => (
+                          <div key={`${file.name}-${file.size}-${index}`} className="flex items-center justify-between border border-[color:var(--ink)] bg-[color:var(--paper-card)] p-3">
+                            <div className="flex min-w-0 items-center gap-3">
+                              {file.type.startsWith('video/') ? (
+                                <FileVideo className="h-4 w-4 shrink-0 text-[color:var(--ink)]" />
+                              ) : (
+                                <Image className="h-4 w-4 shrink-0 text-[color:var(--ink)]" />
+                              )}
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-black uppercase tracking-tight text-[color:var(--ink)]">{file.name}</p>
+                                <p className="text-xs font-medium text-[color:var(--text-secondary)]">
+                                  {formatFileSize(file.size)} • {file.type.startsWith('video/') ? 'Video' : 'Image'}
+                                </p>
+                              </div>
+                            </div>
+                            <button type="button" onClick={() => removeFile(index)} className="brutal-btn brutal-btn-xs" title="Remove file">
+                              <AlertCircle className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
                 </div>
-              </div>
+              </section>
 
-              <div className={`border p-4 md:p-5 shadow-[var(--shadow-sm)] ${resolvedExpectedPolicy.tone}`} style={{ borderColor: 'var(--ink)' }}>
-                <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-                  <div>
-                      <p className="brutal-label opacity-70">Expected Policy</p>
-                      <div className="mt-1 flex items-center gap-3">
-                        <div className={`flex h-10 w-10 items-center justify-center border shadow-[var(--shadow-sm)] ${resolvedExpectedPolicy.badgeTone}`}>
+              <section id="stage-setup" className="brutal-card overflow-hidden">
+                <div className="border-b border-[color:var(--ink)] bg-[color:var(--paper-muted)] p-4 md:p-5">
+                  <p className="brutal-eyebrow -rotate-1">Stage 02</p>
+                  <h2 className="brutal-h2 mt-2">ตั้งค่าหลัก</h2>
+                  <p className="mt-2 text-sm font-medium text-[color:var(--text-secondary)]">
+                    ตั้งชื่อโปรเจกต์กับเลือกระดับคุณภาพก่อน ที่เหลือระบบช่วยเดาให้ได้
+                  </p>
+                </div>
+
+                <div className="space-y-4 p-4 md:p-5">
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div>
+                      <label htmlFor="project-name" className="mb-2 inline-flex items-center gap-2 brutal-label">
+                        Project Name
+                        <span title="ใช้เป็นชื่อแสดงผลของโปรเจกต์ในหน้า projects" className="cursor-help">
+                          <Info className="h-3.5 w-3.5" />
+                        </span>
+                      </label>
+                      <input
+                        id="project-name"
+                        type="text"
+                        value={config.project_name}
+                        onChange={(e) => setConfig({ ...config, project_name: e.target.value })}
+                        className="brutal-input"
+                        placeholder="My Awesome 3D Model"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="quality-mode" className="mb-2 inline-flex items-center gap-2 brutal-label">
+                        Quality Preset
+                        <span title="ถ้าต้องการจูนทุกค่าเอง ให้เลือก Custom" className="cursor-help">
+                          <Info className="h-3.5 w-3.5" />
+                        </span>
+                      </label>
+                      <select
+                        id="quality-mode"
+                        value={config.quality_mode}
+                        onChange={(e) => setConfig({ ...config, quality_mode: e.target.value })}
+                        className="brutal-select"
+                      >
+                        <option value="hard">Hard ({getQualityInfo('hard').iterations} iter) • {getQualityInfo('hard').time}</option>
+                        <option value="high">High ({getQualityInfo('high').iterations} iter) • {getQualityInfo('high').time}</option>
+                        <option value="ultra">Ultra ({getQualityInfo('ultra').iterations} iter) • {getQualityInfo('ultra').time}</option>
+                        <option value="professional">Professional ({getQualityInfo('professional').iterations} iter) • {getQualityInfo('professional').time}</option>
+                        <option value="ultra_professional">Ultra Professional ({getQualityInfo('ultra_professional').iterations} iter) • {getQualityInfo('ultra_professional').time}</option>
+                        <option value="custom">Custom • fine tune all parameters</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-4">
+                    <div className="brutal-card-muted p-4">
+                      <p className="brutal-label">Preset mood</p>
+                      <p className="mt-2 text-lg font-black text-[color:var(--ink)]">{config.quality_mode}</p>
+                      <p className="mt-1 text-xs font-medium text-[color:var(--text-secondary)]">{config.quality_mode === 'custom' ? 'Manual control' : qualityInfo.desc}</p>
+                    </div>
+                    <div className="brutal-card-muted p-4">
+                      <p className="brutal-label">Iterations</p>
+                      <p className="mt-2 text-lg font-black text-[color:var(--ink)]">{qualityInfo.iterations.toLocaleString()}</p>
+                      <p className="mt-1 text-xs font-medium text-[color:var(--text-secondary)]">baseline training rounds</p>
+                    </div>
+                    <div className="brutal-card-muted p-4">
+                      <p className="brutal-label">Estimated time</p>
+                      <p className="mt-2 text-lg font-black text-[color:var(--ink)]">{qualityInfo.time}</p>
+                      <p className="mt-1 text-xs font-medium text-[color:var(--text-secondary)]">depends on dataset + hardware</p>
+                    </div>
+                    <div className="brutal-card-muted p-4">
+                      <p className="brutal-label">Requirement</p>
+                      <p className="mt-2 text-lg font-black text-[color:var(--ink)]">{minimumFilesReached ? 'Ready' : 'Need 10+'}</p>
+                      <p className="mt-1 text-xs font-medium text-[color:var(--text-secondary)]">minimum images / frames</p>
+                    </div>
+                  </div>
+
+                  {config.quality_mode === 'hard' && (
+                    <div className="border border-[color:var(--ink)] px-3 py-3 text-sm" style={{ background: 'var(--warning-bg)', color: 'var(--warning-text)' }}>
+                      <strong>Hard mode:</strong> เน้น coverage ของ sparse reconstruction ก่อน แล้วค่อย retry เพิ่มคุณภาพภายหลัง
+                    </div>
+                  )}
+                </div>
+              </section>
+
+              <section id="stage-pipeline" className="space-y-4">
+                <div className={`border p-4 md:p-5 shadow-[var(--shadow-sm)] ${resolvedExpectedPolicy.tone}`} style={{ borderColor: 'var(--ink)' }}>
+                  <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                    <div>
+                      <p className="brutal-eyebrow rotate-1">Stage 03</p>
+                      <div className="mt-2 flex items-center gap-3">
+                        <div className={`flex h-11 w-11 items-center justify-center border shadow-[var(--shadow-sm)] ${resolvedExpectedPolicy.badgeTone}`}>
                           <PolicyIcon className="h-5 w-5" />
                         </div>
                         <div>
-                          <h3 className="brutal-h3">{resolvedExpectedPolicy.title}</h3>
+                          <h2 className="brutal-h2">{resolvedExpectedPolicy.title}</h2>
                           <p className="text-xs font-medium uppercase tracking-wide opacity-70">
-                            {policyPreviewLoading ? 'Refreshing backend heuristic...' : 'Resolved from backend preview heuristic'}
+                            {policyPreviewLoading ? 'Refreshing recommendation...' : 'Auto preview from backend heuristic'}
                           </p>
                         </div>
                       </div>
-                      <p className="mt-2 text-sm font-medium opacity-90">{resolvedExpectedPolicy.summary}</p>
                     </div>
                     <div className="flex flex-wrap gap-2 text-xs font-medium">
                       <span className={`border px-2 py-1 shadow-[2px_2px_0_var(--ink)] ${resolvedExpectedPolicy.badgeTone}`}>{resolvedExpectedPolicy.profileBadge}</span>
-                      <span className="border border-[color:var(--ink)] bg-white/70 px-2 py-1">matcher: {resolvedExpectedPolicy.matcherBadge}</span>
-                      <span className="border border-[color:var(--ink)] bg-white/70 px-2 py-1">engine: {resolvedExpectedPolicy.engineBadge}</span>
+                      <span className="border border-[color:var(--ink)] bg-white/70 px-2 py-1" title={resolvedExpectedPolicy.summary}>matcher: {resolvedExpectedPolicy.matcherBadge}</span>
+                      <span className="border border-[color:var(--ink)] bg-white/70 px-2 py-1" title={engineRecommendation}>engine: {resolvedExpectedPolicy.engineBadge}</span>
                       {resolvedEstimatedNumImages ? (
                         <span className="border border-[color:var(--ink)] bg-white/70 px-2 py-1">est. frames/images: {resolvedEstimatedNumImages}</span>
                       ) : null}
                     </div>
                   </div>
-                  {policyPreviewLoading && (
-                  <div className="mt-4 space-y-3 border border-[color:var(--ink)] bg-white/40 p-4 animate-pulse">
-                    <div className="h-2 w-32 bg-white/80" />
-                    <div className="h-3 w-full bg-white/70" />
-                    <div className="h-3 w-4/5 bg-white/60" />
-                  </div>
-                )}
-                <div className="mt-4 border border-[color:var(--ink)] bg-white/70 p-4 text-gray-900 shadow-[var(--shadow-sm)]">
-                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-                    <div>
-                      <p className="brutal-label">Preview Confidence</p>
-                      <div className="mt-1 flex items-center gap-3">
+
+                  <div className="mt-4 grid gap-3 md:grid-cols-3">
+                    <div className="border border-[color:var(--ink)] bg-white/70 p-4">
+                      <p className="brutal-label">Confidence</p>
+                      <div className="mt-2 flex items-center gap-3">
                         <span className={`border px-2 py-1 text-xs font-semibold shadow-[2px_2px_0_var(--ink)] ${resolvedConfidence.tone}`}>{resolvedConfidence.label}</span>
-                        <span className="text-sm font-medium text-gray-600">score {resolvedConfidence.score}/100</span>
+                        <span className="text-sm font-medium text-gray-600">{resolvedConfidence.score}/100</span>
+                      </div>
+                      <div className="mt-3 h-2.5 overflow-hidden border border-[color:var(--ink)] bg-gray-200">
+                        <div className={`h-full transition-all duration-300 ${resolvedConfidence.meterClass}`} style={{ width: `${resolvedConfidence.score}%` }} />
                       </div>
                     </div>
-                    <div className="text-xs font-medium text-gray-500">
-                      Signals: {resolvedConfidenceSignals.slice(0, 3).map((signal) => signal.label).join(' • ')}
+
+                    <div className="border border-[color:var(--ink)] bg-white/70 p-4">
+                      <p className="brutal-label">Current stack</p>
+                      <div className="mt-2 flex flex-wrap gap-2 text-xs text-gray-700">
+                        <span className="border border-[color:var(--ink)] bg-white px-2 py-1">feature: {config.feature_method}</span>
+                        <span className="border border-[color:var(--ink)] bg-white px-2 py-1">engine: {getSfmEngineCompactLabel(config.sfm_engine)}</span>
+                        <span className="border border-[color:var(--ink)] bg-white px-2 py-1">quality: {config.quality_mode}</span>
+                        {usesGlobalSfm && <span className="border border-[color:var(--ink)] bg-white px-2 py-1">backend: {config.sfm_backend}</span>}
+                      </div>
+                    </div>
+
+                    <div className="border border-[color:var(--ink)] bg-white/70 p-4">
+                      <p className="brutal-label">Signals</p>
+                      <div className="mt-2 flex flex-wrap gap-2 text-xs text-gray-700">
+                        {resolvedConfidenceSignals.slice(0, 6).map((signal) => (
+                          <span
+                            key={signal.key}
+                            title={signal.detail}
+                            className={`border px-2 py-1 ${signal.delta >= 0 ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-900'}`}
+                          >
+                            {signal.label}
+                          </span>
+                        ))}
+                      </div>
                     </div>
                   </div>
-                  <div className="mt-3 h-2.5 overflow-hidden border border-[color:var(--ink)] bg-gray-200">
-                    <div
-                      className={`h-full transition-all duration-300 ${resolvedConfidence.meterClass}`}
-                      style={{ width: `${resolvedConfidence.score}%` }}
-                    />
-                  </div>
-                  {policyPreviewLoading && (
-                    <div className="mt-3 grid gap-2 md:grid-cols-3 animate-pulse">
-                      <div className="h-8 border border-[color:var(--ink)] bg-gray-200/80" />
-                      <div className="h-8 border border-[color:var(--ink)] bg-gray-200/70" />
-                      <div className="h-8 border border-[color:var(--ink)] bg-gray-200/60" />
-                    </div>
-                  )}
-                  <div className="mt-3 flex flex-wrap gap-2 text-xs text-gray-600">
-                    {resolvedConfidenceSignals.map((signal) => (
+
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {resolvedPreviewRules.slice(0, 6).map((rule, index) => (
                       <span
-                        key={signal.key}
-                        className={`border px-2 py-1 ${signal.delta >= 0 ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-900'}`}
-                        title={`${signal.label}: ${signal.detail} (${signal.delta >= 0 ? '+' : ''}${signal.delta})`}
+                        key={`${rule.level}-${index}`}
+                        title={rule.text}
+                        className={`inline-flex items-center gap-2 border px-3 py-2 text-xs font-medium ${
+                          rule.level === 'warning'
+                            ? 'border-amber-200 bg-amber-50 text-amber-900'
+                            : 'border-slate-200 bg-white/80 text-slate-700'
+                        }`}
                       >
-                        {signal.label} {signal.delta >= 0 ? `+${signal.delta}` : signal.delta}
+                        <AlertCircle className="h-3.5 w-3.5" />
+                        {rule.level === 'warning' ? 'Needs attention' : 'Info'}
                       </span>
                     ))}
                   </div>
-                  <div className="mt-3 flex flex-wrap gap-2 text-xs text-gray-600">
-                      <span className="border border-[color:var(--ink)] bg-white px-2 py-1">feature: {config.feature_method}</span>
+                </div>
+
+                <Accordion title="Pipeline Controls" icon={<Sliders className="h-5 w-5" />} badge="Optional" defaultOpen={files.length > 0}>
+                  <div className="space-y-6">
+                    <div className="brutal-card-muted p-4">
+                      <div className="mb-3 flex items-center gap-2">
+                        <Zap className="h-4 w-4" />
+                        <h3 className="brutal-h3">Engine</h3>
+                        <span title={engineRecommendation} className="cursor-help text-[color:var(--text-secondary)]">
+                          <Info className="h-4 w-4" />
+                        </span>
+                      </div>
+
+                      <div className="grid gap-3 lg:grid-cols-3">
+                        <label className={`cursor-pointer border-2 p-4 transition-all ${config.sfm_engine === 'glomap' ? 'border-green-500 bg-green-100 shadow-md' : 'border-gray-200 bg-white hover:border-green-300'}`}>
+                          <input
+                            type="radio"
+                            name="sfm_engine"
+                            value="glomap"
+                            checked={config.sfm_engine === 'glomap'}
+                            onChange={(e) => setConfig({ ...config, sfm_engine: e.target.value })}
+                            className="sr-only"
+                          />
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="font-bold text-green-700">{getSfmEngineLabel('glomap')}</span>
+                            <span className="text-xs font-bold uppercase text-green-700">recommended</span>
+                          </div>
+                          <p className="mt-2 text-xs text-gray-600">Best for broad photo coverage and safer auto decisions.</p>
+                        </label>
+
+                        <label className={`cursor-pointer border-2 p-4 transition-all ${config.sfm_engine === 'fastmap' ? 'border-fuchsia-500 bg-fuchsia-50 shadow-md' : 'border-gray-200 bg-white hover:border-fuchsia-300'}`}>
+                          <input
+                            type="radio"
+                            name="sfm_engine"
+                            value="fastmap"
+                            checked={config.sfm_engine === 'fastmap'}
+                            onChange={(e) => setConfig({ ...config, sfm_engine: e.target.value })}
+                            className="sr-only"
+                          />
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="font-bold text-fuchsia-700">FastMap</span>
+                            <span className="text-xs font-bold uppercase text-fuchsia-700">speed</span>
+                          </div>
+                          <p className="mt-2 text-xs text-gray-600">GPU-first option for dense video-style captures.</p>
+                        </label>
+
+                        <label className={`cursor-pointer border-2 p-4 transition-all ${config.sfm_engine === 'colmap' ? 'border-blue-500 bg-blue-100 shadow-md' : 'border-gray-200 bg-white hover:border-blue-300'}`}>
+                          <input
+                            type="radio"
+                            name="sfm_engine"
+                            value="colmap"
+                            checked={config.sfm_engine === 'colmap'}
+                            onChange={(e) => setConfig({ ...config, sfm_engine: e.target.value })}
+                            className="sr-only"
+                          />
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="font-bold text-blue-700">COLMAP</span>
+                            <span className="text-xs font-bold uppercase text-blue-700">classic</span>
+                          </div>
+                          <p className="mt-2 text-xs text-gray-600">Conservative fallback for harder or edge-case inputs.</p>
+                        </label>
+                      </div>
+
                       {usesGlobalSfm && (
-                        <span className="border border-[color:var(--ink)] bg-white px-2 py-1">backend: {config.sfm_backend}</span>
-                      )}
-                      {hasVideo && config.extraction_mode === 'fps' && (
-                        <span className="border border-[color:var(--ink)] bg-white px-2 py-1">target fps: {config.target_fps}</span>
-                      )}
-                      {hasVideo && config.extraction_mode === 'target_count' && (
-                        <span className="border border-[color:var(--ink)] bg-white px-2 py-1">target frames: {config.max_frames}</span>
-                      )}
-                      {hasVideo && config.extraction_mode === 'frames' && (
-                        <span className="border border-[color:var(--ink)] bg-white px-2 py-1">max frames: {config.max_frames}</span>
-                      )}
-                      {hasVideo && (
-                        <span className="border border-[color:var(--ink)] bg-white px-2 py-1">
-                          hi-res training: {config.use_separate_training_images ? 'enabled' : 'off'}
-                        </span>
-                      )}
-                      {hasVideo && (
-                        <span className="border border-[color:var(--ink)] bg-white px-2 py-1">
-                          chunk workers: {config.ffmpeg_cpu_workers}
-                        </span>
-                      )}
-                      {hasVideo && (
-                        <span className="border border-[color:var(--ink)] bg-white px-2 py-1">
-                          oversample mode: {config.smart_frame_selection ? `${config.oversample_factor}x` : 'off'}
-                        </span>
-                      )}
-                  </div>
-                </div>
-                <div className="mt-4 grid gap-2 md:grid-cols-3">
-                  {policyLegend.map((entry) => {
-                    const LegendIcon = entry.icon;
-                    const isActive = entry.key === resolvedInputProfile;
-
-                    return (
-                      <div
-                        key={entry.key}
-                        className={`border px-3 py-3 shadow-[var(--shadow-sm)] ${isActive ? entry.toneClass : 'border-[color:var(--ink)] bg-white text-gray-600'}`}
-                      >
-                        <div className="flex items-center gap-2 text-sm font-medium">
-                          <span className={`h-2.5 w-2.5 rounded-full ${entry.dotClass}`} />
-                          <LegendIcon className="h-4 w-4" />
-                          <span>{entry.label}</span>
-                        </div>
-                        <p className="mt-1 text-xs opacity-80">{entry.detail}</p>
-                      </div>
-                    );
-                  })}
-                </div>
-                <div className="mt-4 space-y-2">
-                    <p className="brutal-label opacity-70">Live Rule Preview</p>
-                  {resolvedPreviewRules.map((rule, index) => (
-                    <div
-                      key={`${rule.level}-${index}`}
-                      className={`flex items-start gap-2 border px-3 py-2 text-sm ${
-                        rule.level === 'warning'
-                          ? 'border-amber-200 bg-amber-50 text-amber-900'
-                          : 'border-slate-200 bg-white/80 text-slate-700'
-                      }`}
-                    >
-                      <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                      <span>{rule.text}</span>
-                    </div>
-                  ))}
-                </div>
-                <p className="mt-4 text-xs opacity-75">
-                  This is a pre-upload recommendation only. After matching, the backend can still refine the policy again from pair geometry.
-                </p>
-              </div>
-
-              {/* Advanced Options Accordion */}
-              <Accordion 
-                title="Advanced Options" 
-                icon={<Sliders className="h-5 w-5" />}
-                badge="Optional"
-                badgeColor="bg-blue-100 text-blue-700"
-              >
-                <div className="space-y-6">
-                  {/* SfM Engine Selection */}
-              <div className="brutal-card-muted p-3 md:p-4 text-left">
-                <h4 className="brutal-h3 mb-3 flex items-center">
-                  <span className="text-xl mr-2">⚡</span>
-                  Structure-from-Motion Engine
-                </h4>
-                <div className="grid md:grid-cols-1 gap-4">
-                  <div>
-                    <div className="flex gap-4">
-                      <label className={`flex-1 border-2 p-4 cursor-pointer transition-all ${config.sfm_engine === 'glomap'
-                        ? 'border-green-500 bg-green-100 shadow-md'
-                        : 'border-gray-200 bg-white hover:border-green-300'
-                        }`}>
-                        <input
-                          type="radio"
-                          name="sfm_engine"
-                          value="glomap"
-                          checked={config.sfm_engine === 'glomap'}
-                          onChange={(e) => setConfig({ ...config, sfm_engine: e.target.value })}
-                          className="sr-only"
-                        />
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <span className="font-bold text-green-700 text-lg">🚀 {getSfmEngineLabel('glomap')}</span>
-                            <span className="ml-2 px-2 py-0.5 bg-green-500 text-white text-xs rounded-full">RECOMMENDED</span>
-                          </div>
-                          <span className="text-green-600 font-semibold">Global SfM</span>
-                        </div>
-                        <p className="text-sm text-gray-600 mt-2">
-                          COLMAP Global SfM - processes the sparse model globally instead of registering images one by one.
-                          <strong className="text-green-700"> Best for most unordered photo sets.</strong>
-                        </p>
-                        <p className="text-xs text-green-600 mt-1">✓ Good for wide photo collections ✓ Faster than incremental on many datasets ✓ Keeps compatibility with legacy glomap alias</p>
-                      </label>
-
-                      <label className={`flex-1 border-2 p-4 cursor-pointer transition-all ${config.sfm_engine === 'fastmap'
-                        ? 'border-purple-500 bg-purple-50 shadow-md'
-                        : 'border-gray-200 bg-white hover:border-purple-300'
-                        }`}>
-                        <input
-                          type="radio"
-                          name="sfm_engine"
-                          value="fastmap"
-                          checked={config.sfm_engine === 'fastmap'}
-                          onChange={(e) => setConfig({ ...config, sfm_engine: e.target.value })}
-                          className="sr-only"
-                        />
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <span className="font-bold text-purple-700 text-lg">⚡ FastMap</span>
-                            <span className="ml-2 px-2 py-0.5 bg-purple-500 text-white text-xs rounded-full">NEW</span>
-                          </div>
-                          <span className="text-purple-600 font-semibold">GPU-First</span>
-                        </div>
-                        <p className="text-sm text-gray-600 mt-2">
-                          First-order SfM optimized for GPU-first throughput.
-                          <strong className="text-purple-700"> Best for dense video or capture streams where speed matters most.</strong>
-                        </p>
-                        <p className="text-xs text-purple-600 mt-1">✓ GPU-native ✓ Dense coverage ⚠️ Less robust</p>
-                      </label>
-
-                      <label className={`flex-1 border-2 p-4 cursor-pointer transition-all ${config.sfm_engine === 'colmap'
-                        ? 'border-blue-500 bg-blue-100 shadow-md'
-                        : 'border-gray-200 bg-white hover:border-blue-300'
-                        }`}>
-                        <input
-                          type="radio"
-                          name="sfm_engine"
-                          value="colmap"
-                          checked={config.sfm_engine === 'colmap'}
-                          onChange={(e) => setConfig({ ...config, sfm_engine: e.target.value })}
-                          className="sr-only"
-                        />
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <span className="font-bold text-blue-700 text-lg">🔧 COLMAP</span>
-                            <span className="ml-2 px-2 py-0.5 bg-gray-400 text-white text-xs rounded-full">CLASSIC</span>
-                          </div>
-                          <span className="text-gray-500 font-semibold">Standard Speed</span>
-                        </div>
-                        <p className="text-sm text-gray-600 mt-2">
-                          Incremental SfM - registers images one by one and can recover more cautiously from hard inputs.
-                          <strong className="text-blue-700"> Best when you want step-by-step control or conservative fallback behavior.</strong>
-                        </p>
-                        <p className="text-xs text-blue-600 mt-1">✓ Battle-tested ✓ Handles edge cases ✓ More options</p>
-                      </label>
-                    </div>
-
-                    {config.sfm_engine === 'fastmap' && (
-                      <div className="mt-3 border border-[color:var(--ink)] bg-yellow-50 p-3">
-                        <p className="text-sm text-yellow-800">
-                          <strong>⚠️ FastMap Notice:</strong> Best for video frames with dense scene coverage. 
-                          May fail on sparse photo collections or low-quality images. 
-                          Use COLMAP Global SfM or COLMAP Incremental for more robust results.
-                        </p>
-                      </div>
-                    )}
-
-                    {usesGlobalSfm && (
-                      <div className="mt-3 border border-[color:var(--ink)] bg-white px-4 py-3">
-                        <p className="brutal-label mb-2">Global SfM Backend</p>
-                        <select
-                          value={config.sfm_backend}
-                          onChange={(e) => setConfig({ ...config, sfm_backend: e.target.value as SfmBackendMode })}
-                          className="brutal-select"
-                        >
-                          <option value="cli">CLI Global Mapper (Recommended)</option>
-                          <option value="pycolmap">pycolmap.global_mapping (Experimental)</option>
-                        </select>
-                        <p className="mt-2 text-xs text-gray-600">
-                          `pycolmap` is experimental here. The backend will try Python global mapping first, then fall back to the CLI global mapper automatically if the installed `pycolmap` is missing or too old.
-                        </p>
-                      </div>
-                    )}
-
-                    <div className="mt-3 border border-[color:var(--ink)] bg-emerald-50 px-4 py-3">
-                      <p className="text-sm text-emerald-900">
-                        <strong>Dynamic reconstruction framework:</strong> {engineRecommendation}
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-                  {/* Feature Extraction Method Selection */}
-              <div className="brutal-card-muted p-3 md:p-4 text-left">
-                <div className="flex items-center justify-between mb-3">
-                  <h4 className="brutal-h3 flex items-center">
-                    <span className="mr-2">🔬</span>
-                    Feature Extraction Method
-                    <span className="ml-2 text-xs bg-cyan-100 text-cyan-700 px-2 py-1 rounded-full">ULTRA SPEED</span>
-                  </h4>
-                </div>
-                <p className="text-sm text-gray-600 mb-4">
-                  Neural features (ALIKED/SuperPoint) can substantially reduce matching cost versus traditional SIFT on high-resolution images
-                </p>
-                <div className="space-y-3">
-                  <div className="flex flex-wrap gap-3">
-                    <label className={`flex-1 min-w-[200px] border-2 p-4 cursor-pointer transition-all ${config.feature_method === 'aliked'
-                      ? 'border-cyan-500 bg-cyan-50 shadow-lg shadow-cyan-100'
-                      : 'border-gray-200 bg-white hover:border-cyan-300'}`}>
-                      <div className="flex items-center">
-                        <input
-                          type="radio"
-                          name="feature_method"
-                          value="aliked"
-                          checked={config.feature_method === 'aliked'}
-                          onChange={(e) => setConfig({ ...config, feature_method: e.target.value })}
-                          className="sr-only"
-                        />
-                        <div>
-                          <span className="font-bold text-cyan-700 text-lg">⚡ ALIKED</span>
-                          <span className="ml-2 text-xs bg-cyan-200 text-cyan-800 px-2 py-0.5 rounded">Fastest</span>
-                          <p className="text-xs text-gray-500 mt-1">Native neural features inside COLMAP</p>
-                          <p className="text-xs text-cyan-600 mt-1">+ Native COLMAP LightGlue matching</p>
-                        </div>
-                      </div>
-                    </label>
-                    <label className={`flex-1 min-w-[200px] border-2 p-4 cursor-pointer transition-all ${config.feature_method === 'superpoint'
-                      ? 'border-indigo-500 bg-indigo-50 shadow-lg shadow-indigo-100'
-                      : 'border-gray-200 bg-white hover:border-indigo-300'}`}>
-                      <div className="flex items-center">
-                        <input
-                          type="radio"
-                          name="feature_method"
-                          value="superpoint"
-                          checked={config.feature_method === 'superpoint'}
-                          onChange={(e) => setConfig({ ...config, feature_method: e.target.value })}
-                          className="sr-only"
-                        />
-                        <div>
-                          <span className="font-bold text-indigo-700 text-lg">🎯 SuperPoint</span>
-                          <span className="ml-2 text-xs bg-indigo-200 text-indigo-800 px-2 py-0.5 rounded">Best Quality</span>
-                          <p className="text-xs text-gray-500 mt-1">Deep learning features @ 45 FPS</p>
-                          <p className="text-xs text-indigo-600 mt-1">+ LightGlue matching (excellent accuracy)</p>
-                        </div>
-                      </div>
-                    </label>
-                    <label className={`flex-1 min-w-[200px] border-2 p-4 cursor-pointer transition-all ${config.feature_method === 'sift'
-                      ? 'border-gray-500 bg-gray-50 shadow-lg shadow-gray-100'
-                      : 'border-gray-200 bg-white hover:border-gray-300'}`}>
-                      <div className="flex items-center">
-                        <input
-                          type="radio"
-                          name="feature_method"
-                          value="sift"
-                          checked={config.feature_method === 'sift'}
-                          onChange={(e) => setConfig({ ...config, feature_method: e.target.value })}
-                          className="sr-only"
-                        />
-                        <div>
-                          <span className="font-bold text-gray-700 text-lg">📐 SIFT</span>
-                          <span className="ml-2 text-xs bg-gray-200 text-gray-800 px-2 py-0.5 rounded">Classic</span>
-                          <p className="text-xs text-gray-500 mt-1">Traditional COLMAP features</p>
-                          <p className="text-xs text-gray-500 mt-1">Slower but most compatible</p>
-                        </div>
-                      </div>
-                    </label>
-                  </div>
-                  {(config.feature_method === 'aliked' || config.feature_method === 'superpoint') && (
-                    <div className="mt-3 border border-[color:var(--ink)] bg-cyan-50 p-3">
-                      <p className="text-sm text-cyan-800">
-                        <strong>🚀 Neural Features:</strong> {config.feature_method === 'aliked'
-                          ? 'Using native COLMAP ALIKED + LightGlue inside the standard reconstruction pipeline.'
-                          : 'Using hloc SuperPoint + LightGlue, then importing the results into the COLMAP database.'}
-                        {' '}This is aimed at stronger high-resolution matching coverage than the classic SIFT path.
-                      </p>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-                  {/* Resolution Settings */}
-                  <div className="grid md:grid-cols-2 gap-4">
-                    <div>
-                      <p className="brutal-label mb-2">COLMAP Resolution</p>
-                      <select
-                        value={config.colmap_resolution}
-                        onChange={(e) => setConfig({ ...config, colmap_resolution: e.target.value })}
-                        className="brutal-select"
-                      >
-                        <option value="720p">720p (1280x720) - Fast</option>
-                        <option value="1080p">1080p (1920x1080) - Standard</option>
-                        <option value="2K">2K (2560x1440) - Recommended</option>
-                        <option value="4K">4K (3840x2160) - High Quality</option>
-                        <option value="8K">8K (7680x4320) - Maximum</option>
-                        <option value="original">Original Resolution</option>
-                      </select>
-                    </div>
-                    <div>
-                      <p className="brutal-label mb-2">Training Resolution</p>
-                      <select
-                        value={config.training_resolution}
-                        onChange={(e) => setConfig({ ...config, training_resolution: e.target.value })}
-                        className="brutal-select"
-                      >
-                        <option value="1080p">1080p (1920x1080)</option>
-                        <option value="2K">2K (2560x1440)</option>
-                        <option value="4K">4K (3840x2160) - Recommended</option>
-                        <option value="8K">8K (7680x4320) - Maximum</option>
-                        <option value="original">Original Resolution</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  {/* GPU Toggles */}
-                  <div className="grid md:grid-cols-2 gap-4">
-                    <div className="border border-[color:var(--ink)] bg-gradient-to-r from-yellow-50 to-orange-50 p-3">
-                      <label className="flex items-center justify-between cursor-pointer">
-                        <div className="flex items-center">
-                          <Zap className="h-5 w-5 text-yellow-600 mr-2" />
-                          <div>
-                            <span className="font-medium text-gray-900">GPU Extraction</span>
-                            <p className="text-xs text-gray-600">5-10x faster video decoding</p>
-                          </div>
-                        </div>
-                        <div className="relative">
-                          <input
-                            type="checkbox"
-                            checked={config.use_gpu_extraction}
-                            onChange={(e) => setConfig({ ...config, use_gpu_extraction: e.target.checked })}
-                            className="sr-only peer"
-                          />
-                          <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:bg-yellow-500 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
-                        </div>
-                      </label>
-                    </div>
-                    <div className="border border-[color:var(--ink)] bg-gradient-to-r from-yellow-50 to-orange-50 p-3">
-                      <label className="flex items-center justify-between cursor-pointer">
-                        <div className="flex items-center">
-                          <Zap className="h-5 w-5 text-yellow-600 mr-2" />
-                          <div>
-                            <span className="font-medium text-gray-900">Mixed Precision (FP16)</span>
-                            <p className="text-xs text-gray-600">30-50% lower VRAM usage</p>
-                          </div>
-                        </div>
-                        <div className="relative">
-                          <input
-                            type="checkbox"
-                            checked={config.mixed_precision}
-                            onChange={(e) => setConfig({ ...config, mixed_precision: e.target.checked })}
-                            className="sr-only peer"
-                          />
-                          <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:bg-yellow-500 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
-                        </div>
-                      </label>
-                    </div>
-                  </div>
-
-                  {/* 8K Optimization - Patch Training */}
-                  <div className="brutal-card-muted p-3 md:p-4 text-left">
-                    <h4 className="brutal-h3 mb-3 flex items-center">
-                      <span className="text-xl mr-2">🧩</span>
-                      8K Optimization (Patch-based Training)
-                    </h4>
-                    <div className="grid md:grid-cols-2 gap-4">
-                      <div>
-                        <p className="brutal-label mb-2">Crop Size (pixels)</p>
-                        <input
-                          type="number"
-                          value={config.crop_size}
-                          onChange={(e) => setConfig({ ...config, crop_size: parseInt(e.target.value) || 0 })}
-                          min="0"
-                          max="2048"
-                          step="64"
-                          className="brutal-input"
-                          placeholder="0"
-                        />
-                        <p className="text-xs text-gray-500 mt-1">
-                          0 = Use full image | 512-1024 = Recommended for 8K images
-                        </p>
-                      </div>
-                      <div className="flex items-center">
-                          <div className="border border-[color:var(--ink)] bg-white p-3">
-                          <p className="text-sm text-purple-800">
-                            <strong>💡 Tip:</strong> ใช้ค่า 512 หรือ 1024 สำหรับภาพ 8K เพื่อลด VRAM
-                          </p>
-                          <p className="text-xs text-gray-600 mt-1">
-                            ช่วยให้เทรนภาพความละเอียดสูงได้โดยไม่ต้องใช้ GPU ที่มี VRAM เยอะ
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                      {/* COLMAP Options */}
-                  <div className="grid md:grid-cols-2 gap-4">
-                    <div>
-                      <p className="brutal-label mb-2">Feature Matching</p>
-                      <select
-                        value={config.matcher_type}
-                        onChange={(e) => setConfig({ ...config, matcher_type: e.target.value as MatcherMode })}
-                        className="brutal-select"
-                      >
-                        <option value="auto">Auto (Recommended, backend decides)</option>
-                        <option value="sequential">Sequential (Ordered sequences / video)</option>
-                        <option value="exhaustive">Exhaustive (Smaller unordered photo sets)</option>
-                        <option value="vocab_tree">Vocabulary Tree (Experimental, large unordered photo sets)</option>
-                      </select>
-                      <p className="mt-2 text-xs text-gray-500">{matcherRecommendation}</p>
-                    </div>
-                    <div>
-                      <p className="brutal-label mb-2">Camera Model</p>
-                      <select
-                        value={config.camera_model}
-                        onChange={(e) => setConfig({ ...config, camera_model: e.target.value })}
-                        className="brutal-select"
-                      >
-                        <option value="SIMPLE_RADIAL">SIMPLE_RADIAL (Recommended)</option>
-                        <option value="SIMPLE_PINHOLE">SIMPLE_PINHOLE</option>
-                        <option value="PINHOLE">PINHOLE</option>
-                        <option value="OPENCV">OPENCV</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  {/* Video Options */}
-                  {hasVideo && (
-                    <div className="brutal-card-muted p-3 md:p-4 text-left">
-                      <h4 className="brutal-h3 mb-3 flex items-center">
-                        <FileVideo className="h-5 w-5 mr-2" />
-                        Video Frame Extraction Settings
-                      </h4>
-                      <div className="grid md:grid-cols-2 gap-4">
-                        <div>
-                          <p className="brutal-label mb-2">Extraction Mode</p>
+                        <div className="mt-4 grid gap-2">
+                          <label className="brutal-label inline-flex items-center gap-2">
+                            Global SfM Backend
+                            <span title="pycolmap ใช้ได้แต่ยังถือว่า experimental ในโปรเจกต์นี้" className="cursor-help">
+                              <Info className="h-3.5 w-3.5" />
+                            </span>
+                          </label>
                           <select
-                            value={config.extraction_mode}
-                            onChange={(e) => setConfig({ ...config, extraction_mode: e.target.value })}
+                            value={config.sfm_backend}
+                            onChange={(e) => setConfig({ ...config, sfm_backend: e.target.value as SfmBackendMode })}
                             className="brutal-select"
                           >
-                            <option value="fps">Target FPS</option>
-                            <option value="target_count">Target Frame Count</option>
-                            <option value="frames">Legacy Max Frame Limit</option>
+                            <option value="cli">CLI Global Mapper</option>
+                            <option value="pycolmap">pycolmap.global_mapping</option>
+                          </select>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="brutal-card-muted p-4">
+                      <div className="mb-3 flex items-center gap-2">
+                        <Image className="h-4 w-4" />
+                        <h3 className="brutal-h3">Features</h3>
+                        <span title="ดูรายละเอียดเพิ่มเติมจาก tooltip ของแต่ละตัวเลือก" className="cursor-help text-[color:var(--text-secondary)]">
+                          <Info className="h-4 w-4" />
+                        </span>
+                      </div>
+
+                      <div className="grid gap-3 lg:grid-cols-3">
+                        <label className={`cursor-pointer border-2 p-4 transition-all ${config.feature_method === 'aliked' ? 'border-cyan-500 bg-cyan-50 shadow-md' : 'border-gray-200 bg-white hover:border-cyan-300'}`} title="Native neural features in COLMAP + LightGlue">
+                          <input
+                            type="radio"
+                            name="feature_method"
+                            value="aliked"
+                            checked={config.feature_method === 'aliked'}
+                            onChange={(e) => setConfig({ ...config, feature_method: e.target.value })}
+                            className="sr-only"
+                          />
+                          <p className="font-bold text-cyan-700">ALIKED</p>
+                          <p className="mt-1 text-xs text-gray-600">Fast neural path</p>
+                        </label>
+
+                        <label className={`cursor-pointer border-2 p-4 transition-all ${config.feature_method === 'superpoint' ? 'border-indigo-500 bg-indigo-50 shadow-md' : 'border-gray-200 bg-white hover:border-indigo-300'}`} title="hloc SuperPoint + LightGlue for stronger matching coverage">
+                          <input
+                            type="radio"
+                            name="feature_method"
+                            value="superpoint"
+                            checked={config.feature_method === 'superpoint'}
+                            onChange={(e) => setConfig({ ...config, feature_method: e.target.value })}
+                            className="sr-only"
+                          />
+                          <p className="font-bold text-indigo-700">SuperPoint</p>
+                          <p className="mt-1 text-xs text-gray-600">Quality-first neural path</p>
+                        </label>
+
+                        <label className={`cursor-pointer border-2 p-4 transition-all ${config.feature_method === 'sift' ? 'border-gray-500 bg-gray-50 shadow-md' : 'border-gray-200 bg-white hover:border-gray-300'}`} title="Most compatible classic COLMAP features">
+                          <input
+                            type="radio"
+                            name="feature_method"
+                            value="sift"
+                            checked={config.feature_method === 'sift'}
+                            onChange={(e) => setConfig({ ...config, feature_method: e.target.value })}
+                            className="sr-only"
+                          />
+                          <p className="font-bold text-gray-700">SIFT</p>
+                          <p className="mt-1 text-xs text-gray-600">Most compatible</p>
+                        </label>
+                      </div>
+
+                      <div className="mt-4 grid gap-4 md:grid-cols-2">
+                        <div>
+                          <label className="mb-2 inline-flex items-center gap-2 brutal-label">
+                            COLMAP Resolution
+                            <span title="ความละเอียดที่ใช้ตอน extraction / matching" className="cursor-help">
+                              <Info className="h-3.5 w-3.5" />
+                            </span>
+                          </label>
+                          <select
+                            value={config.colmap_resolution}
+                            onChange={(e) => setConfig({ ...config, colmap_resolution: e.target.value })}
+                            className="brutal-select"
+                          >
+                            <option value="720p">720p</option>
+                            <option value="1080p">1080p</option>
+                            <option value="2K">2K</option>
+                            <option value="4K">4K</option>
+                            <option value="8K">8K</option>
+                            <option value="original">Original</option>
                           </select>
                         </div>
                         <div>
-                          {config.extraction_mode === 'frames' ? (
-                            <div>
-                              <p className="brutal-label mb-2">Maximum Frames</p>
+                          <label className="mb-2 inline-flex items-center gap-2 brutal-label">
+                            Training Resolution
+                            <span title="ความละเอียดที่ใช้ตอน train 3DGS" className="cursor-help">
+                              <Info className="h-3.5 w-3.5" />
+                            </span>
+                          </label>
+                          <select
+                            value={config.training_resolution}
+                            onChange={(e) => setConfig({ ...config, training_resolution: e.target.value })}
+                            className="brutal-select"
+                          >
+                            <option value="1080p">1080p</option>
+                            <option value="2K">2K</option>
+                            <option value="4K">4K</option>
+                            <option value="8K">8K</option>
+                            <option value="original">Original</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 grid gap-4 md:grid-cols-2">
+                        <div className="border border-[color:var(--ink)] bg-gradient-to-r from-yellow-50 to-orange-50 p-3">
+                          <label className="flex cursor-pointer items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <Zap className="h-5 w-5 text-yellow-600" />
+                              <div>
+                                <p className="font-medium text-gray-900">GPU Extraction</p>
+                                <p className="text-xs text-gray-600">Faster video decoding</p>
+                              </div>
+                            </div>
+                            <div className="relative">
                               <input
-                                type="number"
-                                value={config.max_frames}
-                                onChange={(e) => setConfig({ ...config, max_frames: Math.max(1, parseInt(e.target.value, 10) || 1) })}
-                                min="1"
-                                step="1"
-                                className="brutal-input"
+                                type="checkbox"
+                                checked={config.use_gpu_extraction}
+                                onChange={(e) => setConfig({ ...config, use_gpu_extraction: e.target.checked })}
+                                className="sr-only peer"
                               />
-                              <p className="mt-1 text-xs text-gray-500">โหมดเดิม: จำกัดจำนวนภาพสูงสุด แล้ว backend อาจตัดทอนเพิ่มเติมภายหลัง</p>
+                              <div className="h-6 w-11 rounded-full bg-gray-200 peer-checked:bg-yellow-500 peer-checked:after:translate-x-full after:absolute after:left-[2px] after:top-0.5 after:h-5 after:w-5 after:rounded-full after:bg-white after:transition-all after:content-['']" />
                             </div>
-                          ) : config.extraction_mode === 'target_count' ? (
-                            <div>
-                              <p className="brutal-label mb-2">Target Frame Count</p>
+                          </label>
+                        </div>
+
+                        <div className="border border-[color:var(--ink)] bg-gradient-to-r from-yellow-50 to-orange-50 p-3">
+                          <label className="flex cursor-pointer items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <Zap className="h-5 w-5 text-yellow-600" />
+                              <div>
+                                <p className="font-medium text-gray-900">Mixed Precision</p>
+                                <p className="text-xs text-gray-600">Lower VRAM usage</p>
+                              </div>
+                            </div>
+                            <div className="relative">
                               <input
-                                type="number"
-                                value={config.max_frames}
-                                onChange={(e) => setConfig({ ...config, max_frames: Math.max(1, parseInt(e.target.value, 10) || 1) })}
-                                min="1"
-                                step="1"
-                                className="brutal-input"
-                                placeholder="เช่น 150 / 200 / 300"
+                                type="checkbox"
+                                checked={config.mixed_precision}
+                                onChange={(e) => setConfig({ ...config, mixed_precision: e.target.checked })}
+                                className="sr-only peer"
                               />
-                              <p className="mt-1 text-xs text-gray-500">ระบบจะคำนวณ spacing ตามความยาววิดีโอให้เอง แต่คงจำนวนภาพปลายทางให้ตรงเลขนี้แบบ FPS-style</p>
+                              <div className="h-6 w-11 rounded-full bg-gray-200 peer-checked:bg-yellow-500 peer-checked:after:translate-x-full after:absolute after:left-[2px] after:top-0.5 after:h-5 after:w-5 after:rounded-full after:bg-white after:transition-all after:content-['']" />
                             </div>
-                          ) : (
-                            <div>
-                              <p className="brutal-label mb-2">Target FPS</p>
-                              <select
-                                value={config.target_fps}
-                                onChange={(e) => setConfig({ ...config, target_fps: parseFloat(e.target.value) })}
-                                className="brutal-select"
-                              >
-                                <option value={0.5}>0.5 FPS (1 frame every 2 seconds)</option>
-                                <option value={1}>1 FPS (1 frame per second)</option>
-                                <option value={2}>2 FPS (2 frames per second)</option>
-                                <option value={5}>5 FPS (5 frames per second)</option>
-                                <option value={10}>10 FPS (High density)</option>
-                                <option value={15}>15 FPS (Maximum density)</option>
-                              </select>
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div className="brutal-card-muted p-4">
+                        <label className="mb-2 inline-flex items-center gap-2 brutal-label">
+                          Feature Matching
+                          <span title={matcherRecommendation} className="cursor-help">
+                            <Info className="h-3.5 w-3.5" />
+                          </span>
+                        </label>
+                        <select
+                          value={config.matcher_type}
+                          onChange={(e) => setConfig({ ...config, matcher_type: e.target.value as MatcherMode })}
+                          className="brutal-select"
+                        >
+                          <option value="auto">Auto</option>
+                          <option value="sequential">Sequential</option>
+                          <option value="exhaustive">Exhaustive</option>
+                          <option value="vocab_tree">Vocabulary Tree</option>
+                        </select>
+                      </div>
+
+                      <div className="brutal-card-muted p-4">
+                        <label className="mb-2 inline-flex items-center gap-2 brutal-label">
+                          Camera Model
+                          <span title="ส่วนใหญ่ SIMPLE_RADIAL ใช้ได้ดีและปลอดภัยที่สุด" className="cursor-help">
+                            <Info className="h-3.5 w-3.5" />
+                          </span>
+                        </label>
+                        <select
+                          value={config.camera_model}
+                          onChange={(e) => setConfig({ ...config, camera_model: e.target.value })}
+                          className="brutal-select"
+                        >
+                          <option value="SIMPLE_RADIAL">SIMPLE_RADIAL</option>
+                          <option value="SIMPLE_PINHOLE">SIMPLE_PINHOLE</option>
+                          <option value="PINHOLE">PINHOLE</option>
+                          <option value="OPENCV">OPENCV</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="brutal-card-muted p-4">
+                      <div className="mb-3 flex items-center gap-2">
+                        <Wrench className="h-4 w-4" />
+                        <h3 className="brutal-h3">8K / Memory</h3>
+                        <span title="ใช้ crop size เฉพาะตอนภาพใหญ่และ VRAM ไม่พอ" className="cursor-help text-[color:var(--text-secondary)]">
+                          <Info className="h-4 w-4" />
+                        </span>
+                      </div>
+                      <div className="grid gap-4 md:grid-cols-[220px_minmax(0,1fr)]">
+                        <div>
+                          <label className="mb-2 inline-block brutal-label">Crop Size</label>
+                          <input
+                            type="number"
+                            value={config.crop_size}
+                            onChange={(e) => setConfig({ ...config, crop_size: parseInt(e.target.value) || 0 })}
+                            min="0"
+                            max="2048"
+                            step="64"
+                            className="brutal-input"
+                            placeholder="0"
+                          />
+                        </div>
+                        <div className="border border-[color:var(--ink)] bg-white p-3 text-sm text-[color:var(--text-secondary)]">
+                          `0` ใช้ภาพเต็มเฟรม, ค่า `512-1024` เหมาะกับภาพ 8K เมื่ออยากลดการใช้ VRAM โดยไม่ต้องลด resolution หลัก
+                        </div>
+                      </div>
+                    </div>
+
+                    {hasVideo && (
+                      <div className="brutal-card-muted p-4">
+                        <div className="mb-3 flex items-center gap-2">
+                          <FileVideo className="h-4 w-4" />
+                          <h3 className="brutal-h3">Video Extraction</h3>
+                          <span title="รายละเอียดเชิงลึกของ oversampling และ search window ดูได้ใน tooltip" className="cursor-help text-[color:var(--text-secondary)]">
+                            <Info className="h-4 w-4" />
+                          </span>
+                        </div>
+
+                        <div className="grid gap-4 md:grid-cols-2">
+                          <div>
+                            <label className="mb-2 inline-block brutal-label">Extraction Mode</label>
+                            <select
+                              value={config.extraction_mode}
+                              onChange={(e) => setConfig({ ...config, extraction_mode: e.target.value })}
+                              className="brutal-select"
+                            >
+                              <option value="fps">Target FPS</option>
+                              <option value="target_count">Target Frame Count</option>
+                              <option value="frames">Legacy Max Frame Limit</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            {config.extraction_mode === 'frames' ? (
+                              <>
+                                <label className="mb-2 inline-block brutal-label">Maximum Frames</label>
+                                <input
+                                  type="number"
+                                  value={config.max_frames}
+                                  onChange={(e) => setConfig({ ...config, max_frames: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+                                  min="1"
+                                  step="1"
+                                  className="brutal-input"
+                                />
+                              </>
+                            ) : config.extraction_mode === 'target_count' ? (
+                              <>
+                                <label className="mb-2 inline-block brutal-label">Target Frame Count</label>
+                                <input
+                                  type="number"
+                                  value={config.max_frames}
+                                  onChange={(e) => setConfig({ ...config, max_frames: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+                                  min="1"
+                                  step="1"
+                                  className="brutal-input"
+                                />
+                              </>
+                            ) : (
+                              <>
+                                <label className="mb-2 inline-block brutal-label">Target FPS</label>
+                                <select
+                                  value={config.target_fps}
+                                  onChange={(e) => setConfig({ ...config, target_fps: parseFloat(e.target.value) })}
+                                  className="brutal-select"
+                                >
+                                  <option value={0.5}>0.5 FPS</option>
+                                  <option value={1}>1 FPS</option>
+                                  <option value={2}>2 FPS</option>
+                                  <option value={5}>5 FPS</option>
+                                  <option value={10}>10 FPS</option>
+                                  <option value={15}>15 FPS</option>
+                                </select>
+                              </>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="mt-4 grid gap-4 md:grid-cols-2">
+                          <div className="border border-[color:var(--ink)] bg-gradient-to-r from-purple-50 to-indigo-50 p-3">
+                            <label className="flex cursor-pointer items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <Image className="h-5 w-5 text-purple-600" />
+                                <div>
+                                  <p className="font-medium text-gray-900">Hi-res training images</p>
+                                  <p className="text-xs text-gray-600">Separate higher-res frames for training</p>
+                                </div>
+                              </div>
+                              <div className="relative">
+                                <input
+                                  type="checkbox"
+                                  checked={config.use_separate_training_images}
+                                  onChange={(e) => setConfig({ ...config, use_separate_training_images: e.target.checked })}
+                                  className="sr-only peer"
+                                />
+                                <div className="h-6 w-11 rounded-full bg-gray-200 peer-checked:bg-purple-500 peer-checked:after:translate-x-full after:absolute after:left-[2px] after:top-0.5 after:h-5 after:w-5 after:rounded-full after:bg-white after:transition-all after:content-['']" />
+                              </div>
+                            </label>
+                          </div>
+
+                          <div className="border border-[color:var(--ink)] bg-gradient-to-r from-sky-50 to-cyan-50 p-3">
+                            <label className="flex cursor-pointer items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <Image className="h-5 w-5 text-sky-600" />
+                                <div>
+                                  <p className="font-medium text-gray-900">Oversample and select</p>
+                                  <p className="text-xs text-gray-600">Keep sharper frames from a denser candidate pool</p>
+                                </div>
+                              </div>
+                              <div className="relative">
+                                <input
+                                  type="checkbox"
+                                  checked={config.smart_frame_selection}
+                                  onChange={(e) => setConfig({ ...config, smart_frame_selection: e.target.checked })}
+                                  className="sr-only peer"
+                                />
+                                <div className="h-6 w-11 rounded-full bg-gray-200 peer-checked:bg-sky-500 peer-checked:after:translate-x-full after:absolute after:left-[2px] after:top-0.5 after:h-5 after:w-5 after:rounded-full after:bg-white after:transition-all after:content-['']" />
+                              </div>
+                            </label>
+                          </div>
+                        </div>
+
+                        <div className="mt-4 grid gap-4 md:grid-cols-3">
+                          <div>
+                            <label className="mb-2 inline-flex items-center gap-2 brutal-label">
+                              CPU Chunk Workers
+                              <span title="process ที่ใช้ถอดภาพพร้อมกันจากวิดีโอ" className="cursor-help">
+                                <Info className="h-3.5 w-3.5" />
+                              </span>
+                            </label>
+                            <select
+                              value={config.ffmpeg_cpu_workers}
+                              onChange={(e) => setConfig({ ...config, ffmpeg_cpu_workers: parseInt(e.target.value, 10) })}
+                              className="brutal-select"
+                            >
+                              <option value={2}>2 workers</option>
+                              <option value={4}>4 workers</option>
+                              <option value={8}>8 workers</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="mb-2 inline-flex items-center gap-2 brutal-label">
+                              Oversample Factor
+                              <span title={`Candidate pool: ${estimatedCandidatePool}`} className="cursor-help">
+                                <Info className="h-3.5 w-3.5" />
+                              </span>
+                            </label>
+                            <select
+                              value={config.oversample_factor}
+                              onChange={(e) => setConfig({ ...config, oversample_factor: parseInt(e.target.value, 10) || 10 })}
+                              className="brutal-select"
+                              disabled={!config.smart_frame_selection}
+                            >
+                              <option value={5}>5x</option>
+                              <option value={10}>10x</option>
+                              <option value={15}>15x</option>
+                              <option value={20}>20x</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="mb-2 inline-flex items-center gap-2 brutal-label">
+                              Search Radius
+                              <span title={`Estimated search window: ${estimatedSearchWindow}`} className="cursor-help">
+                                <Info className="h-3.5 w-3.5" />
+                              </span>
+                            </label>
+                            <select
+                              value={config.replacement_search_radius}
+                              onChange={(e) => setConfig({ ...config, replacement_search_radius: parseInt(e.target.value) || 4 })}
+                              className="brutal-select"
+                              disabled={!config.smart_frame_selection}
+                            >
+                              <option value={2}>±2</option>
+                              <option value={4}>±4</option>
+                              <option value={6}>±6</option>
+                              <option value={8}>±8</option>
+                              <option value={12}>±12</option>
+                            </select>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {config.quality_mode === 'custom' && (
+                      <Accordion title="Expert Settings" icon={<Wrench className="h-5 w-5" />} badge="Custom">
+                        <div className="space-y-4">
+                          <div className="border-b border-purple-200 pb-3">
+                            <h5 className="mb-2 text-sm font-semibold text-purple-900">OpenSplat Training</h5>
+                            <div className="grid gap-3 md:grid-cols-2">
+                              <div title="จำนวนรอบการเทรน - มากขึ้น = คุณภาพดีขึ้น แต่ใช้เวลานานขึ้น">
+                                <p className="mb-1 brutal-label cursor-help">Training Iterations</p>
+                                <input
+                                  type="number"
+                                  value={customParams.iterations}
+                                  onChange={(e) => setCustomParams({ ...customParams, iterations: parseInt(e.target.value) || 7000 })}
+                                  min="100"
+                                  max="50000"
+                                  className="brutal-input"
+                                />
+                              </div>
+                              <div title="ค่าเกณฑ์การเพิ่ม Gaussian splats - ต่ำกว่า = splats หนาแน่นกว่า">
+                                <p className="mb-1 brutal-label cursor-help">Densify Grad Threshold</p>
+                                <input
+                                  type="number"
+                                  value={customParams.densify_grad_threshold}
+                                  onChange={(e) => setCustomParams({ ...customParams, densify_grad_threshold: parseFloat(e.target.value) || 0.00015 })}
+                                  min="0.00001"
+                                  max="0.001"
+                                  step="0.00001"
+                                  className="brutal-input"
+                                />
+                              </div>
+                              <div title="ความถี่การปรับแต่ง Gaussians">
+                                <p className="mb-1 brutal-label cursor-help">Refine Every</p>
+                                <input
+                                  type="number"
+                                  value={customParams.refine_every}
+                                  onChange={(e) => setCustomParams({ ...customParams, refine_every: parseInt(e.target.value) || 75 })}
+                                  min="10"
+                                  max="500"
+                                  className="brutal-input"
+                                />
+                              </div>
+                              <div title="ระยะ warmup ของ learning rate">
+                                <p className="mb-1 brutal-label cursor-help">Warmup Length</p>
+                                <input
+                                  type="number"
+                                  value={customParams.warmup_length}
+                                  onChange={(e) => setCustomParams({ ...customParams, warmup_length: parseInt(e.target.value) || 750 })}
+                                  min="100"
+                                  max="2000"
+                                  className="brutal-input"
+                                />
+                              </div>
+                              <div title="น้ำหนักของ SSIM loss">
+                                <p className="mb-1 brutal-label cursor-help">SSIM Weight</p>
+                                <input
+                                  type="number"
+                                  value={customParams.ssim_weight}
+                                  onChange={(e) => setCustomParams({ ...customParams, ssim_weight: parseFloat(e.target.value) || 0.25 })}
+                                  min="0"
+                                  max="1"
+                                  step="0.01"
+                                  className="brutal-input"
+                                />
+                              </div>
                             </div>
+                          </div>
+
+                          <div className="border-b border-purple-200 pb-3 pt-2">
+                            <h5 className="mb-2 text-sm font-semibold text-purple-900">Learning Rates</h5>
+                            <div className="grid gap-3 md:grid-cols-2">
+                              <div title="Main learning rate">
+                                <p className="mb-1 brutal-label cursor-help">Learning Rate</p>
+                                <input
+                                  type="number"
+                                  value={customParams.learning_rate}
+                                  onChange={(e) => setCustomParams({ ...customParams, learning_rate: parseFloat(e.target.value) || 0.0025 })}
+                                  min="0.0001"
+                                  max="0.01"
+                                  step="0.0001"
+                                  className="brutal-input"
+                                />
+                              </div>
+                              <div title="Initial position learning rate">
+                                <p className="mb-1 brutal-label cursor-help">Position LR Init</p>
+                                <input
+                                  type="number"
+                                  value={customParams.position_lr_init}
+                                  onChange={(e) => setCustomParams({ ...customParams, position_lr_init: parseFloat(e.target.value) || 0.00016 })}
+                                  min="0.00001"
+                                  max="0.001"
+                                  step="0.00001"
+                                  className="brutal-input"
+                                />
+                              </div>
+                              <div title="Final position learning rate">
+                                <p className="mb-1 brutal-label cursor-help">Position LR Final</p>
+                                <input
+                                  type="number"
+                                  value={customParams.position_lr_final}
+                                  onChange={(e) => setCustomParams({ ...customParams, position_lr_final: parseFloat(e.target.value) || 0.0000016 })}
+                                  min="0.0000001"
+                                  max="0.0001"
+                                  step="0.0000001"
+                                  className="brutal-input"
+                                />
+                              </div>
+                              <div title="Feature learning rate">
+                                <p className="mb-1 brutal-label cursor-help">Feature LR</p>
+                                <input
+                                  type="number"
+                                  value={customParams.feature_lr}
+                                  onChange={(e) => setCustomParams({ ...customParams, feature_lr: parseFloat(e.target.value) || 0.0025 })}
+                                  min="0.0001"
+                                  max="0.01"
+                                  step="0.0001"
+                                  className="brutal-input"
+                                />
+                              </div>
+                              <div title="Opacity learning rate">
+                                <p className="mb-1 brutal-label cursor-help">Opacity LR</p>
+                                <input
+                                  type="number"
+                                  value={customParams.opacity_lr}
+                                  onChange={(e) => setCustomParams({ ...customParams, opacity_lr: parseFloat(e.target.value) || 0.05 })}
+                                  min="0.001"
+                                  max="0.5"
+                                  step="0.001"
+                                  className="brutal-input"
+                                />
+                              </div>
+                              <div title="Scaling learning rate">
+                                <p className="mb-1 brutal-label cursor-help">Scaling LR</p>
+                                <input
+                                  type="number"
+                                  value={customParams.scaling_lr}
+                                  onChange={(e) => setCustomParams({ ...customParams, scaling_lr: parseFloat(e.target.value) || 0.005 })}
+                                  min="0.0001"
+                                  max="0.05"
+                                  step="0.0001"
+                                  className="brutal-input"
+                                />
+                              </div>
+                              <div title="Rotation learning rate">
+                                <p className="mb-1 brutal-label cursor-help">Rotation LR</p>
+                                <input
+                                  type="number"
+                                  value={customParams.rotation_lr}
+                                  onChange={(e) => setCustomParams({ ...customParams, rotation_lr: parseFloat(e.target.value) || 0.001 })}
+                                  min="0.0001"
+                                  max="0.01"
+                                  step="0.0001"
+                                  className="brutal-input"
+                                />
+                              </div>
+                              <div title="Percentage of dense points">
+                                <p className="mb-1 brutal-label cursor-help">Percent Dense</p>
+                                <input
+                                  type="number"
+                                  value={customParams.percent_dense}
+                                  onChange={(e) => setCustomParams({ ...customParams, percent_dense: parseFloat(e.target.value) || 0.01 })}
+                                  min="0.001"
+                                  max="0.5"
+                                  step="0.001"
+                                  className="brutal-input"
+                                />
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="border-b border-purple-200 pb-3 pt-2">
+                            <h5 className="mb-2 text-sm font-semibold text-purple-900">SIFT Feature Quality</h5>
+                            <div className="grid gap-3 md:grid-cols-2">
+                              <div title="SIFT peak threshold">
+                                <p className="mb-1 brutal-label cursor-help">Peak Threshold</p>
+                                <input
+                                  type="number"
+                                  value={customParams.peak_threshold}
+                                  onChange={(e) => setCustomParams({ ...customParams, peak_threshold: parseFloat(e.target.value) || 0.01 })}
+                                  min="0.001"
+                                  max="0.1"
+                                  step="0.001"
+                                  className="brutal-input"
+                                />
+                              </div>
+                              <div title="SIFT edge threshold">
+                                <p className="mb-1 brutal-label cursor-help">Edge Threshold</p>
+                                <input
+                                  type="number"
+                                  value={customParams.edge_threshold}
+                                  onChange={(e) => setCustomParams({ ...customParams, edge_threshold: parseFloat(e.target.value) || 15 })}
+                                  min="5"
+                                  max="30"
+                                  step="1"
+                                  className="brutal-input"
+                                />
+                              </div>
+                              <div title="จำนวน orientations ต่อ keypoint">
+                                <p className="mb-1 brutal-label cursor-help">Max Num Orientations</p>
+                                <input
+                                  type="number"
+                                  value={customParams.max_num_orientations}
+                                  onChange={(e) => setCustomParams({ ...customParams, max_num_orientations: parseInt(e.target.value) || 2 })}
+                                  min="1"
+                                  max="5"
+                                  className="brutal-input"
+                                />
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="border-b border-purple-200 pb-3 pt-2">
+                            <h5 className="mb-2 text-sm font-semibold text-purple-900">Feature Extraction & Matching</h5>
+                            <div className="grid gap-3 md:grid-cols-2">
+                              <div title="จำนวน SIFT features สูงสุดต่อภาพ">
+                                <p className="mb-1 brutal-label cursor-help">Max Features per Image</p>
+                                <input
+                                  type="number"
+                                  value={customParams.max_num_features}
+                                  onChange={(e) => setCustomParams({ ...customParams, max_num_features: parseInt(e.target.value) || 12288 })}
+                                  min="1024"
+                                  max="32768"
+                                  step="1024"
+                                  className="brutal-input"
+                                />
+                              </div>
+                              <div title="จำนวน match points สูงสุดต่อ image pair">
+                                <p className="mb-1 brutal-label cursor-help">Max Matches per Pair</p>
+                                <input
+                                  type="number"
+                                  value={customParams.max_num_matches}
+                                  onChange={(e) => setCustomParams({ ...customParams, max_num_matches: parseInt(e.target.value) || 32768 })}
+                                  min="4096"
+                                  max="65536"
+                                  step="4096"
+                                  className="brutal-input"
+                                />
+                              </div>
+                              <div title="จำนวนภาพที่แต่ละภาพจะจับคู่ด้วย">
+                                <p className="mb-1 brutal-label cursor-help">Sequential Overlap</p>
+                                <input
+                                  type="number"
+                                  value={customParams.sequential_overlap}
+                                  onChange={(e) => setCustomParams({ ...customParams, sequential_overlap: parseInt(e.target.value) || 18 })}
+                                  min="5"
+                                  max="50"
+                                  className="brutal-input"
+                                />
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="pt-2">
+                            <h5 className="mb-2 text-sm font-semibold text-purple-900">Sparse Reconstruction</h5>
+                            <div className="grid gap-3 md:grid-cols-2">
+                              <div title="จำนวน matches ขั้นต่ำที่ยอมรับ">
+                                <p className="mb-1 brutal-label cursor-help">Min Num Matches</p>
+                                <input
+                                  type="number"
+                                  value={customParams.min_num_matches}
+                                  onChange={(e) => setCustomParams({ ...customParams, min_num_matches: parseInt(e.target.value) || 16 })}
+                                  min="6"
+                                  max="50"
+                                  className="brutal-input"
+                                />
+                              </div>
+                              <div title="จำนวนโมเดลสูงสุดที่ลองสร้าง">
+                                <p className="mb-1 brutal-label cursor-help">Max Num Models</p>
+                                <input
+                                  type="number"
+                                  value={customParams.max_num_models}
+                                  onChange={(e) => setCustomParams({ ...customParams, max_num_models: parseInt(e.target.value) || 40 })}
+                                  min="5"
+                                  max="100"
+                                  className="brutal-input"
+                                />
+                              </div>
+                              <div title="จำนวนครั้งที่ลอง initialize reconstruction">
+                                <p className="mb-1 brutal-label cursor-help">Init Num Trials</p>
+                                <input
+                                  type="number"
+                                  value={customParams.init_num_trials}
+                                  onChange={(e) => setCustomParams({ ...customParams, init_num_trials: parseInt(e.target.value) || 225 })}
+                                  min="50"
+                                  max="500"
+                                  className="brutal-input"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </Accordion>
+                    )}
+                  </div>
+                </Accordion>
+              </section>
+
+              <section id="stage-launch" className="brutal-card overflow-hidden">
+                <div className="border-b border-[color:var(--ink)] bg-[color:var(--paper-muted)] p-4 md:p-5">
+                  <p className="brutal-eyebrow rotate-1">Stage 04</p>
+                  <h2 className="brutal-h2 mt-2">ตรวจสอบแล้วเริ่มประมวลผล</h2>
+                  <p className="mt-2 text-sm font-medium text-[color:var(--text-secondary)]">
+                    จุดนี้เหลือแค่เช็กภาพรวม ถ้าต้องการรายละเอียดเชิงลึกค่อยย้อนกลับไปที่ Pipeline Controls
+                  </p>
+                </div>
+
+                <div className="space-y-5 p-4 md:p-5">
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <div className="brutal-card-muted p-4">
+                      <CheckCircle className="h-6 w-6" style={{ color: minimumFilesReached ? 'var(--success-icon)' : 'var(--warning-text)' }} />
+                      <h3 className="mt-3 text-sm font-black uppercase tracking-wide text-[color:var(--ink)]">Dataset size</h3>
+                      <p className="mt-1 text-sm font-medium text-[color:var(--text-secondary)]">
+                        {minimumFilesReached ? 'พร้อมสำหรับ reconstruction' : 'ควรมีอย่างน้อย 10 ภาพหรือเฟรม'}
+                      </p>
+                    </div>
+                    <div className="brutal-card-muted p-4">
+                      <Settings className="h-6 w-6 text-[color:var(--ink)]" />
+                      <h3 className="mt-3 text-sm font-black uppercase tracking-wide text-[color:var(--ink)]">Pipeline auto mode</h3>
+                      <p className="mt-1 text-sm font-medium text-[color:var(--text-secondary)]">
+                        Matcher {config.matcher_type === 'auto' ? 'ยังเป็น Auto' : `override เป็น ${getMatcherLabelWithMode(config.matcher_type)}`}
+                      </p>
+                    </div>
+                    <div className="brutal-card-muted p-4">
+                      <Info className="h-6 w-6 text-[color:var(--ink)]" />
+                      <h3 className="mt-3 text-sm font-black uppercase tracking-wide text-[color:var(--ink)]">Expected time</h3>
+                      <p className="mt-1 text-sm font-medium text-[color:var(--text-secondary)]">
+                        ประมาณ {qualityInfo.time} สำหรับ preset นี้
+                      </p>
+                    </div>
+                  </div>
+
+                  {uploading ? (
+                    <div className="space-y-3">
+                      <div className="h-3 w-full overflow-hidden border border-[color:var(--ink)] bg-gray-100">
+                        <div
+                          className="relative h-3 bg-[color:var(--ink-600)] transition-all duration-300"
+                          style={{ width: `${uploadProgress}%` }}
+                        >
+                          {uploadProgress > 5 && (
+                            <span className="absolute inset-0 flex items-center justify-center text-[10px] font-medium text-white">
+                              {uploadProgress}%
+                            </span>
                           )}
                         </div>
                       </div>
-                      <div className="mt-3 border border-[color:var(--ink)] bg-gradient-to-r from-purple-50 to-indigo-50 p-3">
-                        <label className="flex items-center justify-between cursor-pointer">
-                          <div className="flex items-center">
-                            <Image className="h-5 w-5 text-purple-600 mr-2" />
-                            <div>
-                              <span className="font-medium text-gray-900">Use High-Res Training Images</span>
-                              <p className="text-xs text-gray-600">Extract separate higher resolution images for 3DGS training</p>
-                            </div>
-                          </div>
-                          <div className="relative">
-                            <input
-                              type="checkbox"
-                              checked={config.use_separate_training_images}
-                              onChange={(e) => setConfig({ ...config, use_separate_training_images: e.target.checked })}
-                              className="sr-only peer"
-                            />
-                            <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:bg-purple-500 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
-                          </div>
-                        </label>
+                      <div className="flex items-center justify-between text-sm font-medium text-[color:var(--text-secondary)]">
+                        <span>{formatFileSize(uploadedBytes)} / {formatFileSize(totalSize)}</span>
+                        <span>{uploadSpeed > 0 ? `${formatFileSize(uploadSpeed)}/s` : 'Starting...'}</span>
                       </div>
-                      <div className="mt-3">
-                        <p className="brutal-label mb-2">Oversample And Select</p>
-                        <label className="flex items-center justify-between cursor-pointer border border-[color:var(--ink)] bg-gradient-to-r from-sky-50 to-cyan-50 p-3">
-                          <div className="flex items-center">
-                            <Image className="h-5 w-5 text-sky-600 mr-2" />
-                            <div>
-                              <span className="font-medium text-gray-900">Keep sharper frames after dense extraction</span>
-                              <p className="text-xs text-gray-600">Extract a denser candidate pool first, then keep the sharpest frames at the requested FPS/count</p>
-                            </div>
-                          </div>
-                          <div className="relative">
-                            <input
-                              type="checkbox"
-                              checked={config.smart_frame_selection}
-                              onChange={(e) => setConfig({ ...config, smart_frame_selection: e.target.checked })}
-                              className="sr-only peer"
-                            />
-                            <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:bg-sky-500 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all"></div>
-                          </div>
-                        </label>
+                      <p className="text-center text-xs font-medium text-[color:var(--text-secondary)]">
+                        {uploadProgress < 100
+                          ? uploadSpeed > 0
+                            ? `Estimated time: ~${Math.ceil((totalSize - uploadedBytes) / uploadSpeed)}s remaining`
+                            : 'Calculating speed...'
+                          : 'Upload complete. Processing will start automatically...'}
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col justify-between gap-3 border border-[color:var(--ink)] bg-[color:var(--paper-card)] p-4 md:flex-row md:items-center">
+                      <div className="text-sm font-medium text-[color:var(--text-secondary)]">
+                        ระบบจะพาไปหน้า live processing อัตโนมัติหลัง upload สำเร็จ
                       </div>
-                      <div className="mt-3">
-                        <p className="brutal-label mb-2">CPU Chunk Workers</p>
-                        <select
-                          value={config.ffmpeg_cpu_workers}
-                          onChange={(e) => setConfig({ ...config, ffmpeg_cpu_workers: parseInt(e.target.value, 10) })}
-                          className="brutal-select"
+                      <div className="flex gap-3">
+                        <button type="button" onClick={() => setFiles([])} className="brutal-btn" disabled={files.length === 0}>
+                          Clear All
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleUpload}
+                          disabled={files.length === 0}
+                          className={`brutal-btn brutal-btn-primary ${files.length === 0 ? 'pointer-events-none opacity-50' : ''}`}
                         >
-                          <option value={2}>2 workers</option>
-                          <option value={4}>4 workers - Recommended</option>
-                          <option value={8}>8 workers</option>
-                        </select>
-                        <p className="mt-1 text-xs text-gray-500">
-                          กำหนดจำนวน process ที่ใช้แบ่งวิดีโอเป็น chunk แล้วถอดภาพพร้อมกัน ค่าเยอะขึ้นจะใช้ CPU และ RAM มากขึ้น
-                        </p>
-                      </div>
-                      <div className="mt-3">
-                        <p className="brutal-label mb-2">Oversample Factor</p>
-                        <select
-                          value={config.oversample_factor}
-                          onChange={(e) => setConfig({ ...config, oversample_factor: parseInt(e.target.value, 10) || 10 })}
-                          className="brutal-select"
-                          disabled={!config.smart_frame_selection}
-                        >
-                          <option value={5}>5x</option>
-                          <option value={10}>10x - Recommended</option>
-                          <option value={15}>15x</option>
-                          <option value={20}>20x</option>
-                        </select>
-                        <p className="mt-1 text-xs text-gray-500">
-                          ถ้าเปิดโหมดนี้ ระบบจะถอด candidate ให้ถี่ขึ้นก่อนประมาณ {estimatedCandidatePool} แล้วค่อยคัดกลับให้เหลือเท่าค่าเป้าหมาย
-                        </p>
-                      </div>
-                      <div className="mt-3">
-                        <p className="brutal-label mb-2">Minimum Search Radius</p>
-                        <select
-                          value={config.replacement_search_radius}
-                          onChange={(e) => setConfig({ ...config, replacement_search_radius: parseInt(e.target.value) || 4 })}
-                          className="brutal-select"
-                          disabled={!config.smart_frame_selection}
-                        >
-                          <option value={2}>±2 frames</option>
-                          <option value={4}>±4 frames - Recommended</option>
-                          <option value={6}>±6 frames</option>
-                          <option value={8}>±8 frames</option>
-                          <option value={12}>±12 frames</option>
-                        </select>
-                        <p className="mt-1 text-xs text-gray-500">
-                          ใช้เป็นค่าขั้นต่ำของช่วงค้นหา และ backend จะขยายเพิ่มตาม spacing จริงเมื่อจำเป็น ตอนนี้คาดว่าจะค้นหา {estimatedSearchWindow}
-                        </p>
+                          <Settings className="mr-2 h-5 w-5" />
+                          Start Creating 3D Model
+                        </button>
                       </div>
                     </div>
                   )}
-
-                  {/* Expert Settings - Nested Accordion (only show when custom mode selected) */}
-                  {config.quality_mode === 'custom' && (
-                    <Accordion 
-                      title="Expert Settings" 
-                      icon={<Wrench className="h-5 w-5" />}
-                      badge="Custom Parameters"
-                      badgeColor="bg-purple-100 text-purple-700"
-                    >
-                      <div className="space-y-4">
-                        {/* OpenSplat Training Parameters */}
-                        <div className="border-b border-purple-200 pb-3">
-                          <h5 className="text-sm font-semibold text-purple-900 mb-2">🎨 OpenSplat Training</h5>
-                          <div className="grid md:grid-cols-2 gap-3">
-                            <div title="จำนวนรอบการเทรน - มากขึ้น = คุณภาพดีขึ้น แต่ใช้เวลานานขึ้น">
-                              <p className="brutal-label mb-1 cursor-help">
-                                Training Iterations
-                              </p>
-                              <input
-                                type="number"
-                                value={customParams.iterations}
-                                onChange={(e) => setCustomParams({ ...customParams, iterations: parseInt(e.target.value) || 7000 })}
-                                min="100"
-                                max="50000"
-                                className="brutal-input"
-                              />
-                              <p className="text-xs text-gray-500 mt-0.5">Better quality but slower (7000)</p>
-                            </div>
-                            <div title="ค่าเกณฑ์การเพิ่ม Gaussian splats - ต่ำกว่า = splats หนาแน่นกว่า = รายละเอียดมากขึ้น">
-                              <p className="brutal-label mb-1 cursor-help">
-                                Densify Grad Threshold
-                              </p>
-                              <input
-                                type="number"
-                                value={customParams.densify_grad_threshold}
-                                onChange={(e) => setCustomParams({ ...customParams, densify_grad_threshold: parseFloat(e.target.value) || 0.00015 })}
-                                min="0.00001"
-                                max="0.001"
-                                step="0.00001"
-                                className="brutal-input"
-                              />
-                              <p className="text-xs text-gray-500 mt-0.5">Denser splats, more detail (0.00015)</p>
-                            </div>
-                            <div title="ความถี่การปรับแต่ง Gaussians - น้อยกว่า = ปรับบ่อยขึ้น = ละเอียดกว่า">
-                              <p className="brutal-label mb-1 cursor-help">
-                                Refine Every (steps)
-                              </p>
-                              <input
-                                type="number"
-                                value={customParams.refine_every}
-                                onChange={(e) => setCustomParams({ ...customParams, refine_every: parseInt(e.target.value) || 75 })}
-                                min="10"
-                                max="500"
-                                className="brutal-input"
-                              />
-                              <p className="text-xs text-gray-500 mt-0.5">More frequent refinement (75)</p>
-                            </div>
-                            <div title="ระยะ warmup ของ learning rate - ยาวขึ้น = training เสถียรกว่า">
-                              <p className="brutal-label mb-1 cursor-help">
-                                Warmup Length
-                              </p>
-                              <input
-                                type="number"
-                                value={customParams.warmup_length}
-                                onChange={(e) => setCustomParams({ ...customParams, warmup_length: parseInt(e.target.value) || 750 })}
-                                min="100"
-                                max="2000"
-                                className="brutal-input"
-                              />
-                              <p className="text-xs text-gray-500 mt-0.5">More stable training (750)</p>
-                            </div>
-                            <div title="น้ำหนักของ SSIM loss - สูงขึ้น = รักษาโครงสร้างได้ดีกว่า">
-                              <p className="brutal-label mb-1 cursor-help">
-                                SSIM Weight
-                              </p>
-                              <input
-                                type="number"
-                                value={customParams.ssim_weight}
-                                onChange={(e) => setCustomParams({ ...customParams, ssim_weight: parseFloat(e.target.value) || 0.25 })}
-                                min="0"
-                                max="1"
-                                step="0.01"
-                                className="brutal-input"
-                              />
-                              <p className="text-xs text-gray-500 mt-0.5">Better structure preservation (0.25)</p>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* OpenSplat Learning Rates */}
-                        <div className="pt-2 border-b border-purple-200 pb-3">
-                          <h5 className="text-sm font-semibold text-purple-900 mb-2">📊 OpenSplat Learning Rates</h5>
-                          <div className="grid md:grid-cols-2 gap-3">
-                            <div title="Main learning rate - ต่ำกว่า = training เสถียรกว่า">
-                              <p className="brutal-label mb-1 cursor-help">
-                                Learning Rate
-                              </p>
-                              <input
-                                type="number"
-                                value={customParams.learning_rate}
-                                onChange={(e) => setCustomParams({ ...customParams, learning_rate: parseFloat(e.target.value) || 0.0025 })}
-                                min="0.0001"
-                                max="0.01"
-                                step="0.0001"
-                                className="brutal-input"
-                              />
-                              <p className="text-xs text-gray-500 mt-0.5">More stable training (0.0025)</p>
-                            </div>
-                            <div title="Initial position learning rate">
-                              <p className="brutal-label mb-1 cursor-help">
-                                Position LR Init
-                              </p>
-                              <input
-                                type="number"
-                                value={customParams.position_lr_init}
-                                onChange={(e) => setCustomParams({ ...customParams, position_lr_init: parseFloat(e.target.value) || 0.00016 })}
-                                min="0.00001"
-                                max="0.001"
-                                step="0.00001"
-                                className="brutal-input"
-                              />
-                              <p className="text-xs text-gray-500 mt-0.5">Starting position LR (0.00016)</p>
-                            </div>
-                            <div title="Final position learning rate">
-                              <p className="brutal-label mb-1 cursor-help">
-                                Position LR Final
-                              </p>
-                              <input
-                                type="number"
-                                value={customParams.position_lr_final}
-                                onChange={(e) => setCustomParams({ ...customParams, position_lr_final: parseFloat(e.target.value) || 0.0000016 })}
-                                min="0.0000001"
-                                max="0.0001"
-                                step="0.0000001"
-                                className="brutal-input"
-                              />
-                              <p className="text-xs text-gray-500 mt-0.5">Ending position LR (0.0000016)</p>
-                            </div>
-                            <div title="Feature learning rate">
-                              <p className="brutal-label mb-1 cursor-help">
-                                Feature LR
-                              </p>
-                              <input
-                                type="number"
-                                value={customParams.feature_lr}
-                                onChange={(e) => setCustomParams({ ...customParams, feature_lr: parseFloat(e.target.value) || 0.0025 })}
-                                min="0.0001"
-                                max="0.01"
-                                step="0.0001"
-                                className="brutal-input"
-                              />
-                              <p className="text-xs text-gray-500 mt-0.5">Feature learning rate (0.0025)</p>
-                            </div>
-                            <div title="Opacity learning rate">
-                              <p className="brutal-label mb-1 cursor-help">
-                                Opacity LR
-                              </p>
-                              <input
-                                type="number"
-                                value={customParams.opacity_lr}
-                                onChange={(e) => setCustomParams({ ...customParams, opacity_lr: parseFloat(e.target.value) || 0.05 })}
-                                min="0.001"
-                                max="0.5"
-                                step="0.001"
-                                className="brutal-input"
-                              />
-                              <p className="text-xs text-gray-500 mt-0.5">Opacity LR (0.05)</p>
-                            </div>
-                            <div title="Scaling learning rate">
-                              <p className="brutal-label mb-1 cursor-help">
-                                Scaling LR
-                              </p>
-                              <input
-                                type="number"
-                                value={customParams.scaling_lr}
-                                onChange={(e) => setCustomParams({ ...customParams, scaling_lr: parseFloat(e.target.value) || 0.005 })}
-                                min="0.0001"
-                                max="0.05"
-                                step="0.0001"
-                                className="brutal-input"
-                              />
-                              <p className="text-xs text-gray-500 mt-0.5">Scaling LR (0.005)</p>
-                            </div>
-                            <div title="Rotation learning rate">
-                              <p className="brutal-label mb-1 cursor-help">
-                                Rotation LR
-                              </p>
-                              <input
-                                type="number"
-                                value={customParams.rotation_lr}
-                                onChange={(e) => setCustomParams({ ...customParams, rotation_lr: parseFloat(e.target.value) || 0.001 })}
-                                min="0.0001"
-                                max="0.01"
-                                step="0.0001"
-                                className="brutal-input"
-                              />
-                              <p className="text-xs text-gray-500 mt-0.5">Rotation LR (0.001)</p>
-                            </div>
-                            <div title="Percentage of dense points">
-                              <p className="brutal-label mb-1 cursor-help">
-                                Percent Dense
-                              </p>
-                              <input
-                                type="number"
-                                value={customParams.percent_dense}
-                                onChange={(e) => setCustomParams({ ...customParams, percent_dense: parseFloat(e.target.value) || 0.01 })}
-                                min="0.001"
-                                max="0.5"
-                                step="0.001"
-                                className="brutal-input"
-                              />
-                              <p className="text-xs text-gray-500 mt-0.5">Dense point percentage (0.01)</p>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* COLMAP SIFT Feature Parameters */}
-                        <div className="pt-2 border-b border-purple-200 pb-3">
-                          <h5 className="text-sm font-semibold text-purple-900 mb-2">🎯 COLMAP SIFT Feature Quality</h5>
-                          <div className="grid md:grid-cols-2 gap-3">
-                            <div title="SIFT peak threshold - สูงขึ้น = features ที่ robust กว่า">
-                              <p className="brutal-label mb-1 cursor-help">
-                                Peak Threshold
-                              </p>
-                              <input
-                                type="number"
-                                value={customParams.peak_threshold}
-                                onChange={(e) => setCustomParams({ ...customParams, peak_threshold: parseFloat(e.target.value) || 0.01 })}
-                                min="0.001"
-                                max="0.1"
-                                step="0.001"
-                                className="brutal-input"
-                              />
-                              <p className="text-xs text-gray-500 mt-0.5">More robust features (0.01)</p>
-                            </div>
-                            <div title="SIFT edge threshold - สูงขึ้น = กรอง false edges ได้ดีกว่า">
-                              <p className="brutal-label mb-1 cursor-help">
-                                Edge Threshold
-                              </p>
-                              <input
-                                type="number"
-                                value={customParams.edge_threshold}
-                                onChange={(e) => setCustomParams({ ...customParams, edge_threshold: parseFloat(e.target.value) || 15 })}
-                                min="5"
-                                max="30"
-                                step="1"
-                                className="brutal-input"
-                              />
-                              <p className="text-xs text-gray-500 mt-0.5">Reduce false edges (15)</p>
-                            </div>
-                            <div title="จำนวน orientations ต่อ keypoint - มากขึ้น = รับรู้ได้หลากหลายกว่า">
-                              <p className="brutal-label mb-1 cursor-help">
-                                Max Num Orientations
-                              </p>
-                              <input
-                                type="number"
-                                value={customParams.max_num_orientations}
-                                onChange={(e) => setCustomParams({ ...customParams, max_num_orientations: parseInt(e.target.value) || 2 })}
-                                min="1"
-                                max="5"
-                                className="brutal-input"
-                              />
-                              <p className="text-xs text-gray-500 mt-0.5">More orientation variety (2)</p>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* COLMAP Feature Extraction & Matching */}
-                        <div className="pt-2 border-b border-purple-200 pb-3">
-                          <h5 className="text-sm font-semibold text-purple-900 mb-2">🔍 COLMAP Feature Extraction & Matching</h5>
-                          <div className="grid md:grid-cols-2 gap-3">
-                            <div title="จำนวน SIFT features สูงสุดต่อภาพ - มากขึ้น = ดึงรายละเอียดได้มากขึ้น = จับคู่ได้ดีขึ้น">
-                              <p className="brutal-label mb-1 cursor-help">
-                                Max Features per Image
-                              </p>
-                              <input
-                                type="number"
-                                value={customParams.max_num_features}
-                                onChange={(e) => setCustomParams({ ...customParams, max_num_features: parseInt(e.target.value) || 12288 })}
-                                min="1024"
-                                max="32768"
-                                step="1024"
-                                className="brutal-input"
-                              />
-                              <p className="text-xs text-gray-500 mt-0.5">More feature points = Better coverage (12288)</p>
-                            </div>
-                            <div title="จำนวน match points สูงสุดต่อ image pair - มากขึ้น = การจับคู่แม่นยำกว่า">
-                              <p className="brutal-label mb-1 cursor-help">
-                                Max Matches per Pair
-                              </p>
-                              <input
-                                type="number"
-                                value={customParams.max_num_matches}
-                                onChange={(e) => setCustomParams({ ...customParams, max_num_matches: parseInt(e.target.value) || 32768 })}
-                                min="4096"
-                                max="65536"
-                                step="4096"
-                                className="brutal-input"
-                              />
-                              <p className="text-xs text-gray-500 mt-0.5">More accurate matching (32768)</p>
-                            </div>
-                            <div title="จำนวนภาพที่แต่ละภาพจะจับคู่ด้วย - มากขึ้น = connectivity ดีกว่า">
-                              <p className="brutal-label mb-1 cursor-help">
-                                Sequential Overlap
-                              </p>
-                              <input
-                                type="number"
-                                value={customParams.sequential_overlap}
-                                onChange={(e) => setCustomParams({ ...customParams, sequential_overlap: parseInt(e.target.value) || 18 })}
-                                min="5"
-                                max="50"
-                                className="brutal-input"
-                              />
-                              <p className="text-xs text-gray-500 mt-0.5">Better image connectivity (18)</p>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* COLMAP Mapper (Reconstruction) */}
-                        <div className="pt-2">
-                          <h5 className="text-sm font-semibold text-purple-900 mb-2">🏗️ COLMAP Sparse Reconstruction (Mapper)</h5>
-                          <div className="grid md:grid-cols-2 gap-3">
-                            <div title="จำนวน matches ขั้นต่ำที่ยอมรับ - น้อยกว่า = ยอมรับภาพที่ match ยากขึ้น = register ได้มากขึ้น">
-                              <p className="brutal-label mb-1 cursor-help">
-                                Min Num Matches
-                              </p>
-                              <input
-                                type="number"
-                                value={customParams.min_num_matches}
-                                onChange={(e) => setCustomParams({ ...customParams, min_num_matches: parseInt(e.target.value) || 16 })}
-                                min="6"
-                                max="50"
-                                className="brutal-input"
-                              />
-                              <p className="text-xs text-gray-500 mt-0.5">Accept weaker matches = More images registered (16)</p>
-                            </div>
-                            <div title="จำนวนโมเดลสูงสุดที่ลองสร้าง - มากขึ้น = โอกาสได้โมเดลที่ดีสูงขึ้น">
-                              <p className="brutal-label mb-1 cursor-help">
-                                Max Num Models
-                              </p>
-                              <input
-                                type="number"
-                                value={customParams.max_num_models}
-                                onChange={(e) => setCustomParams({ ...customParams, max_num_models: parseInt(e.target.value) || 40 })}
-                                min="5"
-                                max="100"
-                                className="brutal-input"
-                              />
-                              <p className="text-xs text-gray-500 mt-0.5">Try more models = Higher chance of good result (40)</p>
-                            </div>
-                            <div title="จำนวนครั้งที่ลอง initialize reconstruction - มากขึ้น = โอกาสสำเร็จสูงขึ้น">
-                              <p className="brutal-label mb-1 cursor-help">
-                                Init Num Trials
-                              </p>
-                              <input
-                                type="number"
-                                value={customParams.init_num_trials}
-                                onChange={(e) => setCustomParams({ ...customParams, init_num_trials: parseInt(e.target.value) || 225 })}
-                                min="50"
-                                max="500"
-                                className="brutal-input"
-                              />
-                              <p className="text-xs text-gray-500 mt-0.5">More init attempts = Higher success rate (225)</p>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </Accordion>
-                  )}
                 </div>
-              </Accordion>
-
-              {/* Requirements Info */}
-                <div className="brutal-card-muted p-3 md:p-4 text-left">
-                  <h4 className="brutal-h3 mb-2 flex items-center gap-2">
-                    <Info className="h-5 w-5 mr-2" />
-                    Processing Requirements
-                  </h4>
-                  <ul className="space-y-1 text-sm font-medium text-[color:var(--text-secondary)]">
-                  <li>• Minimum 10 images/frames required for 3D reconstruction</li>
-                  <li>• Videos will be automatically converted to frames</li>
-                  <li>• Feature matching defaults to Auto and uses the backend reconstruction framework for orbit/video safety</li>
-                  <li>• Higher quality = longer processing time (30s-30m)</li>
-                  <li>• Best results with good lighting and multiple angles</li>
-                  <li>• Current input profile: {inputProfile}</li>
-                  <li>• Estimated time: {getQualityInfo(config.quality_mode).time} for {config.quality_mode} quality</li>
-                  {config.quality_mode === 'hard' && (
-                    <li>• Hard mode uses a heavier COLMAP policy first, then leaves long training for a later retry</li>
-                  )}
-                </ul>
-              </div>
+              </section>
             </div>
-
-            {uploading ? (
-              <div className="space-y-3">
-                <div className="h-3 w-full overflow-hidden border border-[color:var(--ink)] bg-gray-100">
-                  <div
-                    className="relative h-3 bg-[color:var(--ink-600)] transition-all duration-300"
-                    style={{ width: `${uploadProgress}%` }}
-                  >
-                    {uploadProgress > 5 && (
-                      <span className="absolute inset-0 flex items-center justify-center text-[10px] font-medium text-white">
-                        {uploadProgress}%
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <div className="flex items-center justify-between text-sm font-medium text-[color:var(--text-secondary)]">
-                  <span>
-                    📤 {formatFileSize(uploadedBytes)} / {formatFileSize(totalSize)}
-                  </span>
-                  <span>
-                    {uploadSpeed > 0 ? `⚡ ${formatFileSize(uploadSpeed)}/s` : '⏳ Starting...'}
-                  </span>
-                </div>
-                <p className="text-center text-xs font-medium text-[color:var(--text-secondary)]">
-                  {uploadProgress < 100
-                    ? uploadSpeed > 0
-                      ? `Estimated time: ~${Math.ceil((totalSize - uploadedBytes) / uploadSpeed)}s remaining`
-                      : 'Calculating speed...'
-                    : '✅ Upload complete! Processing will start automatically...'
-                  }
-                </p>
-              </div>
-            ) : (
-              <div className="flex justify-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => setFiles([])}
-                  className="brutal-btn"
-                >
-                  Clear All
-                </button>
-                <button
-                  type="button"
-                  onClick={handleUpload}
-                  className="brutal-btn brutal-btn-primary"
-                >
-                  <Settings className="h-5 w-5 mr-2" />
-                  Start Creating 3D Model
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-          {error && (
-        <div className="mt-4 flex items-center gap-2 border border-[color:var(--ink)] p-3" style={{ background: 'var(--error-bg)', color: 'var(--error-text)', boxShadow: 'var(--shadow-sm)' }}>
-          <AlertCircle className="h-5 w-5" />
-          <p className="text-sm font-bold">{error}</p>
-        </div>
-      )}
-
-          <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="brutal-card p-4">
-          <CheckCircle className="mb-2 h-8 w-8" style={{ color: 'var(--success-icon)' }} />
-          <h3 className="brutal-h3">Step 1: Upload</h3>
-          <p className="mt-1 text-sm font-medium text-[color:var(--text-secondary)]">Select your video or images</p>
-        </div>
-        <div className="brutal-card p-4">
-          <CheckCircle className="mb-2 h-8 w-8" style={{ color: 'var(--success-icon)' }} />
-          <h3 className="brutal-h3">Step 2: Process</h3>
-          <p className="mt-1 text-sm font-medium text-[color:var(--text-secondary)]">AI reconstructs 3D model</p>
-        </div>
-        <div className="brutal-card p-4">
-          <CheckCircle className="mb-2 h-8 w-8" style={{ color: 'var(--success-icon)' }} />
-          <h3 className="brutal-h3">Step 3: View</h3>
-          <p className="mt-1 text-sm font-medium text-[color:var(--text-secondary)]">Explore your 3D splat</p>
-        </div>
           </div>
         </div>
       </section>

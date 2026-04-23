@@ -157,6 +157,20 @@ export interface PlyFilesResponse {
   total: number;
 }
 
+export interface TrainingPreview {
+  project_id: string;
+  available: boolean;
+  is_live: boolean;
+  filename: string;
+  iteration: number;
+  total_iterations: number;
+  is_final: boolean;
+  updated_at: string;
+  size_bytes: number;
+  version: number;
+  preview_url: string;
+}
+
 export interface UploadConfig {
   project_name?: string;
   project_description?: string;
@@ -270,6 +284,20 @@ export const api = {
     return response.data;
   },
 
+  getTrainingPreview: async (id: string): Promise<TrainingPreview> => {
+    const response = await apiClient.get(`/api/project/${id}/training_preview`);
+    const data = response.data;
+    if (data?.preview_url && typeof data.preview_url === 'string' && data.preview_url.startsWith('/')) {
+      data.preview_url = `${API_BASE_URL}${data.preview_url}`;
+    }
+    return data;
+  },
+
+  getTrainingPreviewFileUrl: (id: string, version?: number | string) => {
+    const suffix = version !== undefined ? `?v=${encodeURIComponent(String(version))}` : '';
+    return `${API_BASE_URL}/api/project/${id}/training_preview_file${suffix}`;
+  },
+
   getDownloadUrl: (id: string, filename?: string) => {
     if (filename) {
       return `${API_BASE_URL}/api/download/${id}/${filename}`;
@@ -311,6 +339,12 @@ export const api = {
     }
     if (config.sfm_engine) formData.append('sfm_engine', config.sfm_engine);
     if (config.sfm_backend) formData.append('sfm_backend', config.sfm_backend);
+    if (config.force_cpu_sparse_reconstruction !== undefined) {
+      formData.append(
+        'force_cpu_sparse_reconstruction',
+        config.force_cpu_sparse_reconstruction.toString(),
+      );
+    }
     if (config.fast_sfm !== undefined) formData.append('fast_sfm', config.fast_sfm.toString());
     if (config.feature_method) formData.append('feature_method', config.feature_method);
 
@@ -535,8 +569,10 @@ export const api = {
   },
 
   // Camera Poses
-  getCameraPoses: async (id: string) => {
-    const response = await apiClient.get(`/api/project/${id}/camera_poses`);
+  getCameraPoses: async (id: string, options: { preferLive?: boolean } = {}) => {
+    const response = await apiClient.get(`/api/project/${id}/camera_poses`, {
+      params: options.preferLive === undefined ? undefined : { prefer_live: options.preferLive ? '1' : '0' },
+    });
     return response.data;
   },
 

@@ -1,12 +1,13 @@
 'use client';
 
 import { useParams, useRouter } from 'next/navigation';
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { api, Project, PlyFile } from '@/lib/api';
+import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
+import { api, Project, PlyFile, TrainingPreview } from '@/lib/api';
 import { websocket } from '@/lib/websocket';
 import { getMatcherLabelWithMode, getSfmEngineCompactLabel, getSfmEngineLabel, isGlobalSfmEngine } from '@/lib/sfm-display';
 import MeshExportPanel from '@/components/MeshExportPanel';
 import ExportedMeshesList from '@/components/ExportedMeshesList';
+import type { CameraPose, CameraPosesData } from '@/components/CameraPoseVisualization';
 import {
   ArrowLeft,
   Download,
@@ -39,6 +40,9 @@ import {
   LucideIcon
 } from 'lucide-react';
 import { Breadcrumbs } from '@/components/ui';
+
+const CameraPoseVisualization = lazy(() => import('@/components/CameraPoseVisualization'));
+const TrainingSplatPreview = lazy(() => import('@/components/TrainingSplatPreview'));
 
 const getStageLabelForEngine = (
   stageKey: string, 
@@ -198,6 +202,15 @@ export default function ProjectDetailPage() {
   const [showRetryModal, setShowRetryModal] = useState(false);
   const [selectedRetryStage, setSelectedRetryStage] = useState<string>('ingest');
   const stageLogsRef = useRef<HTMLDivElement>(null);
+  const [autoFollowRunningStage, setAutoFollowRunningStage] = useState(true);
+  const [autoScrollStageLogs, setAutoScrollStageLogs] = useState(true);
+  const [liveCameraPoses, setLiveCameraPoses] = useState<CameraPosesData | null>(null);
+  const [liveCameraPoseLoading, setLiveCameraPoseLoading] = useState(false);
+  const [liveCameraPoseError, setLiveCameraPoseError] = useState<string | null>(null);
+  const [selectedSparseCamera, setSelectedSparseCamera] = useState<CameraPose | null>(null);
+  const [trainingPreview, setTrainingPreview] = useState<TrainingPreview | null>(null);
+  const [trainingPreviewLoading, setTrainingPreviewLoading] = useState(false);
+  const [trainingPreviewError, setTrainingPreviewError] = useState<string | null>(null);
   const [retryParams, setRetryParams] = useState({
     // Gaussian Splatting params
     quality_mode: '',
@@ -212,6 +225,8 @@ export default function ProjectDetailPage() {
     // COLMAP Sparse Reconstruction params
     min_num_matches: '',
     max_num_models: '',
+    force_cpu_sparse_reconstruction: false,
+    sparse_retry_sfm_engine: '',
     // Resolution settings
     extraction_mode: '',
     max_frames: '',
@@ -246,20 +261,122 @@ export default function ProjectDetailPage() {
   const videoExtractionFramesDone = videoExtractionDetail?.current_item ?? videoDiagnostics?.candidate_count ?? videoDiagnostics?.saved_frames ?? null;
   const videoExtractionFramesTotal = videoExtractionDetail?.total_items ?? videoDiagnostics?.candidate_count ?? videoDiagnostics?.requested_targets ?? null;
   const logGroups = useMemo(() => groupLogsByStage(logs, stages), [logs, stages]);
+  const runningStage = useMemo(
+    () => stages.find((stage) => stage.status === 'running') ?? null,
+    [stages],
+  );
   const stageLogs = useMemo(() => {
     if (!expandedStage) {
       return [] as string[];
     }
     return logGroups.find(group => group.key === expandedStage)?.logs ?? [];
   }, [logGroups, expandedStage]);
+  const sparseStage = useMemo(
+    () => stages.find((stage) => stage.key === 'sparse_reconstruction') ?? null,
+    [stages],
+  );
+  const featureExtractionStage = useMemo(
+    () => stages.find((stage) => stage.key === 'feature_extraction') ?? null,
+    [stages],
+  );
+  const trainingStage = useMemo(
+    () => stages.find((stage) => stage.key === 'gaussian_splatting') ?? null,
+    [stages],
+  );
+  const canInspectSparseModel = featureExtractionStage?.status === 'completed' || sparseStage?.status === 'completed';
+  const showSparsePoseViewer =
+    expandedStage === 'sparse_reconstruction' &&
+    (
+      sparseStage?.status === 'running' ||
+      sparseStage?.status === 'completed' ||
+      sparseStage?.status === 'failed' ||
+      Boolean(liveCameraPoses)
+    );
+  const showTrainingPreview =
+    expandedStage === 'gaussian_splatting' &&
+    (
+      trainingStage?.status === 'running' ||
+      trainingStage?.status === 'completed' ||
+      trainingStage?.status === 'failed' ||
+      Boolean(trainingPreview)
+    );
+
+  const loadLiveCameraPoses = useCallback(async (options: { silent?: boolean } = {}) => {
+    try {
+      if (!options.silent) {
+        setLiveCameraPoseLoading(true);
+      }
+      const data = await api.getCameraPoses(projectId, { preferLive: true });
+      setLiveCameraPoses(data);
+      setLiveCameraPoseError(null);
+      setSelectedSparseCamera((prev) => {
+        if (!prev) {
+          return null;
+        }
+        return data.cameras.find((camera: CameraPose) => camera.image_name === prev.image_name) || null;
+      });
+    } catch (err: any) {
+      if (err?.response?.status === 404) {
+        setLiveCameraPoseError(null);
+        if (!options.silent) {
+          setLiveCameraPoses(null);
+        }
+        return;
+      }
+      const message =
+        err?.response?.data?.error ||
+        err?.message ||
+        'Failed to load sparse camera poses';
+      setLiveCameraPoseError(message);
+    } finally {
+      if (!options.silent) {
+        setLiveCameraPoseLoading(false);
+      }
+    }
+  }, [projectId]);
+
+  const loadTrainingPreview = useCallback(async (options: { silent?: boolean } = {}) => {
+    try {
+      if (!options.silent) {
+        setTrainingPreviewLoading(true);
+      }
+      const data = await api.getTrainingPreview(projectId);
+      setTrainingPreview((prev) => {
+        if (prev?.version === data.version && prev?.preview_url === data.preview_url) {
+          return prev;
+        }
+        return data;
+      });
+      setTrainingPreviewError(null);
+    } catch (err: any) {
+      if (err?.response?.status === 404) {
+        setTrainingPreviewError(null);
+        if (!options.silent) {
+          setTrainingPreview(null);
+        }
+        return;
+      }
+      const message =
+        err?.response?.data?.error ||
+        err?.message ||
+        'Failed to load training preview';
+      setTrainingPreviewError(message);
+    } finally {
+      if (!options.silent) {
+        setTrainingPreviewLoading(false);
+      }
+    }
+  }, [projectId]);
 
   // Auto-expand the running stage
   useEffect(() => {
-    const runningStage = stages.find(s => s.status === 'running');
+    if (!autoFollowRunningStage) {
+      return;
+    }
     if (runningStage && expandedStage !== runningStage.key) {
       setExpandedStage(runningStage.key);
     }
-  }, [stages, expandedStage]);
+  }, [runningStage, expandedStage, autoFollowRunningStage]);
 
   const formatTime = useCallback((seconds: number): string => {
     if (seconds < 60) return `${seconds}s`;
@@ -544,6 +661,42 @@ export default function ProjectDetailPage() {
     return () => clearInterval(interval);
   }, [project?.status, loadProject, loadFramePreviews]);
 
+  useEffect(() => {
+    if (!showSparsePoseViewer) {
+      return;
+    }
+
+    void loadLiveCameraPoses();
+
+    if (sparseStage?.status !== 'running') {
+      return;
+    }
+
+    const interval = setInterval(() => {
+      void loadLiveCameraPoses({ silent: true });
+    }, 4000);
+
+    return () => clearInterval(interval);
+  }, [showSparsePoseViewer, sparseStage?.status, loadLiveCameraPoses]);
+
+  useEffect(() => {
+    if (!showTrainingPreview) {
+      return;
+    }
+
+    void loadTrainingPreview();
+
+    if (trainingStage?.status !== 'running') {
+      return;
+    }
+
+    const interval = setInterval(() => {
+      void loadTrainingPreview({ silent: true });
+    }, 12000);
+
+    return () => clearInterval(interval);
+  }, [showTrainingPreview, trainingStage?.status, loadTrainingPreview]);
+
   // Keyboard navigation for image preview
   useEffect(() => {
     if (!showImagePreview) return;
@@ -563,24 +716,19 @@ export default function ProjectDetailPage() {
   }, [showImagePreview, framePreview.length]);
 
   useEffect(() => {
-    if (!expandedStage) {
+    if (!expandedStage || !autoScrollStageLogs) {
       return;
     }
     const node = stageLogsRef.current;
     if (node && stageLogs.length > 0) {
       node.scrollTop = node.scrollHeight;
     }
-  }, [stageLogs, expandedStage]);
+  }, [stageLogs, expandedStage, autoScrollStageLogs]);
 
   const handleRetry = async (fromStage?: string) => {
     try {
       // Build params object for retry
       const params: any = {};
-
-      // Add quality_mode for all stages (affects COLMAP and OpenSplat config)
-      if (retryParams.quality_mode) {
-        params.quality_mode = retryParams.quality_mode;
-      }
 
       // Add parameters if retrying from video_extraction stage
       if (fromStage === 'video_extraction') {
@@ -642,10 +790,19 @@ export default function ProjectDetailPage() {
         if (retryParams.max_num_models) {
           params.max_num_models = parseInt(retryParams.max_num_models);
         }
+        if (retryParams.force_cpu_sparse_reconstruction) {
+          params.force_cpu_sparse_reconstruction = true;
+        }
+        if (retryParams.sparse_retry_sfm_engine) {
+          params.sparse_retry_sfm_engine = retryParams.sparse_retry_sfm_engine;
+        }
       }
 
       // Add parameters if retrying from gaussian_splatting stage
       if (fromStage === 'gaussian_splatting') {
+        if (retryParams.quality_mode) {
+          params.quality_mode = retryParams.quality_mode;
+        }
         if (retryParams.iterations) {
           params.iterations = parseInt(retryParams.iterations);
         }
@@ -674,6 +831,8 @@ export default function ProjectDetailPage() {
         sequential_overlap: '',
         min_num_matches: '',
         max_num_models: '',
+        force_cpu_sparse_reconstruction: false,
+        sparse_retry_sfm_engine: '',
         extraction_mode: '',
         max_frames: '',
         target_fps: '',
@@ -693,6 +852,19 @@ export default function ProjectDetailPage() {
 
   const handleDownloadLogs = () => {
     window.open(api.getProjectLogsDownloadUrl(projectId), '_blank', 'noopener,noreferrer');
+  };
+
+  const handleStageCardToggle = (stageKey: string) => {
+    const isExpanded = expandedStage === stageKey;
+    if (
+      project?.status === 'processing' &&
+      autoFollowRunningStage &&
+      runningStage &&
+      stageKey !== runningStage.key
+    ) {
+      setAutoFollowRunningStage(false);
+    }
+    setExpandedStage(isExpanded ? null : stageKey);
   };
 
   const openRetryModal = () => {
@@ -726,6 +898,8 @@ export default function ProjectDetailPage() {
         sequential_overlap: '',
         min_num_matches: '',
         max_num_models: '',
+        force_cpu_sparse_reconstruction: false,
+        sparse_retry_sfm_engine: '',
         extraction_mode: project?.config?.extraction_mode || '',
         max_frames: project?.config?.max_frames?.toString() || '',
         target_fps: project?.config?.target_fps?.toString() || '',
@@ -902,9 +1076,6 @@ export default function ProjectDetailPage() {
     ? (getStageLabelForEngine(currentStage.key, project?.config?.sfm_engine, project?.config?.feature_method)
       || PIPELINE_STAGES.find(s => s.key === currentStage.key)?.label)
     : 'Initializing';
-  const sparseStage = stages.find(s => s.key === 'sparse_reconstruction');
-  const featureExtractionStage = stages.find(s => s.key === 'feature_extraction');
-  const canInspectSparseModel = featureExtractionStage?.status === 'completed' || sparseStage?.status === 'completed';
   const projectInfoTiles = [
     { label: 'Input', value: project.input_type || 'unknown' },
     { label: 'Files', value: fileCount.toLocaleString() },
@@ -1218,7 +1389,18 @@ export default function ProjectDetailPage() {
                     <p className="brutal-label mb-1">Pipeline</p>
                     <h2 className="brutal-h3">Processing Stages</h2>
                   </div>
-                  <span className="brutal-badge">{stages.filter((stage) => stage.status === 'completed').length}/{PIPELINE_STAGES.length} done</span>
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                    {project.status === 'processing' && (
+                      <button
+                        type="button"
+                        onClick={() => setAutoFollowRunningStage((prev) => !prev)}
+                        className="brutal-btn brutal-btn-xs"
+                      >
+                        {autoFollowRunningStage ? 'Auto-follow: On' : 'Auto-follow: Off'}
+                      </button>
+                    )}
+                    <span className="brutal-badge">{stages.filter((stage) => stage.status === 'completed').length}/{PIPELINE_STAGES.length} done</span>
+                  </div>
                 </div>
 
                 <div className="grid gap-3 lg:grid-cols-8">
@@ -1239,7 +1421,7 @@ export default function ProjectDetailPage() {
 
                     return (
                       <button type="button" key={stageConfig.key}
-                      onClick={() => setExpandedStage(isExpanded ? null : stageConfig.key)}
+                      onClick={() => handleStageCardToggle(stageConfig.key)}
                       className={`text-left ${isRunning || isExpanded ? 'brutal-card-dark' : stage.status === 'pending' ? 'brutal-card-muted' : 'brutal-card'} p-3 transition-transform hover:-translate-x-[2px] hover:-translate-y-[2px]`}><div className="mb-3 flex items-start justify-between gap-2">
                         <div className={`flex h-9 w-9 items-center justify-center border-[var(--border-w)] ${isRunning || isExpanded ? 'border-[var(--paper)] bg-[var(--paper)] text-[var(--ink)]' : 'border-[var(--ink)] bg-[var(--paper-card)] text-[var(--ink)]'}`}>
                           {stage.status === 'pending' ? <stageConfig.Icon className="h-4 w-4" /> : getStageIcon(stage)}
@@ -1335,26 +1517,181 @@ export default function ProjectDetailPage() {
                         )}
                       </div>
 
-                      <div className="brutal-card-muted p-4">
-                        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <p className="brutal-label">Step Breakdown</p>
-                            {stage.status === 'running' && (
-                              <span className="brutal-badge brutal-badge-success brutal-pulse">Live</span>
-                            )}
-                            <span className="brutal-badge">{stageLogs.length.toLocaleString()} lines</span>
+                      <div className="space-y-4">
+                        {expandedStage === 'sparse_reconstruction' && (
+                          <div className="brutal-card-muted overflow-hidden p-4">
+                            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="brutal-label">Sparse Camera Poses</p>
+                                {liveCameraPoses?.is_live && (
+                                  <span className="brutal-badge brutal-badge-success brutal-pulse">Live Snapshot</span>
+                                )}
+                                {liveCameraPoses && (
+                                  <span className="brutal-badge">{liveCameraPoses.camera_count.toLocaleString()} cameras</span>
+                                )}
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => void loadLiveCameraPoses()}
+                                  className="brutal-btn brutal-btn-xs"
+                                >
+                                  <RefreshCw className="h-3.5 w-3.5" />
+                                  Refresh
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => router.push(`/camera-poses/${projectId}`)}
+                                  className="brutal-btn brutal-btn-xs"
+                                >
+                                  <Eye className="h-3.5 w-3.5" />
+                                  Open Full View
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-[var(--text-secondary)]">
+                              <span>{liveCameraPoses?.source_label || 'Waiting for sparse snapshot...'}</span>
+                              {selectedSparseCamera && (
+                                <span className="font-mono text-[var(--ink)]">
+                                  {selectedSparseCamera.position[0].toFixed(2)}, {selectedSparseCamera.position[1].toFixed(2)}, {selectedSparseCamera.position[2].toFixed(2)}
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="overflow-hidden border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-card)]">
+                              {liveCameraPoses ? (
+                                <div className="h-[360px]">
+                                  <Suspense
+                                    fallback={
+                                      <div className="flex h-full items-center justify-center text-sm font-bold uppercase tracking-[0.14em] text-[var(--text-secondary)]">
+                                        Initializing Sparse Viewer
+                                      </div>
+                                    }
+                                  >
+                                    <CameraPoseVisualization
+                                      data={liveCameraPoses}
+                                      selectedCamera={selectedSparseCamera}
+                                      onCameraSelect={setSelectedSparseCamera}
+                                    />
+                                  </Suspense>
+                                </div>
+                              ) : (
+                                <div className="flex h-[220px] items-center justify-center px-6 text-center text-sm text-[var(--text-secondary)]">
+                                  {liveCameraPoseLoading
+                                    ? 'Loading sparse camera poses...'
+                                    : liveCameraPoseError
+                                      ? liveCameraPoseError
+                                      : 'Waiting for the first sparse reconstruction snapshot. Once COLMAP registers enough cameras, this view will update automatically.'}
+                                </div>
+                              )}
+                            </div>
                           </div>
-                          <button
-                            type="button"
-                            onClick={handleDownloadLogs}
-                            disabled={(logMeta.total || logs.length) === 0}
-                            className="brutal-btn brutal-btn-xs"
-                            title="Download full log"
-                          >
-                            <Download className="h-3.5 w-3.5" />
-                            Download
-                          </button>
-                        </div>
+                        )}
+
+                        {expandedStage === 'gaussian_splatting' && (
+                          <div className="brutal-card-muted overflow-hidden p-4">
+                            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="brutal-label">Training Preview</p>
+                                {trainingPreview?.is_live && (
+                                  <span className="brutal-badge brutal-badge-success brutal-pulse">Live Snapshot</span>
+                                )}
+                                {trainingPreview?.iteration ? (
+                                  <span className="brutal-badge">
+                                    {trainingPreview.iteration.toLocaleString()}/{(trainingPreview.total_iterations || 0).toLocaleString()} iter
+                                  </span>
+                                ) : null}
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => void loadTrainingPreview()}
+                                  className="brutal-btn brutal-btn-xs"
+                                >
+                                  <RefreshCw className="h-3.5 w-3.5" />
+                                  Refresh
+                                </button>
+                                {trainingPreview?.preview_url && (
+                                  <button
+                                    type="button"
+                                    onClick={() => router.push(`/viewer?file=${encodeURIComponent(trainingPreview.preview_url)}`)}
+                                    className="brutal-btn brutal-btn-xs"
+                                  >
+                                    <Eye className="h-3.5 w-3.5" />
+                                    Open Full Viewer
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-[var(--text-secondary)]">
+                              <span>
+                                {trainingPreview
+                                  ? (trainingPreview.is_final ? 'Final training preview' : `Latest preview at iteration ${trainingPreview.iteration.toLocaleString()}`)
+                                  : 'Waiting for the first training preview snapshot...'}
+                              </span>
+                            </div>
+
+                            <div className="overflow-hidden border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-card)]">
+                              {trainingPreview?.preview_url ? (
+                                <div className="h-[360px]">
+                                  <Suspense
+                                    fallback={
+                                      <div className="flex h-full items-center justify-center text-sm font-bold uppercase tracking-[0.14em] text-[var(--text-secondary)]">
+                                        Initializing Training Preview
+                                      </div>
+                                    }
+                                  >
+                                    <TrainingSplatPreview
+                                      key={trainingPreview.version}
+                                      plyUrl={trainingPreview.preview_url}
+                                      onOpenFullViewer={() => router.push(`/viewer?file=${encodeURIComponent(trainingPreview.preview_url)}`)}
+                                    />
+                                  </Suspense>
+                                </div>
+                              ) : (
+                                <div className="flex h-[220px] items-center justify-center px-6 text-center text-sm text-[var(--text-secondary)]">
+                                  {trainingPreviewLoading
+                                    ? 'Loading training preview...'
+                                    : trainingPreviewError
+                                      ? trainingPreviewError
+                                      : 'Training preview will appear after the first lightweight snapshot is written.'}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="brutal-card-muted p-4">
+                          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="brutal-label">Step Breakdown</p>
+                              {stage.status === 'running' && (
+                                <span className="brutal-badge brutal-badge-success brutal-pulse">Live</span>
+                              )}
+                              <span className="brutal-badge">{stageLogs.length.toLocaleString()} lines</span>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setAutoScrollStageLogs((prev) => !prev)}
+                                className="brutal-btn brutal-btn-xs"
+                              >
+                                {autoScrollStageLogs ? 'Auto-scroll: On' : 'Auto-scroll: Off'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={handleDownloadLogs}
+                                disabled={(logMeta.total || logs.length) === 0}
+                                className="brutal-btn brutal-btn-xs"
+                                title="Download full log"
+                              >
+                                <Download className="h-3.5 w-3.5" />
+                                Download
+                              </button>
+                            </div>
+                          </div>
                         {expandedStage === 'sparse_reconstruction' && isGlobalSfmEngine(project?.config?.sfm_engine) && stage.status === 'running' && (
                           <div className="mb-3 space-y-2 text-xs text-[var(--text-secondary)]">
                             {[
@@ -1423,6 +1760,7 @@ export default function ProjectDetailPage() {
                           </div>
                         )}
                       </div>
+                    </div>
                     </div>
                   );
                 })()}
@@ -1858,24 +2196,6 @@ export default function ProjectDetailPage() {
                 <div className="space-y-3">
                   <div>
                     <p className="brutal-label mb-1 block">
-                      Quality Mode
-                    </p>
-                    <select
-                      value={retryParams.quality_mode}
-                      onChange={(e) => setRetryParams({...retryParams, quality_mode: e.target.value})}
-                      className="brutal-select"
-                    >
-                      <option value="">ใช้ค่าเดิม</option>
-                      <option value="fast">Fast</option>
-                      <option value="balanced">Balanced</option>
-                      <option value="high">High</option>
-                      <option value="ultra">Ultra</option>
-                      <option value="professional">Professional</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <p className="brutal-label mb-1 block">
                       Max Num Features (จำนวน features สูงสุดต่อภาพ)
                     </p>
                     <input
@@ -1916,25 +2236,6 @@ export default function ProjectDetailPage() {
                   ปรับค่า Feature Matching (ทิ้งว่างเพื่อใช้ค่าเดิม)
                 </h4>
                 <div className="space-y-3">
-                  <div>
-                    <p className="brutal-label mb-1 block">
-                      Quality Mode
-                    </p>
-                    <select
-                      value={retryParams.quality_mode}
-                      onChange={(e) => setRetryParams({...retryParams, quality_mode: e.target.value})}
-                      className="brutal-select"
-                    >
-                      <option value="">ใช้ค่าเดิม</option>
-                      <option value="fast">Fast</option>
-                      <option value="balanced">Balanced</option>
-                      <option value="hard">Hard (coverage-first)</option>
-                      <option value="high">High</option>
-                      <option value="ultra">Ultra</option>
-                      <option value="robust">Robust (สำหรับ dataset ยาก)</option>
-                    </select>
-                  </div>
-
                   <div>
                     <p className="brutal-label mb-1 block">
                       Max Num Matches (จำนวน matches สูงสุด)
@@ -1979,22 +2280,36 @@ export default function ProjectDetailPage() {
                 <div className="space-y-3">
                   <div>
                     <p className="brutal-label mb-1 block">
-                      Quality Mode
+                      Retry Engine
                     </p>
                     <select
-                      value={retryParams.quality_mode}
-                      onChange={(e) => setRetryParams({...retryParams, quality_mode: e.target.value})}
+                      value={retryParams.sparse_retry_sfm_engine}
+                      onChange={(e) => setRetryParams({...retryParams, sparse_retry_sfm_engine: e.target.value})}
                       className="brutal-select"
                     >
                       <option value="">ใช้ค่าเดิม</option>
-                      <option value="fast">Fast</option>
-                      <option value="balanced">Balanced</option>
-                      <option value="hard">Hard (coverage-first)</option>
-                      <option value="high">High</option>
-                      <option value="ultra">Ultra</option>
-                      <option value="robust">Robust (สำหรับ dataset ยาก)</option>
+                      <option value="colmap">COLMAP Incremental</option>
+                      <option value="glomap">Global Mapper</option>
                     </select>
+                    <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                      ถ้า global mapper รวมกลุ่มผิด ลองสลับเป็น incremental ก่อน
+                    </p>
                   </div>
+
+                  <label className="flex items-start gap-3 rounded-[18px] border-2 border-[var(--border)] bg-white px-4 py-3">
+                    <input
+                      type="checkbox"
+                      checked={retryParams.force_cpu_sparse_reconstruction}
+                      onChange={(e) => setRetryParams({...retryParams, force_cpu_sparse_reconstruction: e.target.checked})}
+                      className="mt-1 h-4 w-4 accent-[var(--accent)]"
+                    />
+                    <span>
+                      <span className="brutal-label block">Force CPU Sparse Reconstruction</span>
+                      <span className="mt-1 block text-xs text-[var(--text-secondary)]">
+                        ปิด GPU สำหรับ global mapper / mapper BA ในรอบ retry นี้ เพื่อเทียบกับผลแบบ CPU เดิม
+                      </span>
+                    </span>
+                  </label>
 
                   <div>
                     <p className="brutal-label mb-1 block">

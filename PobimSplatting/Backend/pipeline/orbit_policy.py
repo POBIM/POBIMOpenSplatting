@@ -11,7 +11,7 @@ from .frame_manifest import load_frame_selection_manifest
 
 logger = logging.getLogger(__name__)
 
-ORDERED_CAPTURE_POLICY_IMAGE_LIMIT = 600
+ORDERED_CAPTURE_POLICY_IMAGE_LIMIT = 900
 ORBIT_SAFE_PROFILE_PERMISSIVENESS = {
     'local-conservative': 0,
     'bridge-balanced': 1,
@@ -139,13 +139,139 @@ def should_use_orbit_safe_mode(paths, config, num_images):
     return True, orbit_safe_policy['reason']
 
 
-def get_orbit_safe_profile_settings(profile_name, num_images):
+def _parse_float(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_int(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def build_orbit_safe_tuning_context(config=None):
+    config = dict(config or {})
+    resolution_label = str(config.get('colmap_resolution') or '').strip().lower()
+    max_image_size = _parse_int(config.get('max_image_size'))
+    target_fps = _parse_float(config.get('target_fps'))
+
+    if max_image_size is not None and max_image_size >= 3600:
+        detail_tier = 'high'
+    elif resolution_label in {'4k', '8k', 'original'}:
+        detail_tier = 'high'
+    elif max_image_size is not None and max_image_size >= 2600:
+        detail_tier = 'medium'
+    elif resolution_label in {'2k', '1440p'}:
+        detail_tier = 'medium'
+    else:
+        detail_tier = 'standard'
+
+    return {
+        'detail_tier': detail_tier,
+        'target_fps': target_fps,
+        'colmap_resolution': resolution_label or None,
+        'max_image_size': max_image_size,
+    }
+
+
+def _get_orbit_safe_base_overlap(profile_name, num_images):
+    # Large ordered captures benefit from tighter local windows; recovery retries can
+    # still expand overlap later if pair geometry shows weak boundaries.
+    tier_map = {
+        'bridge-recovery': (
+            (80, 40),
+            (150, 44),
+            (300, 48),
+            (600, 44),
+            (ORDERED_CAPTURE_POLICY_IMAGE_LIMIT, 34),
+        ),
+        'bridge-balanced': (
+            (80, 32),
+            (150, 36),
+            (300, 40),
+            (600, 36),
+            (ORDERED_CAPTURE_POLICY_IMAGE_LIMIT, 28),
+        ),
+        'local-conservative': (
+            (80, 28),
+            (150, 32),
+            (300, 34),
+            (600, 30),
+            (ORDERED_CAPTURE_POLICY_IMAGE_LIMIT, 24),
+        ),
+    }
+
+    for max_images, overlap in tier_map.get(profile_name, tier_map['local-conservative']):
+        if num_images <= max_images:
+            return overlap
+
+    return tier_map.get(profile_name, tier_map['local-conservative'])[-1][1]
+
+
+def _get_orbit_safe_overlap_bounds(profile_name):
     if profile_name == 'bridge-recovery':
-        overlap = '40' if num_images <= 80 else ('44' if num_images <= 150 else '52')
+        return 24, 52
+    if profile_name == 'bridge-balanced':
+        return 20, 44
+    return 18, 40
+
+
+def _should_enable_orbit_safe_quadratic_overlap(profile_name, num_images, tuning_context):
+    target_fps = tuning_context.get('target_fps')
+
+    if profile_name == 'bridge-recovery':
+        return True
+
+    if profile_name == 'bridge-balanced':
+        if target_fps is not None and target_fps <= 1.0:
+            return True
+        return num_images <= 700
+
+    return False
+
+
+def _get_orbit_safe_overlap(profile_name, num_images, tuning_context):
+    overlap = _get_orbit_safe_base_overlap(profile_name, num_images)
+    target_fps = tuning_context.get('target_fps')
+    detail_tier = tuning_context.get('detail_tier')
+
+    if detail_tier == 'high':
+        overlap -= 4
+    elif detail_tier == 'medium' and num_images > 300:
+        overlap -= 2
+
+    if target_fps is not None:
+        if target_fps <= 0.75:
+            overlap += 6
+        elif target_fps <= 1.0:
+            overlap += 4
+        elif target_fps >= 6.0:
+            overlap -= 4
+        elif target_fps >= 3.0:
+            overlap -= 2
+
+    min_overlap, max_overlap = _get_orbit_safe_overlap_bounds(profile_name)
+    return max(min_overlap, min(max_overlap, overlap))
+
+
+def get_orbit_safe_profile_settings(profile_name, num_images, config=None):
+    tuning_context = build_orbit_safe_tuning_context(config)
+    overlap = str(_get_orbit_safe_overlap(profile_name, num_images, tuning_context))
+    quadratic_overlap = '1' if _should_enable_orbit_safe_quadratic_overlap(
+        profile_name,
+        num_images,
+        tuning_context,
+    ) else '0'
+
+    if profile_name == 'bridge-recovery':
         return {
             'matcher_params': {
                 'SequentialMatching.overlap': overlap,
-                'SequentialMatching.quadratic_overlap': '1',
+                'SequentialMatching.quadratic_overlap': quadratic_overlap,
                 'SequentialMatching.loop_detection': '0',
             },
             'mapper_params': {
@@ -160,11 +286,10 @@ def get_orbit_safe_profile_settings(profile_name, num_images):
         }
 
     if profile_name == 'bridge-balanced':
-        overlap = '32' if num_images <= 80 else ('36' if num_images <= 150 else '44')
         return {
             'matcher_params': {
                 'SequentialMatching.overlap': overlap,
-                'SequentialMatching.quadratic_overlap': '1',
+                'SequentialMatching.quadratic_overlap': quadratic_overlap,
                 'SequentialMatching.loop_detection': '0',
             },
             'mapper_params': {
@@ -178,11 +303,10 @@ def get_orbit_safe_profile_settings(profile_name, num_images):
             'init_num_trials_floor': 260,
         }
 
-    overlap = '28' if num_images <= 80 else ('32' if num_images <= 150 else '40')
     return {
         'matcher_params': {
             'SequentialMatching.overlap': overlap,
-            'SequentialMatching.quadratic_overlap': '1',
+            'SequentialMatching.quadratic_overlap': quadratic_overlap,
             'SequentialMatching.loop_detection': '0',
         },
         'mapper_params': {
@@ -447,8 +571,9 @@ def apply_no_regression_floor(colmap_cfg, project_id=None, reason=None):
     return colmap_cfg, bool(changes)
 
 
-def make_orbit_safe_policy(profile_name, num_images, bridge_risk_score, capture_pattern, reason):
-    settings = get_orbit_safe_profile_settings(profile_name, num_images)
+def make_orbit_safe_policy(profile_name, num_images, bridge_risk_score, capture_pattern, reason, config=None):
+    tuning_context = build_orbit_safe_tuning_context(config)
+    settings = get_orbit_safe_profile_settings(profile_name, num_images, tuning_context)
     return {
         'profile_name': profile_name,
         'reason': reason,
@@ -458,6 +583,7 @@ def make_orbit_safe_policy(profile_name, num_images, bridge_risk_score, capture_
         'min_num_matches_cap': settings['min_num_matches_cap'],
         'init_num_trials_floor': settings['init_num_trials_floor'],
         'capture_pattern': capture_pattern,
+        'tuning_context': tuning_context,
     }
 
 
@@ -742,4 +868,11 @@ def build_orbit_safe_policy_from_capture(capture_pattern, config, num_images):
         f'pose registration ({profile_name}, risk={bridge_risk_score})'
     )
 
-    return make_orbit_safe_policy(profile_name, num_images, bridge_risk_score, capture_pattern, reason)
+    return make_orbit_safe_policy(
+        profile_name,
+        num_images,
+        bridge_risk_score,
+        capture_pattern,
+        reason,
+        config=config,
+    )

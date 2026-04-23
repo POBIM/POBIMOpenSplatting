@@ -249,6 +249,7 @@ def refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id=None):
             f'({suggested_profile}, bridge_p10={geometry_stats["bridge_p10"]}, '
             f'weak_ratio={geometry_stats["weak_boundary_ratio"]})'
         ),
+        config=colmap_cfg.get('orbit_safe_tuning_context'),
     )
 
     colmap_cfg['pair_geometry_stats'] = geometry_stats
@@ -263,6 +264,7 @@ def refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id=None):
     )
     colmap_cfg['min_num_matches'] = min(colmap_cfg['min_num_matches'], refined_policy['min_num_matches_cap'])
     colmap_cfg['init_num_trials'] = max(colmap_cfg['init_num_trials'], refined_policy['init_num_trials_floor'])
+    colmap_cfg['orbit_safe_tuning_context'] = refined_policy.get('tuning_context')
     colmap_cfg, floor_applied = apply_no_regression_floor(
         colmap_cfg,
         project_id=project_id,

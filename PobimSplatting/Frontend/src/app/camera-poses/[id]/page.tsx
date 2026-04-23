@@ -86,9 +86,9 @@ export default function CameraPosesPage() {
   }
 
   return (
-    <div className="brutal-shell flex min-h-screen flex-col">
+    <div className="brutal-shell flex min-h-screen flex-col lg:h-screen lg:overflow-hidden">
       <header className="border-b-[var(--border-w-strong)] border-[color:var(--ink)] bg-[color:var(--ink)] text-[color:var(--text-on-ink)]">
-        <div className="brutal-container flex flex-col gap-4 px-4 py-4 md:px-6 lg:flex-row lg:items-end lg:justify-between">
+        <div className="brutal-container flex flex-col gap-3 px-4 py-3 md:px-6 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-start gap-3">
             <button
               type="button"
@@ -99,14 +99,14 @@ export default function CameraPosesPage() {
               Back
             </button>
             <div>
-              <div className="mb-2 inline-flex items-center gap-2 border-[var(--border-w)] border-[color:var(--text-on-ink)] px-2 py-1 text-[11px] font-bold uppercase tracking-[0.18em] text-[color:var(--text-on-ink)]">
+              <div className="mb-1.5 inline-flex items-center gap-2 border-[var(--border-w)] border-[color:var(--text-on-ink)] px-2 py-0.5 text-[11px] font-bold uppercase tracking-[0.18em] text-[color:var(--text-on-ink)]">
                 <Camera className="h-3.5 w-3.5" />
                 Camera Poses
               </div>
-              <h1 className="text-2xl font-black uppercase tracking-tight md:text-3xl">
+              <h1 className="text-xl font-black uppercase tracking-tight md:text-2xl">
                 {data.project_name || projectId}
               </h1>
-              <div className="mt-2 [&_*]:text-[color:var(--text-on-ink-muted)]">
+              <div className="mt-1 [&_*]:text-[color:var(--text-on-ink-muted)]">
                 <Breadcrumbs
                   items={[
                     { label: 'Projects', href: '/projects' },
@@ -125,117 +125,71 @@ export default function CameraPosesPage() {
         </div>
       </header>
 
-      <section className="brutal-section-tight flex-1 overflow-hidden">
-        <div className="brutal-container flex h-full min-h-[calc(100vh-120px)] flex-col gap-5 lg:flex-row">
+      <section className="flex min-h-0 flex-1 lg:overflow-hidden">
+        <div className="brutal-container flex h-full min-h-0 w-full flex-col gap-3 px-4 py-3 md:px-6 lg:flex-row">
           <CameraSidebar cameras={data.cameras} selectedCamera={selectedCamera} onSelect={setSelectedCamera} />
 
-          <div className="flex min-h-[640px] flex-1 flex-col gap-4 overflow-hidden">
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
-              <div className="brutal-card-dark p-4">
-                <div className="grid gap-3 sm:grid-cols-3">
-                  <div>
-                    <div className="text-[11px] font-bold uppercase tracking-[0.16em] text-[color:var(--text-on-ink-muted)]">
-                      Cameras
-                    </div>
-                    <div className="mt-1 text-lg font-black uppercase tracking-tight">{data.camera_count}</div>
-                  </div>
-                  <div>
-                    <div className="text-[11px] font-bold uppercase tracking-[0.16em] text-[color:var(--text-on-ink-muted)]">
-                      SfM Engine
-                    </div>
-                    <div className="mt-1 text-sm font-bold uppercase tracking-[0.12em]">
-                      {data.sfm_engine ? getSfmEngineLabel(data.sfm_engine) : 'Unknown'}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-[11px] font-bold uppercase tracking-[0.16em] text-[color:var(--text-on-ink-muted)]">
-                      Sparse Points
-                    </div>
-                    <div className="mt-1 flex items-center gap-2 text-sm font-bold uppercase tracking-[0.12em]">
-                      <Sparkles className="h-4 w-4" />
-                      {(data.sparse_point_count || 0).toLocaleString()}
-                    </div>
-                  </div>
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+            <div className="brutal-card-dark flex flex-wrap items-center gap-x-6 gap-y-2 px-4 py-2.5">
+              <div className="flex items-baseline gap-2">
+                <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-[color:var(--text-on-ink-muted)]">Cameras</span>
+                <span className="text-base font-black tracking-tight">{data.camera_count}</span>
+              </div>
+              <div className="flex items-baseline gap-2">
+                <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-[color:var(--text-on-ink-muted)]">SfM</span>
+                <span className="text-sm font-bold uppercase tracking-[0.12em]">{data.sfm_engine ? getSfmEngineLabel(data.sfm_engine) : 'Unknown'}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-3.5 w-3.5 text-[color:var(--text-on-ink-muted)]" />
+                <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-[color:var(--text-on-ink-muted)]">Points</span>
+                <span className="text-sm font-bold uppercase tracking-[0.12em]">{(data.sparse_point_count || 0).toLocaleString()}</span>
+              </div>
+              {selectedCamera && (
+                <div className="ml-auto flex flex-wrap items-center gap-3 border-l-[var(--border-w)] border-[color:var(--text-on-ink-muted)] pl-4">
+                  <span className="text-[11px] font-bold uppercase tracking-[0.16em] text-[color:var(--text-on-ink-muted)]">Selected</span>
+                  <span className="max-w-[200px] truncate text-sm font-bold uppercase tracking-[0.12em]">{selectedCamera.image_name}</span>
+                  <span className="font-mono text-[11px] text-[color:var(--text-on-ink-muted)]">
+                    {selectedCamera.position[0].toFixed(2)}, {selectedCamera.position[1].toFixed(2)}, {selectedCamera.position[2].toFixed(2)}
+                  </span>
+                  {selectedCamera.width && selectedCamera.height && (
+                    <span className="font-mono text-[11px] text-[color:var(--text-on-ink-muted)]">{selectedCamera.width}×{selectedCamera.height}</span>
+                  )}
                 </div>
-              </div>
-
-              <div className="brutal-card p-4">
-                <div className="brutal-eyebrow mb-2">Selection</div>
-                <h2 className="brutal-h3 mb-3">Active Camera</h2>
-                {selectedCamera ? (
-                  <div className="space-y-3 text-sm text-[color:var(--text-secondary)]">
-                    <div className="font-bold uppercase tracking-[0.12em] text-[color:var(--text-primary)]">
-                      {selectedCamera.image_name}
-                    </div>
-                    <div className="grid grid-cols-3 gap-2 text-xs">
-                      <div className="brutal-card-muted p-2">
-                        <div className="brutal-label mb-1">X</div>
-                        <div className="font-mono text-[color:var(--text-primary)]">
-                          {selectedCamera.position[0].toFixed(3)}
-                        </div>
-                      </div>
-                      <div className="brutal-card-muted p-2">
-                        <div className="brutal-label mb-1">Y</div>
-                        <div className="font-mono text-[color:var(--text-primary)]">
-                          {selectedCamera.position[1].toFixed(3)}
-                        </div>
-                      </div>
-                      <div className="brutal-card-muted p-2">
-                        <div className="brutal-label mb-1">Z</div>
-                        <div className="font-mono text-[color:var(--text-primary)]">
-                          {selectedCamera.position[2].toFixed(3)}
-                        </div>
-                      </div>
-                    </div>
-                    {selectedCamera.width && selectedCamera.height && (
-                      <div className="text-xs uppercase tracking-[0.12em] text-[color:var(--text-muted)]">
-                        {selectedCamera.width}×{selectedCamera.height}
-                        {selectedCamera.fx ? ` • fx ${selectedCamera.fx.toFixed(1)}` : ''}
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <p className="text-sm text-[color:var(--text-secondary)]">
-                    Select a camera from the left rail or directly in the 3D view.
-                  </p>
-                )}
-              </div>
+              )}
             </div>
 
-            <div className="brutal-card flex-1 overflow-hidden p-3">
-              <div className="flex h-full min-h-[520px] flex-col overflow-hidden">
-                <div className="flex items-center justify-between border-b-[var(--border-w)] border-[color:var(--ink)] bg-[color:var(--paper-muted)] px-4 py-2">
-                  <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.14em] text-[color:var(--text-secondary)]">
-                    <Box className="h-4 w-4" />
-                    Pose Visualization
-                  </div>
-                  <div className="flex gap-1.5">
-                    <span className="h-2.5 w-2.5 border-[var(--border-w)] border-[color:var(--ink)] bg-[color:var(--paper-card)]" />
-                    <span className="h-2.5 w-2.5 border-[var(--border-w)] border-[color:var(--ink)] bg-[color:var(--paper-muted-2)]" />
-                    <span className="h-2.5 w-2.5 border-[var(--border-w)] border-[color:var(--ink)] bg-[color:var(--ink)]" />
-                  </div>
+            <div className="brutal-card flex min-h-[480px] flex-1 flex-col overflow-hidden p-3 lg:min-h-0">
+              <div className="flex items-center justify-between border-b-[var(--border-w)] border-[color:var(--ink)] bg-[color:var(--paper-muted)] px-4 py-2">
+                <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-[0.14em] text-[color:var(--text-secondary)]">
+                  <Box className="h-4 w-4" />
+                  Pose Visualization
                 </div>
+                <div className="flex gap-1.5">
+                  <span className="h-2.5 w-2.5 border-[var(--border-w)] border-[color:var(--ink)] bg-[color:var(--paper-card)]" />
+                  <span className="h-2.5 w-2.5 border-[var(--border-w)] border-[color:var(--ink)] bg-[color:var(--paper-muted-2)]" />
+                  <span className="h-2.5 w-2.5 border-[var(--border-w)] border-[color:var(--ink)] bg-[color:var(--ink)]" />
+                </div>
+              </div>
 
-                <div className="relative flex-1 overflow-hidden bg-[color:var(--paper)]">
-                  <Suspense
-                    fallback={
-                      <div className="flex h-full items-center justify-center">
-                        <div className="text-center">
-                          <Box className="brutal-pulse mx-auto mb-3 h-10 w-10" />
-                          <p className="text-sm font-bold uppercase tracking-[0.14em] text-[color:var(--text-secondary)]">
-                            Initializing 3D Viewer
-                          </p>
-                        </div>
+              <div className="relative min-h-0 flex-1 overflow-hidden bg-[color:var(--paper)]">
+                <Suspense
+                  fallback={
+                    <div className="flex h-full items-center justify-center">
+                      <div className="text-center">
+                        <Box className="brutal-pulse mx-auto mb-3 h-10 w-10" />
+                        <p className="text-sm font-bold uppercase tracking-[0.14em] text-[color:var(--text-secondary)]">
+                          Initializing 3D Viewer
+                        </p>
                       </div>
-                    }
-                  >
-                    <CameraPoseVisualization
-                      data={data}
-                      selectedCamera={selectedCamera}
-                      onCameraSelect={setSelectedCamera}
-                    />
-                  </Suspense>
-                </div>
+                    </div>
+                  }
+                >
+                  <CameraPoseVisualization
+                    data={data}
+                    selectedCamera={selectedCamera}
+                    onCameraSelect={setSelectedCamera}
+                  />
+                </Suspense>
               </div>
             </div>
           </div>
@@ -267,7 +221,7 @@ function CameraSidebar({
   }, [selectedCamera]);
 
   return (
-    <aside className="brutal-card flex w-full flex-shrink-0 flex-col overflow-hidden lg:w-72">
+    <aside className="brutal-card flex w-full min-h-0 flex-shrink-0 flex-col overflow-hidden lg:h-full lg:w-72">
       <div className="border-b-[var(--border-w)] border-[color:var(--ink)] bg-[color:var(--paper-muted)] px-4 py-3">
         <div className="flex items-center gap-2">
           <ImageIcon className="h-4 w-4" />

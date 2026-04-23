@@ -10,6 +10,9 @@ import { useRouter } from 'next/navigation';
 type MatcherMode = 'auto' | 'sequential' | 'exhaustive' | 'vocab_tree';
 type SfmBackendMode = 'cli' | 'pycolmap';
 
+const DEFAULT_CPU_CHUNK_WORKERS = 8;
+const CPU_CHUNK_WORKER_SUGGESTIONS = [2, 4, 8, 12, 14];
+
 export default function UploadPage() {
   const router = useRouter();
   const [isDragging, setIsDragging] = useState(false);
@@ -35,7 +38,7 @@ export default function UploadPage() {
     adaptive_frame_budget: true,
     oversample_factor: 10,
     replacement_search_radius: 4,
-    ffmpeg_cpu_workers: 4,
+    ffmpeg_cpu_workers: DEFAULT_CPU_CHUNK_WORKERS,
     sfm_engine: 'glomap',  // Auto-shifted to COLMAP Incremental for video/mixed uploads below
     sfm_backend: 'cli' as SfmBackendMode,
     feature_method: 'sift',  // 'sift' (classic COLMAP), 'aliked' (native COLMAP neural), 'superpoint' (hloc)
@@ -1593,17 +1596,33 @@ export default function UploadPage() {
                       </div>
                       <div className="mt-3">
                         <p className="brutal-label mb-2">CPU Chunk Workers</p>
-                        <select
+                        <input
+                          type="number"
+                          min={1}
+                          step={1}
+                          list="cpu-chunk-worker-suggestions"
                           value={config.ffmpeg_cpu_workers}
-                          onChange={(e) => setConfig({ ...config, ffmpeg_cpu_workers: parseInt(e.target.value, 10) })}
-                          className="brutal-select"
-                        >
-                          <option value={2}>2 workers</option>
-                          <option value={4}>4 workers - Recommended</option>
-                          <option value={8}>8 workers</option>
-                        </select>
+                          onChange={(e) => {
+                            const nextValue = Number.parseInt(e.target.value, 10);
+                            if (Number.isNaN(nextValue)) {
+                              return;
+                            }
+                            setConfig({
+                              ...config,
+                              ffmpeg_cpu_workers: Math.max(1, nextValue),
+                            });
+                          }}
+                          className="brutal-input"
+                        />
+                        <datalist id="cpu-chunk-worker-suggestions">
+                          {CPU_CHUNK_WORKER_SUGGESTIONS.map((workerCount) => (
+                            <option key={workerCount} value={workerCount}>
+                              {workerCount} workers
+                            </option>
+                          ))}
+                        </datalist>
                         <p className="mt-1 text-xs text-gray-500">
-                          กำหนดจำนวน process ที่ใช้แบ่งวิดีโอเป็น chunk แล้วถอดภาพพร้อมกัน ค่าเยอะขึ้นจะใช้ CPU และ RAM มากขึ้น
+                          ค่าเริ่มต้นคือ {DEFAULT_CPU_CHUNK_WORKERS} และสามารถพิมพ์ค่าเองได้ ค่าเยอะขึ้นจะใช้ CPU และ RAM มากขึ้น
                         </p>
                       </div>
                       <div className="mt-3">

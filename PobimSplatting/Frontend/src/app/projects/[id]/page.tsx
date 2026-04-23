@@ -87,6 +87,7 @@ const isErrorStatus = (status?: string | null): boolean =>
   status === 'failed' || status === 'cancelled';
 
 const MAX_LOG_LINES_IN_UI = 1200;
+const CPU_CHUNK_WORKER_SUGGESTIONS = ['2', '4', '8', '12', '14'];
 
 const normalizeProgressStates = (states: any[] = []) =>
   PIPELINE_STAGES.map(stage => {
@@ -2557,17 +2558,24 @@ export default function ProjectDetailPage() {
                     <p className="brutal-label mb-1 block">
                       CPU Chunk Workers
                     </p>
-                    <select
+                    <input
+                      type="number"
+                      min={1}
+                      step={1}
+                      list="retry-cpu-chunk-worker-suggestions"
                       value={retryParams.ffmpeg_cpu_workers}
                       onChange={(e) => setRetryParams({...retryParams, ffmpeg_cpu_workers: e.target.value})}
-                      className="brutal-select"
-                    >
-                      <option value="">ใช้ค่าเดิม</option>
-                      <option value="2">2 workers</option>
-                      <option value="4">4 workers</option>
-                      <option value="8">8 workers</option>
-                    </select>
-                    <p className="mt-1 text-xs text-[var(--text-secondary)]">เพิ่มหรือลดจำนวน chunk extraction workers เวลา rerun ขั้น extract</p>
+                      placeholder="ใช้ค่าเดิม"
+                      className="brutal-input"
+                    />
+                    <datalist id="retry-cpu-chunk-worker-suggestions">
+                      {CPU_CHUNK_WORKER_SUGGESTIONS.map((workerCount) => (
+                        <option key={workerCount} value={workerCount}>
+                          {workerCount} workers
+                        </option>
+                      ))}
+                    </datalist>
+                    <p className="mt-1 text-xs text-[var(--text-secondary)]">ปล่อยว่างเพื่อใช้ค่าเดิม หรือพิมพ์ค่าใหม่เองได้</p>
                   </div>
 
                   <div className="flex items-center">

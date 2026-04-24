@@ -446,16 +446,16 @@ export interface TrainingPreview {
   project_id: string;
   available: boolean;
   is_live: boolean;
-  filename: string;
+  filename?: string;
   iteration: number;
   total_iterations: number;
   progress_percent?: number;
   update_interval_percent?: number;
   is_final: boolean;
-  updated_at: string;
-  size_bytes: number;
-  version: number;
-  preview_url: string;
+  updated_at?: string;
+  size_bytes?: number;
+  version?: number;
+  preview_url?: string;
 }
 
 export interface TrainingLivePreview {
@@ -464,10 +464,14 @@ export interface TrainingLivePreview {
   image_name: string;
   filename?: string;
   render_url?: string;
+  frame_mime?: string;
+  frame_bytes?: ArrayBuffer | Uint8Array | number[] | null;
   reference_url?: string | null;
   iteration?: number;
   total_iterations?: number;
   progress_percent?: number;
+  width?: number;
+  height?: number;
   version?: number;
   updated_at?: string;
 }

@@ -302,6 +302,7 @@ export default function ProjectDetailPage() {
     max_num_features: '',
     max_image_size: '',
     // COLMAP Feature Matching params
+    matcher_type: '',
     max_num_matches: '',
     sequential_overlap: '',
     // COLMAP Sparse Reconstruction params
@@ -315,6 +316,7 @@ export default function ProjectDetailPage() {
     abs_pose_min_inlier_ratio: '',
     max_reg_trials: '',
     force_cpu_sparse_reconstruction: true,
+    matcher_fallback_retry_type: '',
     sparse_retry_sfm_engine: '',
     // Resolution settings
     extraction_mode: '',
@@ -559,20 +561,19 @@ export default function ProjectDetailPage() {
       }
       const data = await api.getTrainingPreview(projectId);
       setTrainingPreview((prev) => {
-        if (prev?.version === data.version && prev?.preview_url === data.preview_url) {
+        if (
+          prev?.version === data.version &&
+          prev?.preview_url === data.preview_url &&
+          prev?.progress_percent === data.progress_percent &&
+          prev?.iteration === data.iteration &&
+          prev?.is_live === data.is_live
+        ) {
           return prev;
         }
         return data;
       });
       setTrainingPreviewError(null);
     } catch (err: any) {
-      if (err?.response?.status === 404) {
-        setTrainingPreviewError(null);
-        if (!options.silent) {
-          setTrainingPreview(null);
-        }
-        return;
-      }
       const message =
         err?.response?.data?.error ||
         err?.message ||
@@ -895,6 +896,9 @@ export default function ProjectDetailPage() {
 
       // Add parameters if retrying from COLMAP Feature Matching stage
       if (fromStage === 'feature_matching') {
+        if (retryParams.matcher_type) {
+          params.matcher_type = retryParams.matcher_type;
+        }
         params.adaptive_pair_scheduling = retryParams.adaptive_pair_scheduling;
         if (retryParams.max_num_matches) {
           params.max_num_matches = parseInt(retryParams.max_num_matches);
@@ -936,6 +940,9 @@ export default function ProjectDetailPage() {
         if (retryParams.force_cpu_sparse_reconstruction) {
           params.force_cpu_sparse_reconstruction = true;
         }
+        if (retryParams.matcher_fallback_retry_type) {
+          params.matcher_fallback_retry_type = retryParams.matcher_fallback_retry_type;
+        }
         if (retryParams.sparse_retry_sfm_engine) {
           params.sparse_retry_sfm_engine = retryParams.sparse_retry_sfm_engine;
         }
@@ -965,6 +972,7 @@ export default function ProjectDetailPage() {
         quality_mode: '',
         iterations: '',
         learning_rate: '',
+        matcher_type: '',
         max_num_features: '',
         max_image_size: '',
         max_num_matches: '',
@@ -979,6 +987,7 @@ export default function ProjectDetailPage() {
         abs_pose_min_inlier_ratio: '',
         max_reg_trials: '',
         force_cpu_sparse_reconstruction: true,
+        matcher_fallback_retry_type: '',
         sparse_retry_sfm_engine: '',
         extraction_mode: '',
         max_frames: '',
@@ -1028,6 +1037,7 @@ export default function ProjectDetailPage() {
         quality_mode: (project as any).quality_mode || '',
         iterations: (project as any).iterations?.toString() || '',
         learning_rate: '',
+        matcher_type: project?.config?.matcher_type || '',
         max_num_features: '',
         max_image_size: '',
         max_num_matches: '',
@@ -1043,6 +1053,7 @@ export default function ProjectDetailPage() {
         max_reg_trials: '',
         force_cpu_sparse_reconstruction:
           project?.config?.force_cpu_sparse_reconstruction !== false,
+        matcher_fallback_retry_type: project?.config?.matcher_fallback_retry_type || '',
         sparse_retry_sfm_engine: '',
         extraction_mode: project?.config?.extraction_mode || '',
         max_frames: project?.config?.max_frames?.toString() || '',
@@ -2361,8 +2372,8 @@ export default function ProjectDetailPage() {
                     <span className="brutal-badge brutal-badge-info">
                       {trainingPreview
                         ? (trainingPreview.is_final
-                            ? 'Final training preview'
-                            : `Latest PLY snapshot at ${trainingPreview.progress_percent ?? 0}% training`)
+                            ? 'Final training model ready'
+                            : `Live native preview at ${trainingPreview.progress_percent ?? 0}% training`)
                         : 'Waiting for native live render updates...'}
                     </span>
                     {trainingPreview?.update_interval_percent ? (
@@ -2373,7 +2384,11 @@ export default function ProjectDetailPage() {
                     {trainingPreview?.preview_url && (
                       <button
                         type="button"
-                        onClick={() => router.push(`/viewer?file=${encodeURIComponent(trainingPreview.preview_url)}`)}
+                        onClick={() => {
+                          if (trainingPreview.preview_url) {
+                            router.push(`/viewer?file=${encodeURIComponent(trainingPreview.preview_url)}`);
+                          }
+                        }}
                         className="brutal-btn brutal-btn-xs"
                       >
                         Open In Viewer
@@ -2397,7 +2412,11 @@ export default function ProjectDetailPage() {
                         cameraPoses={liveCameraPoses}
                         onOpenFullViewer={
                           trainingPreview?.preview_url
-                            ? () => router.push(`/viewer?file=${encodeURIComponent(trainingPreview.preview_url)}`)
+                            ? () => {
+                                if (trainingPreview.preview_url) {
+                                  router.push(`/viewer?file=${encodeURIComponent(trainingPreview.preview_url)}`);
+                                }
+                              }
                             : undefined
                         }
                       />
@@ -2960,6 +2979,24 @@ export default function ProjectDetailPage() {
 
                   <div>
                     <p className="brutal-label mb-1 block">
+                      Retry Matcher
+                    </p>
+                    <select
+                      value={retryParams.matcher_type}
+                      onChange={(e) => setRetryParams({...retryParams, matcher_type: e.target.value})}
+                      className="brutal-select"
+                    >
+                      <option value="">ใช้ค่าเดิม</option>
+                      <option value="auto">Auto (backend decides)</option>
+                      <option value="sequential">Sequential</option>
+                      <option value="exhaustive">Exhaustive</option>
+                      <option value="vocab_tree">Vocabulary Tree</option>
+                    </select>
+                    <p className="mt-1 text-xs text-[var(--text-secondary)]">เลือก matcher สำหรับ rerun รอบนี้โดยตรง ถ้าใช้ Auto backend จะเลือกตาม dataset อีกครั้ง</p>
+                  </div>
+
+                  <div>
+                    <p className="brutal-label mb-1 block">
                       Max Num Matches (จำนวน matches สูงสุด)
                     </p>
                     <input
@@ -3161,6 +3198,25 @@ export default function ProjectDetailPage() {
                         className="brutal-input"
                       />
                     </div>
+                  </div>
+
+                  <div>
+                    <HelpLabel tooltip="ถ้า sparse reconstruction ยังล้มหลัง recovery ปกติครบแล้ว ระบบจะมี one-shot matcher fallback ให้อีกหนึ่งรอบ ค่า Auto จะให้ backend เลือก Exhaustive สำหรับชุดเล็ก หรือ Vocabulary Tree สำหรับชุดใหญ่เอง">
+                      Retry Matcher Fallback
+                    </HelpLabel>
+                    <select
+                      value={retryParams.matcher_fallback_retry_type}
+                      onChange={(e) => setRetryParams({...retryParams, matcher_fallback_retry_type: e.target.value})}
+                      className="brutal-select"
+                    >
+                      <option value="">ใช้ policy เดิม</option>
+                      <option value="auto">Auto (small set - Exhaustive, large set - Vocabulary Tree)</option>
+                      <option value="exhaustive">Exhaustive</option>
+                      <option value="vocab_tree">Vocabulary Tree</option>
+                    </select>
+                    <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                      ใช้เมื่ออยากบังคับว่ารอบ fallback หลัง sparse fail จะลอง pair matcher แบบไหน โดยไม่เปลี่ยน baseline first pass
+                    </p>
                   </div>
 
                   <div>

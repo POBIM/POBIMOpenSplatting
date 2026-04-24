@@ -26,6 +26,30 @@ const toAssetUrl = (url?: string | null) => {
 const formatIteration = (value?: number) =>
   typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString() : '--';
 
+const createFrameObjectUrl = (payload: TrainingLivePreview) => {
+  const bytes = payload.frame_bytes;
+  if (!bytes) {
+    return '';
+  }
+
+  const byteArray = bytes instanceof ArrayBuffer
+    ? new Uint8Array(bytes)
+    : bytes instanceof Uint8Array
+      ? bytes
+      : Array.isArray(bytes)
+        ? new Uint8Array(bytes)
+        : null;
+
+  if (!byteArray) {
+    return '';
+  }
+
+  const blobBytes = new Uint8Array(byteArray);
+  return URL.createObjectURL(
+    new Blob([blobBytes.buffer], { type: payload.frame_mime || 'image/jpeg' })
+  );
+};
+
 export default function TrainingSplatPreview({
   projectId,
   plyUrl,
@@ -58,6 +82,8 @@ export default function TrainingSplatPreview({
   const [selectedCamera, setSelectedCamera] = useState<CameraPose | null>(null);
   const selectedCameraRef = useRef<CameraPose | null>(null);
   const [livePreview, setLivePreview] = useState<TrainingLivePreview | null>(null);
+  const [binaryRenderUrl, setBinaryRenderUrl] = useState('');
+  const binaryRenderUrlRef = useRef('');
   const [selecting, setSelecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -80,11 +106,34 @@ export default function TrainingSplatPreview({
     if (!selectedCamera || livePreview?.image_name !== selectedCamera.image_name) {
       return '';
     }
-    return toAssetUrl(livePreview.render_url);
-  }, [livePreview, selectedCamera]);
+    return binaryRenderUrl || toAssetUrl(livePreview.render_url);
+  }, [binaryRenderUrl, livePreview, selectedCamera]);
+
+  const clearBinaryRenderUrl = useCallback(() => {
+    if (binaryRenderUrlRef.current) {
+      URL.revokeObjectURL(binaryRenderUrlRef.current);
+      binaryRenderUrlRef.current = '';
+    }
+    setBinaryRenderUrl('');
+  }, []);
+
+  const applyLivePreview = useCallback((payload: TrainingLivePreview) => {
+    const objectUrl = createFrameObjectUrl(payload);
+    if (objectUrl) {
+      if (binaryRenderUrlRef.current) {
+        URL.revokeObjectURL(binaryRenderUrlRef.current);
+      }
+      binaryRenderUrlRef.current = objectUrl;
+      setBinaryRenderUrl(objectUrl);
+    } else if (!payload.render_url) {
+      clearBinaryRenderUrl();
+    }
+    setLivePreview(payload);
+  }, [clearBinaryRenderUrl]);
 
   const selectCamera = useCallback(async (camera: CameraPose, cameraId: number) => {
     setSelectedCamera(camera);
+    clearBinaryRenderUrl();
     setLivePreview({
       project_id: projectId,
       camera_id: cameraId,
@@ -97,7 +146,7 @@ export default function TrainingSplatPreview({
         camera_id: cameraId,
         image_name: camera.image_name,
       });
-      setLivePreview({
+      applyLivePreview({
         ...response,
         image_name: response.image_name || camera.image_name,
       });
@@ -110,7 +159,7 @@ export default function TrainingSplatPreview({
     } finally {
       setSelecting(false);
     }
-  }, [projectId]);
+  }, [applyLivePreview, clearBinaryRenderUrl, projectId]);
 
   useEffect(() => {
     if (!cameras.length || selectedCamera) {
@@ -125,12 +174,20 @@ export default function TrainingSplatPreview({
       if (!current || payload?.image_name !== current.image_name) {
         return;
       }
-      setLivePreview(payload);
+      applyLivePreview(payload);
       setSelecting(false);
       setError(null);
     });
 
     return unsubscribe;
+  }, [applyLivePreview]);
+
+  useEffect(() => {
+    return () => {
+      if (binaryRenderUrlRef.current) {
+        URL.revokeObjectURL(binaryRenderUrlRef.current);
+      }
+    };
   }, []);
 
   if (!cameras.length) {

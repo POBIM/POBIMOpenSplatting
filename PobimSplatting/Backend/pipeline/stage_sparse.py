@@ -38,6 +38,61 @@ from .runtime_support import (
 LIVE_SPARSE_SNAPSHOT_PERCENT_STEP = 5
 
 
+SPARSE_RUNTIME_OVERRIDE_KEYS = {
+    "min_num_matches",
+    "max_num_models",
+    "init_num_trials",
+    "structure_less_registration_fallback",
+    "abs_pose_max_error",
+    "abs_pose_min_num_inliers",
+    "abs_pose_min_inlier_ratio",
+    "max_reg_trials",
+    "cpu_sparse_registration_profile",
+}
+
+
+def _has_sparse_runtime_overrides(config) -> bool:
+    return any(config.get(key) not in (None, "") for key in SPARSE_RUNTIME_OVERRIDE_KEYS)
+
+
+def _merge_sparse_runtime_overrides(base_cfg, override_cfg):
+    merged = dict(base_cfg or {})
+    for key in (
+        "min_num_matches",
+        "min_model_size",
+        "max_num_models",
+        "init_num_trials",
+        "max_extra_param",
+    ):
+        if key in (override_cfg or {}):
+            merged[key] = override_cfg[key]
+
+    merged_mapper_params = dict((base_cfg or {}).get("mapper_params") or {})
+    merged_mapper_params.update(dict((override_cfg or {}).get("mapper_params") or {}))
+    if merged_mapper_params:
+        merged["mapper_params"] = merged_mapper_params
+
+    return merged
+
+
+def _resolve_mapper_cpu_threads(config) -> tuple[int, int, int | None]:
+    detected_threads = os.cpu_count() or 8
+    requested_threads = config.get("mapper_cpu_threads")
+    if requested_threads in (None, ""):
+        return detected_threads, detected_threads, None
+
+    try:
+        requested_threads = int(requested_threads)
+    except (TypeError, ValueError):
+        return detected_threads, detected_threads, None
+
+    if requested_threads <= 0:
+        return detected_threads, detected_threads, requested_threads
+
+    max_reasonable_threads = max(detected_threads, detected_threads * 2)
+    return min(requested_threads, max_reasonable_threads), detected_threads, requested_threads
+
+
 def _choose_live_sparse_snapshot_frequency(num_images: int) -> int:
     if num_images <= 0:
         return 1
@@ -180,7 +235,10 @@ def run_sparse_reconstruction_stage(
         "get_colmap_config_for_pipeline"
     ](paths, config, project_id)
     if colmap_config:
-        colmap_cfg = colmap_config
+        if _has_sparse_runtime_overrides(config):
+            colmap_cfg = _merge_sparse_runtime_overrides(colmap_config, colmap_cfg)
+        else:
+            colmap_cfg = colmap_config
     colmap_cfg, _ = apply_no_regression_floor(
         colmap_cfg, project_id=project_id, reason="before sparse reconstruction"
     )
@@ -348,6 +406,9 @@ def run_sparse_reconstruction_stage(
         append_log_line(
             project_id, f"🏗️ Optimized mapper settings for {num_images} images"
         )
+        mapper_cpu_threads, detected_cpu_threads, requested_mapper_cpu_threads = (
+            _resolve_mapper_cpu_threads(config)
+        )
         cmd = [
             colmap_exe,
             "mapper",
@@ -368,7 +429,7 @@ def run_sparse_reconstruction_stage(
             "--Mapper.max_extra_param",
             str(colmap_cfg["max_extra_param"]),
             "--Mapper.num_threads",
-            str(os.cpu_count() or 8),
+            str(mapper_cpu_threads),
         ]
         snapshot_path = paths.get("sparse_snapshots_path")
         if snapshot_path:
@@ -391,6 +452,17 @@ def run_sparse_reconstruction_stage(
             )
         for param, value in colmap_cfg.get("mapper_params", {}).items():
             cmd.extend([f"--{param}", str(value)])
+        mapper_params = colmap_cfg.get("mapper_params", {})
+        if mapper_params:
+            append_log_line(
+                project_id,
+                "🧠 COLMAP mapper registration controls: "
+                f"init_trials={colmap_cfg['init_num_trials']} | "
+                f"max_reg_trials={mapper_params.get('Mapper.max_reg_trials', 'default')} | "
+                f"abs_pose_max_error={mapper_params.get('Mapper.abs_pose_max_error', 'default')} | "
+                f"min_inliers={mapper_params.get('Mapper.abs_pose_min_num_inliers', 'default')} | "
+                f"min_ratio={mapper_params.get('Mapper.abs_pose_min_inlier_ratio', 'default')}",
+            )
         if sparse_has_cuda:
             ba_plan = describe_colmap_bundle_adjustment_mode(
                 colmap_exe, num_images, sparse_has_cuda
@@ -399,8 +471,17 @@ def run_sparse_reconstruction_stage(
             _log_colmap_ba_plan(project_id, ba_plan)
         else:
             append_log_line(project_id, "ℹ️ Using CPU-only COLMAP sparse reconstruction")
+        if requested_mapper_cpu_threads and requested_mapper_cpu_threads > mapper_cpu_threads:
+            append_log_line(
+                project_id,
+                "⚠️ Mapper CPU threads capped: "
+                f"requested={requested_mapper_cpu_threads}, using={mapper_cpu_threads}, "
+                f"detected={detected_cpu_threads}",
+            )
         append_log_line(
-            project_id, f"🔧 Using {os.cpu_count() or 8} CPU threads for mapper"
+            project_id,
+            f"🔧 Using {mapper_cpu_threads} CPU threads for mapper "
+            f"(detected={detected_cpu_threads})",
         )
 
     glomap_stages = {

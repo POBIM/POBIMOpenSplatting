@@ -711,6 +711,13 @@ export const api = {
       if (config.min_num_matches !== undefined) formData.append('min_num_matches', config.min_num_matches.toString());
       if (config.max_num_models !== undefined) formData.append('max_num_models', config.max_num_models.toString());
       if (config.init_num_trials !== undefined) formData.append('init_num_trials', config.init_num_trials.toString());
+      if (config.mapper_cpu_threads !== undefined) formData.append('mapper_cpu_threads', config.mapper_cpu_threads.toString());
+      if (config.cpu_sparse_registration_profile !== undefined) formData.append('cpu_sparse_registration_profile', config.cpu_sparse_registration_profile.toString());
+      if (config.structure_less_registration_fallback !== undefined) formData.append('structure_less_registration_fallback', config.structure_less_registration_fallback.toString());
+      if (config.abs_pose_max_error !== undefined) formData.append('abs_pose_max_error', config.abs_pose_max_error.toString());
+      if (config.abs_pose_min_num_inliers !== undefined) formData.append('abs_pose_min_num_inliers', config.abs_pose_min_num_inliers.toString());
+      if (config.abs_pose_min_inlier_ratio !== undefined) formData.append('abs_pose_min_inlier_ratio', config.abs_pose_min_inlier_ratio.toString());
+      if (config.max_reg_trials !== undefined) formData.append('max_reg_trials', config.max_reg_trials.toString());
     } else {
       // For non-custom modes, still send iterations if provided
       if (config.iterations !== undefined) formData.append('iterations', config.iterations.toString());

@@ -33,6 +33,7 @@ import {
   Film,
   Search,
   Link2,
+  HelpCircle,
   Box,
   Sparkles,
   Flag,
@@ -88,6 +89,23 @@ const isErrorStatus = (status?: string | null): boolean =>
 
 const MAX_LOG_LINES_IN_UI = 1200;
 const CPU_CHUNK_WORKER_SUGGESTIONS = ['2', '4', '8', '12', '14'];
+
+const HelpLabel = ({ children, tooltip }: { children: string; tooltip: string }) => (
+  <span className="brutal-label mb-1 flex items-center gap-1.5">
+    <span>{children}</span>
+    <span
+      tabIndex={0}
+      title={tooltip}
+      aria-label={tooltip}
+      className="group relative inline-flex h-4 w-4 items-center justify-center text-[var(--text-secondary)] outline-none"
+    >
+      <HelpCircle className="h-3.5 w-3.5" />
+      <span className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 hidden w-72 -translate-x-1/2 border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-card)] p-3 text-left text-xs font-medium normal-case leading-relaxed tracking-normal text-[var(--text-secondary)] shadow-[var(--shadow-md)] group-hover:block group-focus:block">
+        {tooltip}
+      </span>
+    </span>
+  </span>
+);
 
 const normalizeProgressStates = (states: any[] = []) =>
   PIPELINE_STAGES.map(stage => {
@@ -289,6 +307,13 @@ export default function ProjectDetailPage() {
     // COLMAP Sparse Reconstruction params
     min_num_matches: '',
     max_num_models: '',
+    init_num_trials: '',
+    mapper_cpu_threads: '',
+    cpu_sparse_registration_profile: '',
+    abs_pose_max_error: '',
+    abs_pose_min_num_inliers: '',
+    abs_pose_min_inlier_ratio: '',
+    max_reg_trials: '',
     force_cpu_sparse_reconstruction: true,
     sparse_retry_sfm_engine: '',
     // Resolution settings
@@ -306,6 +331,8 @@ export default function ProjectDetailPage() {
     ffmpeg_cpu_workers: '',
   });
   const [expandedStage, setExpandedStage] = useState<string | null>(null);
+  const [autoFollowLiveStage, setAutoFollowLiveStage] = useState(true);
+  const [autoScrollStageLogs, setAutoScrollStageLogs] = useState(true);
   const [showImagePreview, setShowImagePreview] = useState(false);
   const [previewImageIndex, setPreviewImageIndex] = useState(0);
   
@@ -363,6 +390,7 @@ export default function ProjectDetailPage() {
     : [];
   const sparseModelSummary = framework?.sparse_model_summary;
   const logGroups = useMemo(() => groupLogsByStage(logs, stages), [logs, stages]);
+  const runningStageKey = stages.find(s => s.status === 'running')?.key ?? null;
   const stageLogs = useMemo(() => {
     if (!expandedStage) {
       return [] as string[];
@@ -392,11 +420,10 @@ export default function ProjectDetailPage() {
 
   // Auto-expand the running stage
   useEffect(() => {
-    const runningStage = stages.find(s => s.status === 'running');
-    if (runningStage && expandedStage !== runningStage.key) {
-      setExpandedStage(runningStage.key);
+    if (autoFollowLiveStage && runningStageKey && expandedStage !== runningStageKey) {
+      setExpandedStage(runningStageKey);
     }
-  }, [stages, expandedStage]);
+  }, [autoFollowLiveStage, runningStageKey, expandedStage]);
 
   const formatTime = useCallback((seconds: number): string => {
     if (seconds < 60) return `${seconds}s`;
@@ -771,16 +798,18 @@ export default function ProjectDetailPage() {
     }
 
     loadTrainingPreview();
+    void loadLiveCameraPoses({ silent: true });
     if (trainingStage?.status !== 'running') {
       return;
     }
 
     const interval = setInterval(() => {
       void loadTrainingPreview({ silent: true });
+      void loadLiveCameraPoses({ silent: true });
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [showTrainingPreview, trainingStage?.status, loadTrainingPreview]);
+  }, [showTrainingPreview, trainingStage?.status, loadTrainingPreview, loadLiveCameraPoses]);
 
   // Keyboard navigation for image preview
   useEffect(() => {
@@ -801,14 +830,14 @@ export default function ProjectDetailPage() {
   }, [showImagePreview, framePreview.length]);
 
   useEffect(() => {
-    if (!expandedStage) {
+    if (!expandedStage || !autoScrollStageLogs) {
       return;
     }
     const node = stageLogsRef.current;
     if (node && stageLogs.length > 0) {
       node.scrollTop = node.scrollHeight;
     }
-  }, [stageLogs, expandedStage]);
+  }, [stageLogs, expandedStage, autoScrollStageLogs]);
 
   const handleRetry = async (fromStage?: string) => {
     try {
@@ -883,6 +912,27 @@ export default function ProjectDetailPage() {
         if (retryParams.max_num_models) {
           params.max_num_models = parseInt(retryParams.max_num_models);
         }
+        if (retryParams.init_num_trials) {
+          params.init_num_trials = parseInt(retryParams.init_num_trials);
+        }
+        if (retryParams.mapper_cpu_threads) {
+          params.mapper_cpu_threads = parseInt(retryParams.mapper_cpu_threads);
+        }
+        if (retryParams.cpu_sparse_registration_profile) {
+          params.cpu_sparse_registration_profile = retryParams.cpu_sparse_registration_profile;
+        }
+        if (retryParams.abs_pose_max_error) {
+          params.abs_pose_max_error = parseFloat(retryParams.abs_pose_max_error);
+        }
+        if (retryParams.abs_pose_min_num_inliers) {
+          params.abs_pose_min_num_inliers = parseInt(retryParams.abs_pose_min_num_inliers);
+        }
+        if (retryParams.abs_pose_min_inlier_ratio) {
+          params.abs_pose_min_inlier_ratio = parseFloat(retryParams.abs_pose_min_inlier_ratio);
+        }
+        if (retryParams.max_reg_trials) {
+          params.max_reg_trials = parseInt(retryParams.max_reg_trials);
+        }
         if (retryParams.force_cpu_sparse_reconstruction) {
           params.force_cpu_sparse_reconstruction = true;
         }
@@ -921,6 +971,13 @@ export default function ProjectDetailPage() {
         sequential_overlap: '',
         min_num_matches: '',
         max_num_models: '',
+        init_num_trials: '',
+        mapper_cpu_threads: '',
+        cpu_sparse_registration_profile: '',
+        abs_pose_max_error: '',
+        abs_pose_min_num_inliers: '',
+        abs_pose_min_inlier_ratio: '',
+        max_reg_trials: '',
         force_cpu_sparse_reconstruction: true,
         sparse_retry_sfm_engine: '',
         extraction_mode: '',
@@ -977,6 +1034,13 @@ export default function ProjectDetailPage() {
         sequential_overlap: '',
         min_num_matches: '',
         max_num_models: '',
+        init_num_trials: '',
+        mapper_cpu_threads: project?.config?.mapper_cpu_threads?.toString() || '',
+        cpu_sparse_registration_profile: project?.config?.cpu_sparse_registration_profile || '',
+        abs_pose_max_error: '',
+        abs_pose_min_num_inliers: '',
+        abs_pose_min_inlier_ratio: '',
+        max_reg_trials: '',
         force_cpu_sparse_reconstruction:
           project?.config?.force_cpu_sparse_reconstruction !== false,
         sparse_retry_sfm_engine: '',
@@ -1170,24 +1234,21 @@ export default function ProjectDetailPage() {
       <div className="flex min-h-screen flex-col">
         <main className="flex-1">
           <section className="brutal-section-tight brutal-divider">
-            <div className="brutal-container space-y-4">
+            <div className="brutal-container space-y-3">
               <Breadcrumbs items={[
                 { label: 'Projects', href: '/projects' },
                 { label: project?.metadata?.name || 'Project Details' }
               ]} />
 
-              <div className="brutal-card-dark relative overflow-hidden px-4 py-4 md:px-5">
+              <div className="brutal-card-dark relative overflow-hidden px-4 py-3 md:px-5">
                 <div className="brutal-dot-bg pointer-events-none absolute inset-0" />
-                <div className="relative flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                  <div className="space-y-3">
+                <div className="relative flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="space-y-2">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="brutal-eyebrow">Project Detail</span>
                       <span className={getStatusBadgeClass(project.status)}>{project.status || 'unknown'}</span>
                     </div>
                     <div className="flex items-start gap-3">
-                      <div className="flex h-11 w-11 shrink-0 items-center justify-center border-[var(--border-w)] border-[var(--paper)] bg-[var(--paper)] text-[var(--ink)] shadow-[3px_3px_0_var(--paper-muted-2)]">
-                        {getStatusIcon(project.status)}
-                      </div>
                       <div className="space-y-2">
                         <h1 className="brutal-h1 text-[var(--text-on-ink)]">{project.metadata?.name || 'Untitled Project'}</h1>
                         <div className="flex flex-wrap gap-2 text-[11px] font-bold uppercase tracking-[0.16em] text-[var(--text-on-ink-muted)]">
@@ -1203,7 +1264,7 @@ export default function ProjectDetailPage() {
 
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:min-w-[440px]">
                     {projectInfoTiles.map((tile) => (
-                      <div key={tile.label} className="border-[var(--border-w)] border-[var(--paper)] bg-[var(--paper)] px-3 py-3 shadow-[3px_3px_0_var(--paper-muted-2)]">
+                      <div key={tile.label} className="border-[var(--border-w)] border-[var(--paper)] bg-[var(--paper)] px-3 py-2 shadow-[3px_3px_0_var(--paper-muted-2)]">
                         <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--text-secondary)]">{tile.label}</p>
                         <p className="text-sm font-bold uppercase tracking-[0.04em] text-[var(--ink)]">{tile.value}</p>
                       </div>
@@ -1215,17 +1276,17 @@ export default function ProjectDetailPage() {
           </section>
 
           <section className="brutal-section-tight">
-            <div className="brutal-container space-y-4">
+            <div className="brutal-container space-y-3">
               {(project.status === 'processing' || canRetryProject || project.status === 'completed') && (
-                <div className="grid gap-4 xl:grid-cols-[1.4fr_1fr]">
-                  <div className={project.status === 'processing' ? 'brutal-card-dark p-4 md:p-5' : 'brutal-card p-4 md:p-5'}>
-                    <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div className="grid gap-3 xl:grid-cols-[1.35fr_0.65fr]">
+                  <div className={project.status === 'processing' ? 'brutal-card-dark p-3 md:p-4' : 'brutal-card p-3 md:p-4'}>
+                    <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
                       <div>
                         <p className={`mb-2 text-[11px] font-bold uppercase tracking-[0.18em] ${project.status === 'processing' ? 'text-[var(--text-on-ink-muted)]' : 'text-[var(--text-secondary)]'}`}>
                           Status + Progress
                         </p>
                         <div className="flex flex-wrap items-end gap-3">
-                          <span className={`text-4xl font-black uppercase leading-none tracking-tight ${project.status === 'processing' ? 'text-[var(--text-on-ink)]' : 'text-[var(--ink)]'}`}>
+                          <span className={`text-3xl font-black uppercase leading-none tracking-tight ${project.status === 'processing' ? 'text-[var(--text-on-ink)]' : 'text-[var(--ink)]'}`}>
                             {overallProgress}%
                           </span>
                           <span className={getStatusBadgeClass(project.status)}>{project.status}</span>
@@ -1241,7 +1302,7 @@ export default function ProjectDetailPage() {
 
                     <div className={`mb-3 border-[var(--border-w)] ${project.status === 'processing' ? 'border-[var(--paper)] bg-[var(--paper)]' : 'border-[var(--ink)] bg-[var(--paper-muted)]'} p-1`}>
                       <div
-                        className={`h-4 transition-all duration-500 ${project.status === 'processing' ? 'bg-[var(--ink-600)]' : 'bg-[var(--ink)]'}`}
+                        className={`h-3 transition-all duration-500 ${project.status === 'processing' ? 'bg-[var(--ink-600)]' : 'bg-[var(--ink)]'}`}
                         style={{ width: `${overallProgress}%` }}
                       />
                     </div>
@@ -1274,7 +1335,7 @@ export default function ProjectDetailPage() {
                     )}
                   </div>
 
-                  <div className="brutal-card p-4 md:p-5">
+                  <div className="brutal-card p-3 md:p-4">
                     <div className="mb-3 flex items-center justify-between gap-2">
                       <div>
                         <p className="brutal-label mb-1">Action Dock</p>
@@ -1322,6 +1383,15 @@ export default function ProjectDetailPage() {
                 </div>
               )}
 
+              {(framework || progressivePlan || progressiveCheckpoints.length > 0 || effectiveResourceProfile || recoveryLoopSummary || autoTuningSummary || videoDiagnostics) && (
+                <details className="brutal-card-muted p-3 md:p-4">
+                  <summary className="cursor-pointer text-sm font-black uppercase tracking-[0.14em] text-[var(--ink)]">
+                    Advanced Run Details
+                    <span className="ml-2 text-[11px] font-bold text-[var(--text-secondary)]">
+                      policy, resources, extraction diagnostics
+                    </span>
+                  </summary>
+                  <div className="mt-3 space-y-3">
               {framework && (
                 <div className="grid gap-4 xl:grid-cols-12">
                   <div className="brutal-card xl:col-span-7 p-4 md:p-5">
@@ -1819,19 +1889,22 @@ export default function ProjectDetailPage() {
                   </div>
                 </div>
               )}
+                  </div>
+                </details>
+              )}
 
               {(project?.input_type === 'video' || project?.input_type === 'mixed') && (
-                <div className="brutal-card p-4 md:p-5">
-                  <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                <div className="brutal-card p-3 md:p-4">
+                  <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
                     <div>
                       <p className="brutal-label mb-1">Live Extraction</p>
                       <h2 className="brutal-h3">Frame Sampling Monitor</h2>
-                      <p className="mt-2 text-sm text-[var(--text-secondary)]">ติดตามจำนวนภาพที่ถูกถอดจากวิดีโอแบบ realtime ระหว่าง stage extract</p>
+                      <p className="mt-1 text-xs text-[var(--text-secondary)]">ติดตามจำนวนภาพที่ถูกถอดจากวิดีโอแบบ realtime ระหว่าง stage extract</p>
                     </div>
                     <span className="brutal-badge brutal-badge-info">{smartFrameSelectionEnabled ? `window ±${effectiveSearchWindow ?? '--'}` : 'oversample off'}</span>
                   </div>
 
-                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
                     {[
                       ['Extracted', videoExtractionFramesDone ?? '--'],
                       ['Target', videoExtractionFramesTotal ?? '--'],
@@ -1839,8 +1912,8 @@ export default function ProjectDetailPage() {
                       ['Sampling', extractionSummary],
                       ['Oversample', smartFrameSelectionEnabled ? `${oversampleFactor ?? '--'}x` : 'Disabled'],
                     ].map(([label, value], index) => (
-                        <div key={label} className={index % 2 === 0 ? 'brutal-card-muted p-4' : 'brutal-card p-4'}>
-                        <p className="brutal-label mb-2">{label}</p>
+                        <div key={label} className={index % 2 === 0 ? 'brutal-card-muted p-3' : 'brutal-card p-3'}>
+                        <p className="brutal-label mb-1">{label}</p>
                         <p className="text-sm font-bold uppercase text-[var(--ink)]">{value}</p>
                       </div>
                     ))}
@@ -1855,16 +1928,33 @@ export default function ProjectDetailPage() {
                 </div>
               )}
 
-              <div className="brutal-card p-4 md:p-5">
-                <div className="mb-4 flex items-center justify-between gap-3">
+              <div className="brutal-card p-3 md:p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
                   <div>
                     <p className="brutal-label mb-1">Pipeline</p>
                     <h2 className="brutal-h3">Processing Stages</h2>
                   </div>
-                  <span className="brutal-badge">{stages.filter((stage) => stage.status === 'completed').length}/{PIPELINE_STAGES.length} done</span>
+                  <div className="flex flex-wrap items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const nextAutoFollow = !autoFollowLiveStage;
+                        setAutoFollowLiveStage(nextAutoFollow);
+                        if (nextAutoFollow && runningStageKey) {
+                          setExpandedStage(runningStageKey);
+                        }
+                      }}
+                      className={`brutal-btn brutal-btn-xs ${autoFollowLiveStage ? 'brutal-btn-primary' : ''}`}
+                      title={autoFollowLiveStage ? 'Auto-follow running stage is on' : 'Auto-follow running stage is off'}
+                    >
+                      {autoFollowLiveStage ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+                      Auto Stage {autoFollowLiveStage ? 'On' : 'Off'}
+                    </button>
+                    <span className="brutal-badge">{stages.filter((stage) => stage.status === 'completed').length}/{PIPELINE_STAGES.length} done</span>
+                  </div>
                 </div>
 
-                <div className="grid gap-3 lg:grid-cols-8">
+                <div className="grid gap-2 md:grid-cols-4 xl:grid-cols-8">
                   {PIPELINE_STAGES.map((stageConfig) => {
                     const stage = stages.find(s => s.key === stageConfig.key) || { key: stageConfig.key, status: 'pending', progress: 0 };
                     const progress = getStageProgress(stage);
@@ -1882,18 +1972,23 @@ export default function ProjectDetailPage() {
 
                     return (
                       <button type="button" key={stageConfig.key}
-                      onClick={() => setExpandedStage(isExpanded ? null : stageConfig.key)}
-                      className={`text-left ${isRunning || isExpanded ? 'brutal-card-dark' : stage.status === 'pending' ? 'brutal-card-muted' : 'brutal-card'} p-3 transition-transform hover:-translate-x-[2px] hover:-translate-y-[2px]`}><div className="mb-3 flex items-start justify-between gap-2">
-                        <div className={`flex h-9 w-9 items-center justify-center border-[var(--border-w)] ${isRunning || isExpanded ? 'border-[var(--paper)] bg-[var(--paper)] text-[var(--ink)]' : 'border-[var(--ink)] bg-[var(--paper-card)] text-[var(--ink)]'}`}>
+                      onClick={() => {
+                        if (autoFollowLiveStage && (isExpanded || stageConfig.key !== runningStageKey)) {
+                          setAutoFollowLiveStage(false);
+                        }
+                        setExpandedStage(isExpanded ? null : stageConfig.key);
+                      }}
+                      className={`text-left ${isRunning || isExpanded ? 'brutal-card-dark' : stage.status === 'pending' ? 'brutal-card-muted' : 'brutal-card'} p-2.5 transition-transform hover:-translate-x-[2px] hover:-translate-y-[2px]`}><div className="mb-2 flex items-start justify-between gap-2">
+                        <div className={`flex h-8 w-8 items-center justify-center border-[var(--border-w)] ${isRunning || isExpanded ? 'border-[var(--paper)] bg-[var(--paper)] text-[var(--ink)]' : 'border-[var(--ink)] bg-[var(--paper-card)] text-[var(--ink)]'}`}>
                           {stage.status === 'pending' ? <stageConfig.Icon className="h-4 w-4" /> : getStageIcon(stage)}
                         </div>
                         <span className={stageBadgeClass}>{stage.status}</span>
                       </div>
-                      <p className={`mb-2 text-sm font-black uppercase tracking-tight ${isRunning || isExpanded ? 'text-[var(--text-on-ink)]' : 'text-[var(--ink)]'}`}>
+                      <p className={`mb-1.5 text-xs font-black uppercase tracking-tight ${isRunning || isExpanded ? 'text-[var(--text-on-ink)]' : 'text-[var(--ink)]'}`}>
                         {getStageLabelForEngine(stageConfig.key, project?.config?.sfm_engine, project?.config?.feature_method) || stageConfig.label}
                       </p>
-                      <div className={`mb-2 border p-1 ${isRunning || isExpanded ? 'border-[var(--paper)] bg-[var(--paper)]' : 'border-[var(--ink)] bg-[var(--paper-muted-2)]'}`}>
-                        <div className={`h-2 ${isRunning || isExpanded ? 'bg-[var(--ink-600)]' : 'bg-[var(--ink)]'}`} style={{ width: `${progress}%` }} />
+                      <div className={`mb-1.5 border p-0.5 ${isRunning || isExpanded ? 'border-[var(--paper)] bg-[var(--paper)]' : 'border-[var(--ink)] bg-[var(--paper-muted-2)]'}`}>
+                        <div className={`h-1.5 ${isRunning || isExpanded ? 'bg-[var(--ink-600)]' : 'bg-[var(--ink)]'}`} style={{ width: `${progress}%` }} />
                       </div>
                       <p className={`text-[11px] font-medium uppercase tracking-[0.12em] ${isRunning || isExpanded ? 'text-[var(--text-on-ink-muted)]' : 'text-[var(--text-secondary)]'}`}>{progress}%</p></button>
                     );
@@ -1908,16 +2003,16 @@ export default function ProjectDetailPage() {
                   const stageCancelled = stage.status === 'cancelled';
 
                   return (
-                    <div className="mt-4 grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
-                      <div className="brutal-card-dark p-4">
-                        <div className="mb-4 flex items-start justify-between gap-3">
+                    <div className="mt-3 grid gap-3 xl:grid-cols-[0.95fr_1.05fr]">
+                      <div className="brutal-card-dark p-3">
+                        <div className="mb-3 flex items-start justify-between gap-3">
                           <div className="flex items-start gap-3">
-                            <div className="flex h-10 w-10 items-center justify-center border-[var(--border-w)] border-[var(--paper)] bg-[var(--paper)] text-[var(--ink)]">
+                            <div className="flex h-9 w-9 items-center justify-center border-[var(--border-w)] border-[var(--paper)] bg-[var(--paper)] text-[var(--ink)]">
                               {stageConfig?.Icon && <stageConfig.Icon className="h-5 w-5" />}
                             </div>
                             <div>
                               <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--text-on-ink-muted)]">Expanded Stage</p>
-                              <h3 className="text-lg font-black uppercase tracking-tight text-[var(--text-on-ink)]">{getStageLabelForEngine(stageConfig?.key || '', project?.config?.sfm_engine, project?.config?.feature_method) || stageConfig?.label}</h3>
+                              <h3 className="text-base font-black uppercase tracking-tight text-[var(--text-on-ink)]">{getStageLabelForEngine(stageConfig?.key || '', project?.config?.sfm_engine, project?.config?.feature_method) || stageConfig?.label}</h3>
                               <p className="mt-1 text-xs text-[var(--text-on-ink-muted)]">
                                 {stage.status === 'completed' ? 'Completed' :
                                  stage.status === 'running' ? `In progress (${progress}%)` :
@@ -1927,7 +2022,12 @@ export default function ProjectDetailPage() {
                               </p>
                             </div>
                           </div>
-                          <button type="button" onClick={() => setExpandedStage(null)} className="brutal-btn brutal-btn-xs"><XCircle className="h-4 w-4" />
+                          <button type="button" onClick={() => {
+                            if (autoFollowLiveStage) {
+                              setAutoFollowLiveStage(false);
+                            }
+                            setExpandedStage(null);
+                          }} className="brutal-btn brutal-btn-xs"><XCircle className="h-4 w-4" />
                           Close
                                                     </button>
                         </div>
@@ -1978,7 +2078,7 @@ export default function ProjectDetailPage() {
                         )}
                       </div>
 
-                      <div className="brutal-card-muted p-4">
+                      <div className="brutal-card-muted p-3">
                         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                           <div className="flex flex-wrap items-center gap-2">
                             <p className="brutal-label">Step Breakdown</p>
@@ -1987,16 +2087,38 @@ export default function ProjectDetailPage() {
                             )}
                             <span className="brutal-badge">{stageLogs.length.toLocaleString()} lines</span>
                           </div>
-                          <button
-                            type="button"
-                            onClick={handleDownloadLogs}
-                            disabled={(logMeta.total || logs.length) === 0}
-                            className="brutal-btn brutal-btn-xs"
-                            title="Download full log"
-                          >
-                            <Download className="h-3.5 w-3.5" />
-                            Download
-                          </button>
+                          <div className="flex flex-wrap items-center justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const nextAutoScroll = !autoScrollStageLogs;
+                                setAutoScrollStageLogs(nextAutoScroll);
+                                if (nextAutoScroll) {
+                                  window.requestAnimationFrame(() => {
+                                    const node = stageLogsRef.current;
+                                    if (node) {
+                                      node.scrollTop = node.scrollHeight;
+                                    }
+                                  });
+                                }
+                              }}
+                              className={`brutal-btn brutal-btn-xs ${autoScrollStageLogs ? 'brutal-btn-primary' : ''}`}
+                              title={autoScrollStageLogs ? 'Auto-scroll logs is on' : 'Auto-scroll logs is off'}
+                            >
+                              {autoScrollStageLogs ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+                              Auto Log {autoScrollStageLogs ? 'On' : 'Off'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleDownloadLogs}
+                              disabled={(logMeta.total || logs.length) === 0}
+                              className="brutal-btn brutal-btn-xs"
+                              title="Download full log"
+                            >
+                              <Download className="h-3.5 w-3.5" />
+                              Download
+                            </button>
+                          </div>
                         </div>
                         {expandedStage === 'sparse_reconstruction' && isGlobalSfmEngine(project?.config?.sfm_engine) && stage.status === 'running' && (
                           <div className="mb-3 space-y-2 text-xs text-[var(--text-secondary)]">
@@ -2021,6 +2143,33 @@ export default function ProjectDetailPage() {
                                 </div>
                               );
                             })}
+                          </div>
+                        )}
+                        {expandedStage === 'sparse_reconstruction' && !isGlobalSfmEngine(project?.config?.sfm_engine) && project?.config?.sfm_engine !== 'fastmap' && stage.status === 'running' && (
+                          <div className="mb-3 space-y-2 text-xs text-[var(--text-secondary)]">
+                            {[
+                              { key: 'seed', label: 'Seed model search', progress: 10 },
+                              { key: 'registration', label: 'CPU image registration', progress: 55 },
+                              { key: 'triangulation', label: 'Track triangulation', progress: 75 },
+                              { key: 'bundle_adjustment', label: 'Bundle adjustment', progress: 90 },
+                              { key: 'snapshot', label: 'Sparse snapshot export', progress: 98 },
+                            ].map((subStage) => {
+                              const isSubCompleted = progress >= subStage.progress;
+                              const isSubActive = progress >= (subStage.progress - 18) && progress < subStage.progress + 6;
+                              return (
+                                <div key={subStage.key} className={`flex items-center justify-between gap-3 border-[var(--border-w)] border-[var(--ink)] px-3 py-2 ${isSubActive ? 'bg-[var(--paper-card)]' : 'bg-[var(--paper-muted)]'}`}>
+                                  <span className={`font-bold uppercase tracking-[0.12em] ${isSubCompleted ? 'text-[var(--success-icon)]' : isSubActive ? 'text-[var(--ink)]' : 'text-[var(--text-muted)]'}`}>{isSubCompleted ? 'DONE' : isSubActive ? 'LIVE' : 'WAIT'}</span>
+                                  <span className="flex-1">{subStage.label}</span>
+                                  <span className="font-bold text-[var(--ink)]">{subStage.progress}%</span>
+                                </div>
+                              );
+                            })}
+                            <div className="border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-card)] p-3">
+                              <p className="font-bold uppercase text-[var(--ink)]">Registration budget</p>
+                              <p className="mt-1">
+                                profile {project?.config?.cpu_sparse_registration_profile || 'standard'} • mapper threads {project?.config?.mapper_cpu_threads || 'auto'} • CPU mapper {project?.config?.force_cpu_sparse_reconstruction !== false ? 'forced' : 'optional'}
+                              </p>
+                            </div>
                           </div>
                         )}
                         {expandedStage === 'sparse_reconstruction' && project?.config?.sfm_engine === 'fastmap' && stage.status === 'running' && (
@@ -2232,23 +2381,24 @@ export default function ProjectDetailPage() {
                     )}
                   </div>
 
-                  <div className="brutal-card min-h-[420px] overflow-hidden p-0">
+                  <div className="brutal-card h-[min(760px,calc(100vh-10rem))] min-h-[520px] overflow-hidden p-0">
                     {trainingPreview?.preview_url ? (
                       <Suspense
                         fallback={
-                          <div className="flex h-[420px] items-center justify-center">
+                          <div className="flex h-full items-center justify-center">
                             <Loader className="h-8 w-8 animate-spin text-[var(--ink)]" />
                           </div>
                         }
                       >
                         <TrainingSplatPreview
-                          key={trainingPreview.version}
                           plyUrl={trainingPreview.preview_url}
+                          referenceFrames={hasSeparateTraining ? trainingFramePreview : framePreview}
+                          cameraPoses={liveCameraPoses}
                           onOpenFullViewer={() => router.push(`/viewer?file=${encodeURIComponent(trainingPreview.preview_url)}`)}
                         />
                       </Suspense>
                     ) : (
-                      <div className="flex h-[420px] items-center justify-center px-6 text-center text-sm text-[var(--text-secondary)]">
+                      <div className="flex h-full items-center justify-center px-6 text-center text-sm text-[var(--text-secondary)]">
                         {trainingPreviewLoading
                           ? 'Loading training preview...'
                           : trainingPreviewError
@@ -2627,9 +2777,9 @@ export default function ProjectDetailPage() {
                 </h4>
                 <div className="space-y-3">
                   <div>
-                    <p className="brutal-label mb-1 block">
+                    <HelpLabel tooltip="เลือก preset รวมของ COLMAP/OpenSplat สำหรับรอบ retry นี้ ถ้าทิ้งว่างจะใช้ค่าจากโปรเจกต์เดิม">
                       Quality Mode
-                    </p>
+                    </HelpLabel>
                     <select
                       value={retryParams.quality_mode}
                       onChange={(e) => setRetryParams({...retryParams, quality_mode: e.target.value})}
@@ -2882,9 +3032,9 @@ export default function ProjectDetailPage() {
                   </div>
 
                   <div>
-                    <p className="brutal-label mb-1 block">
+                    <HelpLabel tooltip="จำนวน feature matches ขั้นต่ำที่ต้องมี ก่อน mapper จะใช้คู่ภาพในการลงทะเบียน ลดค่านี้ช่วยให้ภาพยากเข้า model ได้ง่ายขึ้น แต่เสี่ยง pose ผิดมากขึ้น">
                       Min Num Matches (จำนวน matches ขั้นต่ำในการ register)
-                    </p>
+                    </HelpLabel>
                     <input
                       type="number"
                       placeholder="เช่น 8"
@@ -2896,9 +3046,27 @@ export default function ProjectDetailPage() {
                   </div>
 
                   <div>
-                    <p className="brutal-label mb-1 block">
-                      Max Num Models (จำนวน models สูงสุดที่สร้าง)
+                    <HelpLabel tooltip="ชุดค่าลัดสำหรับเพิ่มเวลาและผ่อนเงื่อนไขของ CPU incremental mapper: Expanded เหมาะกับ retry ทั่วไป, Deep ช้ากว่าแต่พยายามเก็บภาพยากมากขึ้น">
+                      CPU Registration Profile
+                    </HelpLabel>
+                    <select
+                      value={retryParams.cpu_sparse_registration_profile}
+                      onChange={(e) => setRetryParams({...retryParams, cpu_sparse_registration_profile: e.target.value})}
+                      className="brutal-select"
+                    >
+                      <option value="">Standard policy</option>
+                      <option value="expanded">Expanded - ให้เวลาลงทะเบียนนานขึ้น</option>
+                      <option value="deep">Deep - ช้ากว่า แต่ผ่อน threshold มากสุด</option>
+                    </select>
+                    <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                      Expanded เพิ่ม init trials และ max registration trials พร้อมผ่อน pose threshold สำหรับ CPU incremental COLMAP
                     </p>
+                  </div>
+
+                  <div>
+                    <HelpLabel tooltip="จำนวน sparse models สูงสุดที่อนุญาตให้ COLMAP สร้าง เพิ่มได้ถ้าข้อมูลแตกเป็นหลายกลุ่ม แต่สำหรับวิดีโอ/orbit มักควรใช้ 1 เพื่อบังคับ model เดียว">
+                      Max Num Models (จำนวน models สูงสุดที่สร้าง)
+                    </HelpLabel>
                     <input
                       type="number"
                       placeholder="เช่น 50"
@@ -2909,10 +3077,93 @@ export default function ProjectDetailPage() {
                     <p className="mt-1 text-xs text-[var(--text-secondary)]">ค่าเริ่มต้น: 50 (เพิ่มเพื่อลองหลาย models)</p>
                   </div>
 
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <div>
+                      <HelpLabel tooltip="จำนวนครั้งที่ mapper ลองหา seed model เริ่มต้น เพิ่มค่านี้ช่วยให้เริ่มจากคู่ภาพที่ดีขึ้นใน dataset ยาก แต่ทำให้ช่วงเริ่ม reconstruction ช้าลง">
+                        Init Num Trials
+                      </HelpLabel>
+                      <input
+                        type="number"
+                        placeholder="เช่น 300"
+                        value={retryParams.init_num_trials}
+                        onChange={(e) => setRetryParams({...retryParams, init_num_trials: e.target.value})}
+                        className="brutal-input"
+                      />
+                      <p className="mt-1 text-xs text-[var(--text-secondary)]">เพิ่มเวลาหา seed model เริ่มต้น</p>
+                    </div>
+                    <div>
+                      <HelpLabel tooltip="จำนวน CPU threads ที่ส่งให้ COLMAP mapper ผ่าน --Mapper.num_threads ว่างไว้คือ auto ใช้ logical CPU ทั้งหมดที่ระบบตรวจพบ ใส่สูงเกินไปไม่จำเป็นต้องเร็วขึ้นเสมอ">
+                        Mapper CPU Threads
+                      </HelpLabel>
+                      <input
+                        type="number"
+                        placeholder="auto"
+                        value={retryParams.mapper_cpu_threads}
+                        onChange={(e) => setRetryParams({...retryParams, mapper_cpu_threads: e.target.value})}
+                        className="brutal-input"
+                      />
+                      <p className="mt-1 text-xs text-[var(--text-secondary)]">ว่างไว้เพื่อใช้ logical CPU ทั้งหมดที่ระบบตรวจพบ</p>
+                    </div>
+                    <div>
+                      <HelpLabel tooltip="จำนวนครั้งที่ COLMAP จะลอง register ภาพที่ยังเข้า model ไม่ได้ เพิ่มแล้วมีโอกาสเก็บภาพยากมากขึ้น แต่ถ้ามีภาพเสียจำนวนมากจะใช้เวลานานขึ้นชัดเจน">
+                        Max Registration Trials
+                      </HelpLabel>
+                      <input
+                        type="number"
+                        placeholder="เช่น 16"
+                        value={retryParams.max_reg_trials}
+                        onChange={(e) => setRetryParams({...retryParams, max_reg_trials: e.target.value})}
+                        className="brutal-input"
+                      />
+                      <p className="mt-1 text-xs text-[var(--text-secondary)]">เพิ่มจำนวนครั้งที่ COLMAP ลอง register ภาพที่ยาก</p>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <div>
+                      <HelpLabel tooltip="ค่าความคลาดเคลื่อนสูงสุดของ absolute pose estimation เพิ่มค่าเพื่อผ่อนให้ภาพยากผ่านง่ายขึ้น แต่ถ้าสูงเกินไปอาจรับ pose ที่ไม่สะอาด">
+                        Abs Pose Max Error
+                      </HelpLabel>
+                      <input
+                        type="number"
+                        step="0.1"
+                        placeholder="เช่น 14"
+                        value={retryParams.abs_pose_max_error}
+                        onChange={(e) => setRetryParams({...retryParams, abs_pose_max_error: e.target.value})}
+                        className="brutal-input"
+                      />
+                    </div>
+                    <div>
+                      <HelpLabel tooltip="จำนวน inlier ขั้นต่ำที่ต้องมีตอนลงทะเบียน pose ลดค่าช่วยภาพที่ match น้อย แต่เสี่ยงรับภาพที่หลักฐานเรขาคณิตอ่อน">
+                        Min Inliers
+                      </HelpLabel>
+                      <input
+                        type="number"
+                        placeholder="เช่น 12"
+                        value={retryParams.abs_pose_min_num_inliers}
+                        onChange={(e) => setRetryParams({...retryParams, abs_pose_min_num_inliers: e.target.value})}
+                        className="brutal-input"
+                      />
+                    </div>
+                    <div>
+                      <HelpLabel tooltip="สัดส่วน inlier ขั้นต่ำของ pose registration ลดค่าเช่น 0.06-0.08 ช่วย dataset ยาก แต่ถ้าต่ำเกินไปจะเพิ่มความเสี่ยง false registration">
+                        Min Inlier Ratio
+                      </HelpLabel>
+                      <input
+                        type="number"
+                        step="0.01"
+                        placeholder="เช่น 0.08"
+                        value={retryParams.abs_pose_min_inlier_ratio}
+                        onChange={(e) => setRetryParams({...retryParams, abs_pose_min_inlier_ratio: e.target.value})}
+                        className="brutal-input"
+                      />
+                    </div>
+                  </div>
+
                   <div>
-                    <p className="brutal-label mb-1 block">
+                    <HelpLabel tooltip="เลือก engine สำหรับรอบ sparse retry: policy เดิมปลอดภัยสุด, Incremental COLMAP เหมาะกับวิดีโอ/orbit, Global Mapper เหมาะกับภาพ unordered บางชุด, FastMap เร็วแต่เสี่ยงกับ dataset ยาก">
                       Sparse Retry Engine
-                    </p>
+                    </HelpLabel>
                     <select
                       value={retryParams.sparse_retry_sfm_engine}
                       onChange={(e) => setRetryParams({...retryParams, sparse_retry_sfm_engine: e.target.value})}
@@ -2929,9 +3180,9 @@ export default function ProjectDetailPage() {
                   </div>
 
                   <div>
-                    <p className="brutal-label mb-1 block">
+                    <HelpLabel tooltip="บังคับให้ sparse mapper ใช้เส้นทาง CPU-first ในรอบ retry นี้ GPU ยังใช้กับขั้นอื่นได้ การเปิดไว้ช่วยความเสถียรของ incremental registration ในวิดีโอ/orbit">
                       Force CPU Sparse Reconstruction
-                    </p>
+                    </HelpLabel>
                     <label className="flex items-center gap-2 border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-card)] px-3 py-2 text-sm text-[var(--text-secondary)] shadow-[var(--shadow-sm)]">
                       <input
                         type="checkbox"

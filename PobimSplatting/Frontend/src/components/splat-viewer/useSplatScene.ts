@@ -120,6 +120,7 @@ interface UseSplatSceneResult {
   resetScene: () => void;
   syncModelRotation: (rotation: Vec3) => void;
   syncModelPosition: (position: Vec3) => void;
+  syncModelScale: (scale: number) => void;
   adjustZoom: (delta: number) => void;
   cameraAxes: CameraAxes | null;
   alignCamera: (direction: AlignDirection) => void;
@@ -137,6 +138,9 @@ interface UseSplatSceneResult {
   orbitState: OrbitState;
   setOrbitAngles: (azimuth: number, elevation: number, options?: { immediate?: boolean }) => void;
   setOrbitDistance: (distance: number, options?: { immediate?: boolean }) => void;
+  setOrbitTarget: (target: Vec3) => void;
+  getOrbitTarget: () => Vec3;
+  setCameraPose: (pose: { position: Vec3; target: Vec3; up?: Vec3; fov?: number }) => void;
   projectionMode: ProjectionMode;
   setProjectionMode: (mode: ProjectionMode) => void;
   fieldOfView: number;
@@ -211,10 +215,10 @@ export function useSplatScene(plyUrl: string | null): UseSplatSceneResult {
   const defaultBackground = VIEWER_BACKGROUNDS[0].id;
   const backgroundRef = useRef<BackgroundId>(defaultBackground);
   const [activeBackground, setActiveBackground] = useState<BackgroundId>(defaultBackground);
-  const gridVisibleRef = useRef(true);
-  const axesVisibleRef = useRef(true);
-  const [showGrid, setShowGrid] = useState(true);
-  const [showAxes, setShowAxes] = useState(true);
+  const gridVisibleRef = useRef(false);
+  const axesVisibleRef = useRef(false);
+  const [showGrid, setShowGrid] = useState(false);
+  const [showAxes, setShowAxes] = useState(false);
   const [viewportKey, setViewportKey] = useState(0);
   const [transformVersion, setTransformVersion] = useState(0);
 
@@ -831,6 +835,12 @@ export function useSplatScene(plyUrl: string | null): UseSplatSceneResult {
     }
   }, []);
 
+  const syncModelScale = useCallback((scale: number) => {
+    if (splatEntityRef.current) {
+      splatEntityRef.current.setLocalScale(scale, scale, scale);
+    }
+  }, []);
+
   const getPointLocalPosition = useCallback((index: number) => {
     const splatEntity = splatEntityRef.current;
     const centers: Float32Array | undefined = splatEntity?.gsplat?.instance?.sorter?.centers;
@@ -951,6 +961,56 @@ export function useSplatScene(plyUrl: string | null): UseSplatSceneResult {
     },
     [],
   );
+
+  const setOrbitTarget = useCallback((target: Vec3) => {
+    controlsRef.current?.setTarget(target);
+  }, []);
+
+  const getOrbitTarget = useCallback(() => {
+    return controlsRef.current?.getTarget() ?? initialTargetRef.current;
+  }, []);
+
+  const setCameraPose = useCallback((pose: { position: Vec3; target: Vec3; up?: Vec3; fov?: number }) => {
+    const camera = cameraRef.current;
+    const pc = pcRef.current;
+    if (!camera || !pc) {
+      return;
+    }
+
+    if (typeof pose.fov === 'number' && Number.isFinite(pose.fov) && pose.fov > 5 && pose.fov < 150) {
+      camera.camera.fov = pose.fov;
+      setFieldOfViewState(pose.fov);
+      fieldOfViewRef.current = pose.fov;
+    }
+
+    const offset = {
+      x: pose.position.x - pose.target.x,
+      y: pose.position.y - pose.target.y,
+      z: pose.position.z - pose.target.z,
+    };
+    const distance = Math.max(0.1, Math.hypot(offset.x, offset.y, offset.z));
+    const azimuth = Math.atan2(offset.x, offset.z) * 180 / Math.PI;
+    const elevation = Math.asin(Math.max(-1, Math.min(1, offset.y / distance))) * 180 / Math.PI;
+
+    const controls = controlsRef.current;
+    if (controls) {
+      controls.setTarget(pose.target);
+      controls.setOrbitAngles(azimuth, elevation, { immediate: true });
+      controls.setOrbitDistance(distance, { immediate: true });
+    } else {
+      const up = pose.up || { x: 0, y: 1, z: 0 };
+      camera.setPosition(pose.position.x, pose.position.y, pose.position.z);
+      camera.lookAt(
+        pose.target.x,
+        pose.target.y,
+        pose.target.z,
+        up.x,
+        up.y,
+        up.z,
+      );
+    }
+
+  }, []);
 
   const adjustZoom = useCallback((delta: number) => {
     const controls = controlsRef.current;
@@ -1420,6 +1480,7 @@ export function useSplatScene(plyUrl: string | null): UseSplatSceneResult {
     resetScene,
     syncModelRotation,
     syncModelPosition,
+    syncModelScale,
     adjustZoom,
     cameraAxes,
     alignCamera,
@@ -1437,6 +1498,9 @@ export function useSplatScene(plyUrl: string | null): UseSplatSceneResult {
     orbitState,
     setOrbitAngles,
     setOrbitDistance,
+    setOrbitTarget,
+    getOrbitTarget,
+    setCameraPose,
     projectionMode,
     setProjectionMode,
     fieldOfView,

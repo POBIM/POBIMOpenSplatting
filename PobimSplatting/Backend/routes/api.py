@@ -538,6 +538,44 @@ def _parse_colmap_points3d_txt(points_path, max_points=5000):
     return sampled, total_points
 
 
+def _compute_opensplat_center_scale(images):
+    if not images:
+        return [0.0, 0.0, 0.0], 1.0
+
+    center = [
+        sum(image["position"][axis] for image in images) / len(images)
+        for axis in range(3)
+    ]
+    max_abs = max(
+        abs(image["position"][axis] - center[axis])
+        for image in images
+        for axis in range(3)
+    )
+    scale = 1.0 / max_abs if max_abs > 1e-12 else 1.0
+    return center, scale
+
+
+def _apply_opensplat_center_scale(images, sparse_points):
+    center, scale = _compute_opensplat_center_scale(images)
+
+    for image in images:
+        image["position_raw"] = list(image["position"])
+        image["position"] = [
+            float((image["position"][axis] - center[axis]) * scale)
+            for axis in range(3)
+        ]
+        image["opensplat_scale"] = scale
+
+    for point in sparse_points:
+        raw_position = point.get("position") or [0.0, 0.0, 0.0]
+        point["position"] = [
+            float((raw_position[axis] - center[axis]) * scale)
+            for axis in range(3)
+        ]
+
+    return center, scale
+
+
 def _is_sparse_model_dir(model_path: Path) -> bool:
     if not model_path.exists() or not model_path.is_dir():
         return False
@@ -640,6 +678,7 @@ def _load_project_camera_poses(project_id, *, prefer_live: bool = True):
         for image in images:
             image["image_url"] = image["image_url"].format(project_id=project_id)
         sparse_points, sparse_point_count = _parse_colmap_points3d_txt(points_path)
+        _apply_opensplat_center_scale(images, sparse_points)
         return (
             str(sparse_model_path),
             images,
@@ -777,9 +816,22 @@ def upload_policy_preview():
         "min_num_matches",
         "max_num_models",
         "init_num_trials",
+        "mapper_cpu_threads",
+        "structure_less_registration_fallback",
+        "abs_pose_min_num_inliers",
+        "max_reg_trials",
     ):
         if payload.get(key) is not None:
             config[key] = parse_int(payload.get(key), 0)
+
+    if payload.get("cpu_sparse_registration_profile"):
+        config["cpu_sparse_registration_profile"] = payload.get(
+            "cpu_sparse_registration_profile"
+        )
+
+    for key in ("abs_pose_max_error", "abs_pose_min_inlier_ratio"):
+        if payload.get(key) is not None:
+            config[key] = parse_float(payload.get(key), 0)
 
     for key in (
         "densify_grad_threshold",
@@ -946,6 +998,9 @@ def upload_files():
             "force_cpu_sparse_reconstruction", "true"
         ).lower()
         == "true",
+        "cpu_sparse_registration_profile": request.form.get(
+            "cpu_sparse_registration_profile"
+        ),
         "resource_override_source": "automatic",
     }
 
@@ -1008,6 +1063,25 @@ def upload_files():
             config["max_num_models"] = int(request.form.get("max_num_models"))
         if request.form.get("init_num_trials"):
             config["init_num_trials"] = int(request.form.get("init_num_trials"))
+        if request.form.get("mapper_cpu_threads"):
+            config["mapper_cpu_threads"] = int(request.form.get("mapper_cpu_threads"))
+
+        if request.form.get("structure_less_registration_fallback"):
+            config["structure_less_registration_fallback"] = int(
+                request.form.get("structure_less_registration_fallback")
+            )
+        if request.form.get("abs_pose_max_error"):
+            config["abs_pose_max_error"] = float(request.form.get("abs_pose_max_error"))
+        if request.form.get("abs_pose_min_num_inliers"):
+            config["abs_pose_min_num_inliers"] = int(
+                request.form.get("abs_pose_min_num_inliers")
+            )
+        if request.form.get("abs_pose_min_inlier_ratio"):
+            config["abs_pose_min_inlier_ratio"] = float(
+                request.form.get("abs_pose_min_inlier_ratio")
+            )
+        if request.form.get("max_reg_trials"):
+            config["max_reg_trials"] = int(request.form.get("max_reg_trials"))
     else:
         # For non-custom modes, use default iterations from quality mode
         if request.form.get("iterations"):
@@ -1607,8 +1681,15 @@ def retry_project(project_id):
                 "min_num_matches",
                 "max_num_models",
                 "init_num_trials",
+                "mapper_cpu_threads",
                 "force_cpu_sparse_reconstruction",
                 "sparse_retry_sfm_engine",
+                "cpu_sparse_registration_profile",
+                "structure_less_registration_fallback",
+                "abs_pose_max_error",
+                "abs_pose_min_num_inliers",
+                "abs_pose_min_inlier_ratio",
+                "max_reg_trials",
             ]:
                 if param_key in new_params and new_params[param_key] is not None:
                     config[param_key] = new_params[param_key]

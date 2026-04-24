@@ -9,6 +9,8 @@ export default function TrainingSplatPreview({
   onOpenFullViewer,
 }: {
   plyUrl: string;
+  referenceFrames?: unknown[];
+  cameraPoses?: unknown;
   onOpenFullViewer?: () => void;
 }) {
   const { canvasRef, loading, error, splatCount, resetScene } = useSplatScene(plyUrl);

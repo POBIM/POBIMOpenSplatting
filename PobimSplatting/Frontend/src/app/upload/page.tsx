@@ -663,18 +663,27 @@ export default function UploadPage() {
 
   return (
     <div className="brutal-shell">
-      <section className="brutal-section">
-        <div className="brutal-container max-w-5xl space-y-6">
-          <div className="space-y-3">
-            <span className="brutal-eyebrow rotate-1">Upload Wizard</span>
-            <div>
-              <h1 className="brutal-h1">Upload Media</h1>
-              <p className="mt-2 text-sm font-medium text-[color:var(--text-secondary)]">Upload images or videos for 3D reconstruction</p>
+      <section className="brutal-section-tight">
+        <div className="brutal-container max-w-6xl space-y-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+            <div className="space-y-2">
+              <span className="brutal-eyebrow rotate-1">Upload Wizard</span>
+              <div>
+                <h1 className="brutal-h1">Upload Media</h1>
+                <p className="mt-1 text-sm font-medium text-[color:var(--text-secondary)]">Images or videos for 3D reconstruction</p>
+              </div>
             </div>
+            {files.length > 0 && (
+              <div className="flex flex-wrap gap-2 text-xs font-bold uppercase tracking-[0.12em]">
+                <span className="brutal-badge">{files.length} files</span>
+                <span className="brutal-badge">{formatFileSize(totalSize)}</span>
+                <span className="brutal-badge">{inputProfile}</span>
+              </div>
+            )}
           </div>
 
       <div
-        className={`relative overflow-hidden border-2 border-dashed p-8 text-center transition-all md:p-10 ${isDragging
+        className={`relative overflow-hidden border-2 border-dashed p-5 text-center transition-all md:p-6 ${isDragging
           ? 'border-[color:var(--ink)] bg-[color:var(--paper-muted)] shadow-[var(--shadow-md)]'
           : 'border-[color:var(--ink)] bg-[color:var(--paper-card)] shadow-[var(--shadow-sm)] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[var(--shadow-md)]'
           }`}
@@ -688,13 +697,13 @@ export default function UploadPage() {
             onDragOver={handleDragOver}
             onDrop={handleDrop}
           >
-            <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center border border-[color:var(--ink)] bg-[color:var(--paper-muted)] shadow-[var(--shadow-sm)]">
-              <Upload className="h-7 w-7 text-[color:var(--ink)]" />
+            <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center border border-[color:var(--ink)] bg-[color:var(--paper-muted)] shadow-[var(--shadow-sm)]">
+              <Upload className="h-5 w-5 text-[color:var(--ink)]" />
             </div>
-            <p className="brutal-h2 mb-2">
+            <p className="brutal-h3 mb-1">
               Drop your files here or click to browse
             </p>
-            <p className="mx-auto mb-6 max-w-xl text-sm font-medium text-[color:var(--text-secondary)]">
+            <p className="mx-auto mb-4 max-w-xl text-xs font-medium text-[color:var(--text-secondary)]">
               Supports MP4, AVI, MOV, JPG, PNG, WebP, TIFF files up to 5GB each
             </p>
             <input
@@ -710,17 +719,17 @@ export default function UploadPage() {
             </span>
           </label>
         ) : (
-          <div className="space-y-6">
+          <div className="space-y-4">
             {/* File List */}
-            <div className="brutal-card-muted p-3 md:p-4 text-left">
+            <div className="brutal-card-muted p-3 text-left">
               <div className="flex items-center justify-between gap-3">
                 <h4 className="brutal-h3">Selected Files ({files.length})</h4>
                 <span className="brutal-badge -rotate-1">{formatFileSize(totalSize)}</span>
               </div>
-              <div className="brutal-scroll mt-4 space-y-2 max-h-48 overflow-y-auto pr-1">
+              <div className="brutal-scroll mt-3 space-y-1.5 max-h-36 overflow-y-auto pr-1">
                 {files.map((file, index) => (
-                  <div key={`${file.name}-${file.size}-${index}`} className="flex items-center justify-between border border-[color:var(--ink)] bg-[color:var(--paper-card)] p-3">
-                    <div className="flex items-center space-x-3">
+                  <div key={`${file.name}-${file.size}-${index}`} className="flex items-center justify-between border border-[color:var(--ink)] bg-[color:var(--paper-card)] px-2.5 py-2">
+                    <div className="flex min-w-0 items-center space-x-2.5">
                       {file.type.startsWith('video/') ? (
                         <FileVideo className="h-4 w-4 text-[color:var(--ink)]" />
                       ) : (
@@ -743,11 +752,11 @@ export default function UploadPage() {
                   </div>
                 ))}
               </div>
-              <p className="mt-3 text-xs font-medium uppercase tracking-wide text-[color:var(--text-secondary)]">Total size: {formatFileSize(totalSize)}</p>
+              <p className="mt-2 text-[11px] font-medium uppercase tracking-wide text-[color:var(--text-secondary)]">Total size: {formatFileSize(totalSize)}</p>
             </div>
 
             {/* Configuration Options */}
-            <div className="space-y-6">
+            <div className="space-y-4">
               {/* Project Details */}
               <div className="grid md:grid-cols-2 gap-4">
                 <div>
@@ -788,13 +797,13 @@ export default function UploadPage() {
                 </div>
               </div>
 
-              <div className={`border p-4 md:p-5 shadow-[var(--shadow-sm)] ${resolvedExpectedPolicy.tone}`} style={{ borderColor: 'var(--ink)' }}>
-                <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+              <div className={`border p-3 shadow-[var(--shadow-sm)] ${resolvedExpectedPolicy.tone}`} style={{ borderColor: 'var(--ink)' }}>
+                <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                   <div>
                       <p className="brutal-label opacity-70">Expected Policy</p>
                       <div className="mt-1 flex items-center gap-3">
-                        <div className={`flex h-10 w-10 items-center justify-center border shadow-[var(--shadow-sm)] ${resolvedExpectedPolicy.badgeTone}`}>
-                          <PolicyIcon className="h-5 w-5" />
+                        <div className={`flex h-9 w-9 items-center justify-center border shadow-[var(--shadow-sm)] ${resolvedExpectedPolicy.badgeTone}`}>
+                          <PolicyIcon className="h-4 w-4" />
                         </div>
                         <div>
                           <h3 className="brutal-h3">{resolvedExpectedPolicy.title}</h3>
@@ -803,7 +812,7 @@ export default function UploadPage() {
                           </p>
                         </div>
                       </div>
-                      <p className="mt-2 text-sm font-medium opacity-90">{resolvedExpectedPolicy.summary}</p>
+                      <p className="mt-1 text-sm font-medium opacity-90">{resolvedExpectedPolicy.summary}</p>
                     </div>
                     <div className="flex flex-wrap gap-2 text-xs font-medium">
                       <span className={`border px-2 py-1 shadow-[2px_2px_0_var(--ink)] ${resolvedExpectedPolicy.badgeTone}`}>{resolvedExpectedPolicy.profileBadge}</span>
@@ -815,13 +824,13 @@ export default function UploadPage() {
                     </div>
                   </div>
                   {policyPreviewLoading && (
-                  <div className="mt-4 space-y-3 border border-[color:var(--ink)] bg-white/40 p-4 animate-pulse">
+                  <div className="mt-3 space-y-2 border border-[color:var(--ink)] bg-white/40 p-3 animate-pulse">
                     <div className="h-2 w-32 bg-white/80" />
                     <div className="h-3 w-full bg-white/70" />
                     <div className="h-3 w-4/5 bg-white/60" />
                   </div>
                 )}
-                <div className="mt-4 border border-[color:var(--ink)] bg-white/70 p-4 text-gray-900 shadow-[var(--shadow-sm)]">
+                <div className="mt-3 border border-[color:var(--ink)] bg-white/70 p-3 text-gray-900 shadow-[var(--shadow-sm)]">
                   <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                     <div>
                       <p className="brutal-label">Preview Confidence</p>
@@ -834,7 +843,7 @@ export default function UploadPage() {
                       Signals: {resolvedConfidenceSignals.slice(0, 3).map((signal) => signal.label).join(' • ')}
                     </div>
                   </div>
-                  <div className="mt-3 h-2.5 overflow-hidden border border-[color:var(--ink)] bg-gray-200">
+                  <div className="mt-2 h-2 overflow-hidden border border-[color:var(--ink)] bg-gray-200">
                     <div
                       className={`h-full transition-all duration-300 ${resolvedConfidence.meterClass}`}
                       style={{ width: `${resolvedConfidence.score}%` }}
@@ -847,7 +856,7 @@ export default function UploadPage() {
                       <div className="h-8 border border-[color:var(--ink)] bg-gray-200/60" />
                     </div>
                   )}
-                  <div className="mt-3 flex flex-wrap gap-2 text-xs text-gray-600">
+                  <div className="mt-2 flex flex-wrap gap-1.5 text-xs text-gray-600">
                     {resolvedConfidenceSignals.map((signal) => (
                       <span
                         key={signal.key}
@@ -858,7 +867,7 @@ export default function UploadPage() {
                       </span>
                     ))}
                   </div>
-                  <div className="mt-3 flex flex-wrap gap-2 text-xs text-gray-600">
+                  <div className="mt-2 flex flex-wrap gap-1.5 text-xs text-gray-600">
                       <span className="border border-[color:var(--ink)] bg-white px-2 py-1">feature: {config.feature_method}</span>
                       {usesGlobalSfm && (
                         <span className="border border-[color:var(--ink)] bg-white px-2 py-1">backend: {config.sfm_backend}</span>
@@ -900,7 +909,7 @@ export default function UploadPage() {
                   </div>
                 </div>
                 {autoTuningSummary && (
-                  <div className="mt-4 border border-[color:var(--ink)] bg-white/70 p-4 text-gray-900 shadow-[var(--shadow-sm)]">
+                  <div className="mt-3 border border-[color:var(--ink)] bg-white/70 p-3 text-gray-900 shadow-[var(--shadow-sm)]">
                     <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
                       <div>
                         <p className="brutal-label">Policy Source</p>
@@ -914,7 +923,7 @@ export default function UploadPage() {
                         </span>
                       )}
                     </div>
-                    <div className="mt-3 flex flex-wrap gap-2 text-xs text-gray-600">
+                    <div className="mt-2 flex flex-wrap gap-1.5 text-xs text-gray-600">
                       <span className="border border-[color:var(--ink)] bg-white px-2 py-1">
                         runs: {autoTuningSummary.derived_from_runs ?? '--'}
                       </span>
@@ -929,13 +938,13 @@ export default function UploadPage() {
                       </span>
                     </div>
                     {(autoTuningSummary.summary || autoTuningSummary.fallback_reason) && (
-                      <div className="mt-3 border border-[color:var(--ink)] bg-slate-50 px-3 py-2 text-sm text-gray-700">
+                        <div className="mt-2 border border-[color:var(--ink)] bg-slate-50 px-3 py-2 text-sm text-gray-700">
                         {autoTuningSummary.summary || 'No tuning summary recorded yet.'}
                         {autoTuningSummary.fallback_reason ? ` • fallback=${autoTuningSummary.fallback_reason}` : ''}
                       </div>
                     )}
                     {!!autoTuningSurfaces.length && (
-                      <div className="mt-3 grid gap-2 md:grid-cols-2">
+                      <div className="mt-2 grid gap-2 md:grid-cols-2">
                         {autoTuningSurfaces.map(({ label, surface }) => (
                           <div key={label} className="border border-[color:var(--ink)] bg-white px-3 py-2 text-sm text-gray-700">
                             <div className="flex flex-wrap items-center gap-2">
@@ -953,10 +962,13 @@ export default function UploadPage() {
                   </div>
                 )}
                 {adaptiveComparisons.length > 0 && (
-                  <div className="mt-4 border border-[color:var(--ink)] bg-white/70 p-4 text-gray-900 shadow-[var(--shadow-sm)]">
+                  <details className="mt-3 border border-[color:var(--ink)] bg-white/70 p-3 text-gray-900 shadow-[var(--shadow-sm)]">
+                    <summary className="cursor-pointer text-xs font-black uppercase tracking-[0.14em] text-gray-800">
+                      Adaptive Resource Preview
+                    </summary>
+                    <div className="mt-3">
                     <div className="flex flex-col gap-1 md:flex-row md:items-end md:justify-between">
                       <div>
-                        <p className="brutal-label">Adaptive Resource Preview</p>
                         <p className="mt-1 text-sm text-gray-700">
                           Ordered-video resource policy deltas against the opposite flag state.
                         </p>
@@ -976,7 +988,7 @@ export default function UploadPage() {
                         </span>
                       </div>
                     )}
-                    <div className="mt-4 grid gap-3 md:grid-cols-2">
+                    <div className="mt-3 grid gap-3 md:grid-cols-2">
                       {adaptiveComparisons.map((comparison) => {
                         const betterWhenEnabled = comparison.score_delta_enabled_vs_disabled >= 0;
                         const matchesRecommendation = comparison.current_enabled === comparison.recommended_enabled;
@@ -989,7 +1001,7 @@ export default function UploadPage() {
                         return (
                           <div
                             key={comparison.key}
-                            className="border border-[color:var(--ink)] bg-white p-4 shadow-[var(--shadow-sm)]"
+                            className="border border-[color:var(--ink)] bg-white p-3 shadow-[var(--shadow-sm)]"
                           >
                             <div className="flex flex-wrap items-center gap-2">
                               <span className="text-sm font-semibold text-gray-900">{comparison.label}</span>
@@ -1014,7 +1026,7 @@ export default function UploadPage() {
                                 alternate score: {comparison.alternative_score}
                               </span>
                             </div>
-                            <div className="mt-3 space-y-2 text-sm text-gray-700">
+                            <div className="mt-2 space-y-2 text-sm text-gray-700">
                               <div className="border border-[color:var(--ink)] bg-slate-50 px-3 py-2">
                                 <span className="font-semibold text-gray-900">Current:</span> {comparison.current_summary}
                               </div>
@@ -1031,9 +1043,10 @@ export default function UploadPage() {
                         );
                       })}
                     </div>
-                  </div>
+                    </div>
+                  </details>
                 )}
-                <div className="mt-4 grid gap-2 md:grid-cols-3">
+                <div className="mt-3 grid gap-2 md:grid-cols-3">
                   {policyLegend.map((entry) => {
                     const LegendIcon = entry.icon;
                     const isActive = entry.key === resolvedInputProfile;
@@ -1041,7 +1054,7 @@ export default function UploadPage() {
                     return (
                       <div
                         key={entry.key}
-                        className={`border px-3 py-3 shadow-[var(--shadow-sm)] ${isActive ? entry.toneClass : 'border-[color:var(--ink)] bg-white text-gray-600'}`}
+                        className={`border px-3 py-2 shadow-[var(--shadow-sm)] ${isActive ? entry.toneClass : 'border-[color:var(--ink)] bg-white text-gray-600'}`}
                       >
                         <div className="flex items-center gap-2 text-sm font-medium">
                           <span className={`h-2.5 w-2.5 rounded-full ${entry.dotClass}`} />
@@ -1053,7 +1066,11 @@ export default function UploadPage() {
                     );
                   })}
                 </div>
-                <div className="mt-4 space-y-2">
+                <details className="mt-3 border border-[color:var(--ink)] bg-white/60 p-3">
+                  <summary className="cursor-pointer text-xs font-black uppercase tracking-[0.14em] text-gray-800">
+                    Live Rule Preview
+                  </summary>
+                  <div className="mt-2 space-y-2">
                     <p className="brutal-label opacity-70">Live Rule Preview</p>
                   {resolvedPreviewRules.map((rule, index) => (
                     <div
@@ -1068,8 +1085,9 @@ export default function UploadPage() {
                       <span>{rule.text}</span>
                     </div>
                   ))}
-                </div>
-                <p className="mt-4 text-xs opacity-75">
+                  </div>
+                </details>
+                <p className="mt-3 text-xs opacity-75">
                   This is a pre-upload recommendation only. After matching, the backend can still refine the policy again from pair geometry.
                 </p>
               </div>
@@ -1081,17 +1099,17 @@ export default function UploadPage() {
                 badge="Optional"
                 badgeColor="bg-blue-100 text-blue-700"
               >
-                <div className="space-y-6">
+                <div className="space-y-4">
                   {/* SfM Engine Selection */}
-              <div className="brutal-card-muted p-3 md:p-4 text-left">
-                <h4 className="brutal-h3 mb-3 flex items-center">
+              <div className="brutal-card-muted p-3 text-left">
+                <h4 className="brutal-h3 mb-2 flex items-center">
                   <span className="text-xl mr-2">⚡</span>
                   Structure-from-Motion Engine
                 </h4>
                 <div className="grid md:grid-cols-1 gap-4">
                   <div>
-                    <div className="flex gap-4">
-                      <label className={`flex-1 border-2 p-4 cursor-pointer transition-all ${config.sfm_engine === 'glomap'
+                    <div className="grid gap-3 lg:grid-cols-3">
+                      <label className={`border-2 p-3 cursor-pointer transition-all ${config.sfm_engine === 'glomap'
                         ? 'border-green-500 bg-green-100 shadow-md'
                         : 'border-gray-200 bg-white hover:border-green-300'
                         }`}>
@@ -1110,14 +1128,10 @@ export default function UploadPage() {
                           </div>
                           <span className="text-green-600 font-semibold">Global SfM</span>
                         </div>
-                        <p className="text-sm text-gray-600 mt-2">
-                          COLMAP Global SfM - processes the sparse model globally instead of registering images one by one.
-                          <strong className="text-green-700"> Best for most unordered photo sets.</strong>
-                        </p>
-                        <p className="text-xs text-green-600 mt-1">✓ Good for wide photo collections ✓ Faster than incremental on many datasets ✓ Keeps compatibility with legacy glomap alias</p>
+                        <p className="text-xs text-gray-600 mt-2">Global sparse solve. Best for most unordered photo sets.</p>
                       </label>
 
-                      <label className={`flex-1 border-2 p-4 cursor-pointer transition-all ${config.sfm_engine === 'fastmap'
+                      <label className={`border-2 p-3 cursor-pointer transition-all ${config.sfm_engine === 'fastmap'
                         ? 'border-purple-500 bg-purple-50 shadow-md'
                         : 'border-gray-200 bg-white hover:border-purple-300'
                         }`}>
@@ -1136,14 +1150,10 @@ export default function UploadPage() {
                           </div>
                           <span className="text-purple-600 font-semibold">GPU-First</span>
                         </div>
-                        <p className="text-sm text-gray-600 mt-2">
-                          First-order SfM optimized for GPU-first throughput.
-                          <strong className="text-purple-700"> Best for dense video or capture streams where speed matters most.</strong>
-                        </p>
-                        <p className="text-xs text-purple-600 mt-1">✓ GPU-native ✓ Dense coverage ⚠️ Less robust</p>
+                        <p className="text-xs text-gray-600 mt-2">GPU-first throughput for dense video/capture streams.</p>
                       </label>
 
-                      <label className={`flex-1 border-2 p-4 cursor-pointer transition-all ${config.sfm_engine === 'colmap'
+                      <label className={`border-2 p-3 cursor-pointer transition-all ${config.sfm_engine === 'colmap'
                         ? 'border-blue-500 bg-blue-100 shadow-md'
                         : 'border-gray-200 bg-white hover:border-blue-300'
                         }`}>
@@ -1162,11 +1172,7 @@ export default function UploadPage() {
                           </div>
                           <span className="text-gray-500 font-semibold">Standard Speed</span>
                         </div>
-                        <p className="text-sm text-gray-600 mt-2">
-                          Incremental SfM - registers images one by one and can recover more cautiously from hard inputs.
-                          <strong className="text-blue-700"> Best when you want step-by-step control or conservative fallback behavior.</strong>
-                        </p>
-                        <p className="text-xs text-blue-600 mt-1">✓ Battle-tested ✓ Handles edge cases ✓ More options</p>
+                        <p className="text-xs text-gray-600 mt-2">Incremental SfM for conservative fallback and hard inputs.</p>
                       </label>
                     </div>
 
@@ -1207,7 +1213,7 @@ export default function UploadPage() {
               </div>
 
                   {/* Feature Extraction Method Selection */}
-              <div className="brutal-card-muted p-3 md:p-4 text-left">
+              <div className="brutal-card-muted p-3 text-left">
                 <div className="flex items-center justify-between mb-3">
                   <h4 className="brutal-h3 flex items-center">
                     <span className="mr-2">🔬</span>
@@ -1215,12 +1221,12 @@ export default function UploadPage() {
                     <span className="ml-2 text-xs bg-cyan-100 text-cyan-700 px-2 py-1 rounded-full">ULTRA SPEED</span>
                   </h4>
                 </div>
-                <p className="text-sm text-gray-600 mb-4">
+                <p className="text-xs text-gray-600 mb-3">
                   Neural features (ALIKED/SuperPoint) can substantially reduce matching cost versus traditional SIFT on high-resolution images
                 </p>
                 <div className="space-y-3">
                   <div className="flex flex-wrap gap-3">
-                    <label className={`flex-1 min-w-[200px] border-2 p-4 cursor-pointer transition-all ${config.feature_method === 'aliked'
+                    <label className={`flex-1 min-w-[180px] border-2 p-3 cursor-pointer transition-all ${config.feature_method === 'aliked'
                       ? 'border-cyan-500 bg-cyan-50 shadow-lg shadow-cyan-100'
                       : 'border-gray-200 bg-white hover:border-cyan-300'}`}>
                       <div className="flex items-center">
@@ -1240,7 +1246,7 @@ export default function UploadPage() {
                         </div>
                       </div>
                     </label>
-                    <label className={`flex-1 min-w-[200px] border-2 p-4 cursor-pointer transition-all ${config.feature_method === 'superpoint'
+                    <label className={`flex-1 min-w-[180px] border-2 p-3 cursor-pointer transition-all ${config.feature_method === 'superpoint'
                       ? 'border-indigo-500 bg-indigo-50 shadow-lg shadow-indigo-100'
                       : 'border-gray-200 bg-white hover:border-indigo-300'}`}>
                       <div className="flex items-center">
@@ -1260,7 +1266,7 @@ export default function UploadPage() {
                         </div>
                       </div>
                     </label>
-                    <label className={`flex-1 min-w-[200px] border-2 p-4 cursor-pointer transition-all ${config.feature_method === 'sift'
+                    <label className={`flex-1 min-w-[180px] border-2 p-3 cursor-pointer transition-all ${config.feature_method === 'sift'
                       ? 'border-gray-500 bg-gray-50 shadow-lg shadow-gray-100'
                       : 'border-gray-200 bg-white hover:border-gray-300'}`}>
                       <div className="flex items-center">

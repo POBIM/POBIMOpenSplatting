@@ -1125,6 +1125,31 @@ def get_colmap_config(
 
     mapper_params = {}
 
+    cpu_registration_profiles = {
+        "expanded": {
+            "label": "expanded CPU registration",
+            "init_num_trials_floor": 300,
+            "mapper_params": {
+                "Mapper.structure_less_registration_fallback": "1",
+                "Mapper.abs_pose_max_error": "14",
+                "Mapper.abs_pose_min_num_inliers": "12",
+                "Mapper.abs_pose_min_inlier_ratio": "0.08",
+                "Mapper.max_reg_trials": "16",
+            },
+        },
+        "deep": {
+            "label": "deep CPU registration",
+            "init_num_trials_floor": 500,
+            "mapper_params": {
+                "Mapper.structure_less_registration_fallback": "1",
+                "Mapper.abs_pose_max_error": "16",
+                "Mapper.abs_pose_min_num_inliers": "10",
+                "Mapper.abs_pose_min_inlier_ratio": "0.06",
+                "Mapper.max_reg_trials": "24",
+            },
+        },
+    }
+
     if orbit_safe_mode:
         min_num_matches = min(
             min_num_matches, (orbit_safe_policy or {}).get("min_num_matches_cap", 12)
@@ -1154,12 +1179,30 @@ def get_colmap_config(
                     "🧠 Ordered video/orbit default: forcing incremental COLMAP to keep a single sparse model",
                 )
 
-    if custom_params and quality_mode == "custom":
+    if custom_params:
+        profile_name = str(
+            custom_params.get("cpu_sparse_registration_profile") or ""
+        ).strip().lower()
+        registration_profile = cpu_registration_profiles.get(profile_name)
+        if registration_profile:
+            init_num_trials = max(
+                init_num_trials, registration_profile["init_num_trials_floor"]
+            )
+            mapper_params.update(registration_profile["mapper_params"])
+            if project_id:
+                append_log_line(
+                    project_id,
+                    "🧠 CPU mapper profile: "
+                    f"{registration_profile['label']} "
+                    f"(init_trials>={registration_profile['init_num_trials_floor']}, "
+                    f"max_reg_trials={registration_profile['mapper_params']['Mapper.max_reg_trials']})",
+                )
+
         if (
             "min_num_matches" in custom_params
             and custom_params["min_num_matches"] is not None
         ):
-            min_num_matches = custom_params["min_num_matches"]
+            min_num_matches = int(custom_params["min_num_matches"])
             if project_id:
                 append_log_line(
                     project_id, f"🔧 Custom min_num_matches: {min_num_matches}"
@@ -1168,7 +1211,7 @@ def get_colmap_config(
             "max_num_models" in custom_params
             and custom_params["max_num_models"] is not None
         ):
-            max_num_models = custom_params["max_num_models"]
+            max_num_models = int(custom_params["max_num_models"])
             if project_id:
                 append_log_line(
                     project_id, f"🔧 Custom max_num_models: {max_num_models}"
@@ -1177,11 +1220,32 @@ def get_colmap_config(
             "init_num_trials" in custom_params
             and custom_params["init_num_trials"] is not None
         ):
-            init_num_trials = custom_params["init_num_trials"]
+            init_num_trials = int(custom_params["init_num_trials"])
             if project_id:
                 append_log_line(
                     project_id, f"🔧 Custom init_num_trials: {init_num_trials}"
                 )
+
+        mapper_custom_fields = {
+            "structure_less_registration_fallback": (
+                "Mapper.structure_less_registration_fallback",
+                int,
+            ),
+            "abs_pose_max_error": ("Mapper.abs_pose_max_error", float),
+            "abs_pose_min_num_inliers": ("Mapper.abs_pose_min_num_inliers", int),
+            "abs_pose_min_inlier_ratio": ("Mapper.abs_pose_min_inlier_ratio", float),
+            "max_reg_trials": ("Mapper.max_reg_trials", int),
+        }
+        for custom_key, (mapper_key, caster) in mapper_custom_fields.items():
+            if (
+                custom_key in custom_params
+                and custom_params[custom_key] is not None
+                and str(custom_params[custom_key]).strip() != ""
+            ):
+                mapped_value = caster(custom_params[custom_key])
+                mapper_params[mapper_key] = str(mapped_value)
+                if project_id:
+                    append_log_line(project_id, f"🔧 Custom {mapper_key}: {mapped_value}")
 
     sift_params = {}
     if quality_mode == "ultra_professional":
@@ -1486,6 +1550,16 @@ def get_colmap_config_for_pipeline(paths, config, project_id=None):
         "min_num_matches": config.get("min_num_matches"),
         "max_num_models": config.get("max_num_models"),
         "init_num_trials": config.get("init_num_trials"),
+        "cpu_sparse_registration_profile": config.get(
+            "cpu_sparse_registration_profile"
+        ),
+        "structure_less_registration_fallback": config.get(
+            "structure_less_registration_fallback"
+        ),
+        "abs_pose_max_error": config.get("abs_pose_max_error"),
+        "abs_pose_min_num_inliers": config.get("abs_pose_min_num_inliers"),
+        "abs_pose_min_inlier_ratio": config.get("abs_pose_min_inlier_ratio"),
+        "max_reg_trials": config.get("max_reg_trials"),
     }
     custom_params = {
         key: value for key, value in custom_params.items() if value is not None

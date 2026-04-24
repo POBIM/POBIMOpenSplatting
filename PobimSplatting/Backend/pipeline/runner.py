@@ -1233,6 +1233,21 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
                     "Sparse reconstruction remains split after automatic recovery; "
                     "training has been stopped before using a fragmented model."
                 )
+            best_registered = int(sparse_summary.get('best_registered') or 0)
+            registered_ratio = float(sparse_summary.get('registered_ratio') or 0.0)
+            min_registered_for_training = min(
+                num_images, max(8, int(num_images * 0.05))
+            )
+            if (
+                is_ordered_video
+                and num_images >= 20
+                and best_registered < min_registered_for_training
+            ):
+                raise Exception(
+                    "Sparse reconstruction registered too few images for training: "
+                    f"{best_registered}/{num_images} ({registered_ratio:.1%}). "
+                    "Training has been stopped before using an unusable sparse model."
+                )
 
         if start_index <= colmap_stages.index('model_conversion'):
             run_model_conversion_stage(project_id, paths)

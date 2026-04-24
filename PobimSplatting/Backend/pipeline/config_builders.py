@@ -1002,18 +1002,37 @@ def get_colmap_config(
         matcher_type = "vocab_tree"
         matcher_params = get_vocab_tree_matcher_params()
 
+    explicit_orbit_safe_matcher_override = explicit_matcher_type in {
+        "exhaustive",
+        "vocab_tree",
+    }
+
     if orbit_safe_mode:
-        if explicit_matcher_type == "exhaustive":
-            orbit_safe_forced_matcher = True
-        matcher_type = "sequential"
-        matcher_params = get_sequential_matcher_params(
-            num_images,
-            quality_mode,
-            orbit_safe_mode=True,
-            orbit_safe_policy=orbit_safe_policy,
-        )
+        if explicit_orbit_safe_matcher_override:
+            matcher_type = explicit_matcher_type
+            if matcher_type == "exhaustive":
+                matcher_params = {}
+                max_num_matches = min(max_num_matches, 45960)
+            else:
+                matcher_params = get_vocab_tree_matcher_params()
+        else:
+            if explicit_matcher_type == "exhaustive":
+                orbit_safe_forced_matcher = True
+            matcher_type = "sequential"
+            matcher_params = get_sequential_matcher_params(
+                num_images,
+                quality_mode,
+                orbit_safe_mode=True,
+                orbit_safe_policy=orbit_safe_policy,
+            )
         if project_id:
-            if orbit_safe_forced_matcher:
+            if explicit_orbit_safe_matcher_override:
+                append_log_line(
+                    project_id,
+                    "🛡️ Orbit-safe mode keeping mapper safeguards while honoring explicit matcher override: "
+                    f"{matcher_type}",
+                )
+            elif orbit_safe_forced_matcher:
                 append_log_line(
                     project_id,
                     "🛡️ Orbit-safe mode overriding exhaustive matcher with local sequential matching to preserve temporal continuity",
@@ -1032,11 +1051,19 @@ def get_colmap_config(
                         project_id,
                         "🛡️ Orbit-safe mode enabled: using local sequential matching without loop-closure fallback",
                     )
-            if orbit_safe_policy:
+            if orbit_safe_policy and matcher_type == "sequential":
                 append_log_line(
                     project_id,
                     "🛡️ Orbit-safe profile: "
                     f"{orbit_safe_policy['profile_name']} | overlap={matcher_params['SequentialMatching.overlap']} "
+                    f"| min_inliers={orbit_safe_policy['mapper_params']['Mapper.abs_pose_min_num_inliers']} "
+                    f"| min_ratio={orbit_safe_policy['mapper_params']['Mapper.abs_pose_min_inlier_ratio']}",
+                )
+            elif orbit_safe_policy:
+                append_log_line(
+                    project_id,
+                    "🛡️ Orbit-safe mapper profile: "
+                    f"{orbit_safe_policy['profile_name']} | matcher={matcher_type} "
                     f"| min_inliers={orbit_safe_policy['mapper_params']['Mapper.abs_pose_min_num_inliers']} "
                     f"| min_ratio={orbit_safe_policy['mapper_params']['Mapper.abs_pose_min_inlier_ratio']}",
                 )

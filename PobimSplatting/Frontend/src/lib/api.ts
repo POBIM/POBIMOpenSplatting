@@ -458,6 +458,20 @@ export interface TrainingPreview {
   preview_url: string;
 }
 
+export interface TrainingLivePreview {
+  project_id: string;
+  camera_id?: number;
+  image_name: string;
+  filename?: string;
+  render_url?: string;
+  reference_url?: string | null;
+  iteration?: number;
+  total_iterations?: number;
+  progress_percent?: number;
+  version?: number;
+  updated_at?: string;
+}
+
 export interface UploadConfig {
   project_name?: string;
   project_description?: string;
@@ -902,6 +916,17 @@ export const api = {
 
   getTrainingPreview: async (id: string) => {
     const response = await apiClient.get(`/api/project/${id}/training_preview`);
+    return response.data;
+  },
+
+  selectTrainingLivePreviewFrame: async (
+    id: string,
+    selection: { image_name?: string; camera_id?: number }
+  ): Promise<TrainingLivePreview> => {
+    const response = await apiClient.post(
+      `/api/project/${id}/training_live_preview/select`,
+      selection
+    );
     return response.data;
   },
 

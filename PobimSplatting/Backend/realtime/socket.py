@@ -47,6 +47,7 @@ def init_socketio(app) -> Optional["FlaskSocketIO"]:
     register_emitters(
         emit_stage_progress=_emit_stage_progress,
         emit_log_message=_emit_log_message,
+        emit_training_live_preview=_emit_training_live_preview,
     )
     _register_handlers()
     return socketio
@@ -77,6 +78,10 @@ def _emit_stage_progress(project_id: str, stage_key: str, progress: int, details
 def _emit_log_message(project_id: str, message: str, timestamp: str) -> None:
     payload = {"message": message, "timestamp": timestamp}
     _emit_progress_update(project_id, "log_message", payload)
+
+
+def _emit_training_live_preview(project_id: str, payload: Dict[str, Any]) -> None:
+    _emit_progress_update(project_id, "training_live_preview", payload)
 
 
 def _register_handlers() -> None:

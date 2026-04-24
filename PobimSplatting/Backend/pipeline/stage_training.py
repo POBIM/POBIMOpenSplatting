@@ -17,6 +17,7 @@ from ..core.commands import run_command_with_logs
 from ..core.projects import (
     append_log_line,
     emit_stage_progress,
+    emit_training_live_preview,
     save_projects_db,
     update_stage_detail,
     update_reconstruction_framework,
@@ -30,6 +31,9 @@ logger = logging.getLogger(__name__)
 TRAINING_PREVIEW_FILENAME = "preview_latest.ply"
 TRAINING_PREVIEW_METADATA_FILENAME = "preview_latest.json"
 TRAINING_PREVIEW_UPDATE_PERCENT_STEP = 5
+TRAINING_LIVE_RENDER_DIRNAME = "live_training_preview"
+TRAINING_LIVE_CONTROL_FILENAME = "live_training_preview_control.json"
+TRAINING_LIVE_RENDER_PERCENT_STEP = 2
 
 
 def _choose_training_preview_save_every(iteration_total: int) -> int:
@@ -46,6 +50,64 @@ def _calculate_progress_percent(current: int, total: int) -> int:
     if total <= 0:
         return 0
     return max(0, min(100, int((min(current, total) / total) * 100)))
+
+
+def _reference_url_for_project_image(project_id: str, image_name: str) -> str | None:
+    if not image_name:
+        return None
+
+    project_path = app_config.UPLOAD_FOLDER / project_id
+    for folder, route in (
+        ("images", "frame_preview"),
+        ("training_images", "training_frame_preview"),
+    ):
+        candidate = project_path / folder / image_name
+        if candidate.exists():
+            try:
+                version = candidate.stat().st_mtime_ns
+            except FileNotFoundError:
+                version = 0
+            return f"/api/{route}/{project_id}/{image_name}?v={version}"
+    return None
+
+
+def _write_training_live_control(project_id: str, control_path: Path) -> None:
+    control_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "project_id": project_id,
+        "camera_id": 0,
+        "image_name": "",
+        "enabled": True,
+        "version": int(datetime.now().timestamp() * 1_000_000_000),
+        "updated_at": datetime.now().isoformat(),
+    }
+    temp_path = control_path.with_suffix(".tmp")
+    temp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    os.replace(temp_path, control_path)
+
+
+def _build_training_live_payload(project_id: str, render_data: dict) -> dict:
+    filename = str(render_data.get("filename") or "")
+    image_name = str(render_data.get("image_name") or "")
+    render_path = app_config.RESULTS_FOLDER / project_id / TRAINING_LIVE_RENDER_DIRNAME / filename
+    try:
+        render_version = render_path.stat().st_mtime_ns
+    except FileNotFoundError:
+        render_version = int(datetime.now().timestamp() * 1_000_000_000)
+
+    return {
+        "project_id": project_id,
+        "camera_id": render_data.get("camera_id"),
+        "image_name": image_name,
+        "filename": filename,
+        "render_url": f"/api/project/{project_id}/training_live_preview/{filename}?v={render_version}",
+        "reference_url": _reference_url_for_project_image(project_id, image_name),
+        "iteration": render_data.get("iteration"),
+        "total_iterations": render_data.get("total_iterations"),
+        "progress_percent": render_data.get("progress_percent"),
+        "version": render_data.get("version", render_version),
+        "updated_at": datetime.now().isoformat(),
+    }
 
 
 def _write_training_preview_metadata(
@@ -249,6 +311,12 @@ def run_opensplat_training(
         preview_metadata_path = (
             paths["results_path"] / TRAINING_PREVIEW_METADATA_FILENAME
         )
+        live_render_dir = paths["results_path"] / TRAINING_LIVE_RENDER_DIRNAME
+        live_render_control_path = (
+            paths["results_path"] / TRAINING_LIVE_CONTROL_FILENAME
+        )
+        live_render_dir.mkdir(parents=True, exist_ok=True)
+        _write_training_live_control(project_id, live_render_control_path)
         preview_save_every = _choose_training_preview_save_every(enhanced_iterations)
         cmd = [
             str(opensplat_binary),
@@ -259,11 +327,21 @@ def run_opensplat_training(
             str(output_ply.absolute()),
             "--save-every",
             str(preview_save_every),
+            "--live-render-dir",
+            str(live_render_dir.absolute()),
+            "--live-render-control",
+            str(live_render_control_path.absolute()),
+            "--live-render-every-percent",
+            str(TRAINING_LIVE_RENDER_PERCENT_STEP),
         ]
         append_log_line(
             project_id,
             f"🪟 Training preview snapshots enabled every {TRAINING_PREVIEW_UPDATE_PERCENT_STEP}% "
             f"({preview_save_every} iterations per update)",
+        )
+        append_log_line(
+            project_id,
+            f"📡 Native live comparison renders enabled every {TRAINING_LIVE_RENDER_PERCENT_STEP}%",
         )
 
         crop_size = config.get("crop_size", 0)
@@ -458,6 +536,22 @@ def run_opensplat_training(
             _update_splats_from_line(line)
             line_stripped = line.strip()
             if line_stripped:
+                if line_stripped.startswith("LIVE_RENDER "):
+                    try:
+                        render_data = json.loads(
+                            line_stripped.removeprefix("LIVE_RENDER ").strip()
+                        )
+                        live_payload = _build_training_live_payload(
+                            project_id, render_data
+                        )
+                        emit_training_live_preview(project_id, live_payload)
+                    except Exception as exc:
+                        append_log_line(
+                            project_id,
+                            f"[live_render error] {exc}",
+                        )
+                    return
+
                 preview_candidate_path = None
                 direct_candidate = Path(line_stripped)
                 if direct_candidate.suffix.lower() == ".ply" and direct_candidate.exists():

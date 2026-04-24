@@ -80,6 +80,8 @@ def normalize_matcher_type(matcher_type):
     normalized = str(matcher_type).strip().lower()
     if normalized in {"sequential", "exhaustive", "vocab_tree"}:
         return normalized
+    if normalized in {"tree", "vocabulary_tree", "vocabulary-tree"}:
+        return "vocab_tree"
 
     return None
 

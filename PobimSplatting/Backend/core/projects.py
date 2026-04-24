@@ -34,6 +34,7 @@ _emit_stage_progress: Optional[
     Callable[[str, str, int, Optional[Dict[str, Any]]], None]
 ] = None
 _emit_log_message: Optional[Callable[[str, str, str], None]] = None
+_emit_training_live_preview: Optional[Callable[[str, Dict[str, Any]], None]] = None
 
 
 def register_emitters(
@@ -42,14 +43,16 @@ def register_emitters(
         Callable[[str, str, int, Optional[Dict[str, Any]]], None]
     ] = None,
     emit_log_message: Optional[Callable[[str, str, str], None]] = None,
+    emit_training_live_preview: Optional[Callable[[str, Dict[str, Any]], None]] = None,
 ) -> None:
     """
     Register callbacks used to push realtime updates.
     """
 
-    global _emit_stage_progress, _emit_log_message
+    global _emit_stage_progress, _emit_log_message, _emit_training_live_preview
     _emit_stage_progress = emit_stage_progress
     _emit_log_message = emit_log_message
+    _emit_training_live_preview = emit_training_live_preview
 
 
 # ----------------------------------------------------------------------------
@@ -345,6 +348,12 @@ def emit_log_message(project_id: str, message: str) -> None:
     """Proxy for emitting log messages. Kept for backwards compatibility."""
     if _emit_log_message:
         _emit_log_message(project_id, message, datetime.now().isoformat())
+
+
+def emit_training_live_preview(project_id: str, payload: Dict[str, Any]) -> None:
+    """Proxy for emitting native live training preview renders."""
+    if _emit_training_live_preview:
+        _emit_training_live_preview(project_id, payload)
 
 
 # ----------------------------------------------------------------------------

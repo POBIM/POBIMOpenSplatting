@@ -1,4 +1,7 @@
 #include <filesystem>
+#include <fstream>
+#include <algorithm>
+#include <cctype>
 #include <nlohmann/json.hpp>
 #include "opensplat.hpp"
 #include "input_data.hpp"
@@ -14,6 +17,101 @@
 namespace fs = std::filesystem;
 using namespace torch::indexing;
 
+struct LiveRenderControl {
+    int cameraId = -1;
+    std::string imageName;
+    long long version = 0;
+    bool enabled = false;
+};
+
+static int progressPercent(size_t step, int totalSteps){
+    if (totalSteps <= 0) return 0;
+    const size_t total = static_cast<size_t>(totalSteps);
+    return std::max(0, std::min(100, static_cast<int>((std::min(step, total) * 100) / total)));
+}
+
+static LiveRenderControl readLiveRenderControl(const std::string &controlPath){
+    LiveRenderControl control;
+    if (controlPath.empty() || !fs::exists(controlPath)) return control;
+
+    try {
+        std::ifstream input(controlPath);
+        json payload = json::parse(input, nullptr, false);
+        if (payload.is_discarded()) return control;
+
+        control.cameraId = payload.value("camera_id", -1);
+        control.imageName = payload.value("image_name", std::string());
+        control.version = payload.value("version", 0LL);
+        control.enabled = payload.value("enabled", true);
+    } catch (...) {
+        return LiveRenderControl();
+    }
+
+    return control;
+}
+
+static int findLiveRenderCameraIndex(const std::vector<Camera> &cams, const LiveRenderControl &control){
+    if (!control.imageName.empty()) {
+        for (size_t i = 0; i < cams.size(); i++) {
+            if (fs::path(cams[i].filePath).filename().string() == control.imageName) {
+                return static_cast<int>(i);
+            }
+        }
+    }
+
+    if (control.cameraId >= 0 && control.cameraId < static_cast<int>(cams.size())) {
+        return control.cameraId;
+    }
+
+    return cams.empty() ? -1 : 0;
+}
+
+static std::string cameraImageName(const Camera &cam){
+    return fs::path(cam.filePath).filename().string();
+}
+
+static std::string safeRenderStem(const std::string &name){
+    std::string stem = fs::path(name).stem().string();
+    if (stem.empty()) stem = "camera";
+    for (char &ch : stem) {
+        if (!std::isalnum(static_cast<unsigned char>(ch)) && ch != '-' && ch != '_') {
+            ch = '_';
+        }
+    }
+    return stem;
+}
+
+static void writeLiveRender(Model &model,
+                            Camera &cam,
+                            int cameraIndex,
+                            size_t step,
+                            int totalSteps,
+                            const fs::path &renderDir,
+                            const LiveRenderControl &control){
+    fs::create_directories(renderDir);
+
+    const std::string imageName = cameraImageName(cam);
+    const std::string filename = "live_" + safeRenderStem(imageName) + "_" + std::to_string(step) + ".jpg";
+    const fs::path outputPath = renderDir / filename;
+
+    torch::Tensor rgb = model.forward(cam, static_cast<int>(step));
+    cv::Mat image = tensorToImage(rgb.detach().cpu());
+    cv::cvtColor(image, image, cv::COLOR_RGB2BGR);
+    cv::imwrite(outputPath.string(), image);
+
+    json payload = {
+        {"camera_id", cameraIndex},
+        {"image_name", imageName},
+        {"filename", filename},
+        {"iteration", step},
+        {"total_iterations", totalSteps},
+        {"progress_percent", progressPercent(step, totalSteps)},
+        {"version", control.version},
+    };
+
+    std::cout << "LIVE_RENDER " << payload.dump() << std::endl;
+}
+
 int main(int argc, char *argv[]){
     cxxopts::Options options("opensplat", "Open Source 3D Gaussian Splats generator - " APP_VERSION);
     options.add_options()
@@ -24,6 +122,9 @@ int main(int argc, char *argv[]){
         ("val", "Withhold a camera shot for validating the scene loss")
         ("val-image", "Filename of the image to withhold for validating scene loss", cxxopts::value<std::string>()->default_value("random"))
         ("val-render", "Path of the directory where to render validation images", cxxopts::value<std::string>()->default_value(""))
+        ("live-render-dir", "Directory where live training comparison renders should be written", cxxopts::value<std::string>()->default_value(""))
+        ("live-render-control", "Path to JSON control file for selecting the live render camera", cxxopts::value<std::string>()->default_value(""))
+        ("live-render-every-percent", "Render live training comparison every N percent of progress", cxxopts::value<int>()->default_value("2"))
         ("keep-crs", "Retain the project input's coordinate reference system")
         ("cpu", "Force CPU execution")
         ("has-visualization", "Enable the Pangolin visualizer when visualization support is built")
@@ -82,6 +183,10 @@ int main(int argc, char *argv[]){
     const std::string valImage = result["val-image"].as<std::string>();
     const std::string valRender = result["val-render"].as<std::string>();
     if (!valRender.empty() && !fs::exists(valRender)) fs::create_directories(valRender);
+    const std::string liveRenderDir = result["live-render-dir"].as<std::string>();
+    const std::string liveRenderControlPath = result["live-render-control"].as<std::string>();
+    const int liveRenderEveryPercent = std::max(1, result["live-render-every-percent"].as<int>());
+    if (!liveRenderDir.empty() && !fs::exists(liveRenderDir)) fs::create_directories(liveRenderDir);
     const bool keepCrs = result.count("keep-crs") > 0;
     const bool hasVisualization = result.count("has-visualization") > 0;
     const float downScaleFactor = (std::max)(result["downscale-factor"].as<float>(), 1.0f);
@@ -183,6 +288,9 @@ int main(int argc, char *argv[]){
             step = model.loadPly(resume) + 1;
         }
 
+        long long lastLiveRenderControlVersion = -1;
+        int lastLiveRenderMilestone = -1;
+
         for (; step <= numIters; step++){
             Camera& cam = cams[ camsIter.next() ];
 
@@ -270,6 +378,23 @@ int main(int argc, char *argv[]){
                 cv::Mat image = tensorToImage(rgb.detach().cpu());
                 cv::cvtColor(image, image, cv::COLOR_RGB2BGR);
                 cv::imwrite((fs::path(valRender) / (std::to_string(step) + ".png")).string(), image);
+            }
+
+            if (!liveRenderDir.empty() && !liveRenderControlPath.empty()){
+                LiveRenderControl control = readLiveRenderControl(liveRenderControlPath);
+                if (control.enabled) {
+                    const int milestone = progressPercent(step, numIters) / liveRenderEveryPercent;
+                    const bool selectionChanged = control.version != lastLiveRenderControlVersion;
+                    const bool milestoneChanged = milestone > lastLiveRenderMilestone;
+                    if (selectionChanged || milestoneChanged) {
+                        int liveCamIndex = findLiveRenderCameraIndex(cams, control);
+                        if (liveCamIndex >= 0) {
+                            writeLiveRender(model, cams[liveCamIndex], liveCamIndex, step, numIters, fs::path(liveRenderDir), control);
+                            lastLiveRenderControlVersion = control.version;
+                            lastLiveRenderMilestone = milestone;
+                        }
+                    }
+                }
             }
 
 #ifdef USE_VISUALIZATION

@@ -2337,7 +2337,7 @@ export default function ProjectDetailPage() {
                       <p className="brutal-label mb-1">Live Training View</p>
                       <h2 className="brutal-h3">Training Splat Preview</h2>
                       <p className="mt-2 text-sm text-[var(--text-secondary)]">
-                        Preview the latest Gaussian splat snapshot during training without leaving the project page.
+                        Compare the native live render against the registered reference frame during training.
                       </p>
                     </div>
                     <div className="flex flex-wrap gap-2">
@@ -2362,8 +2362,8 @@ export default function ProjectDetailPage() {
                       {trainingPreview
                         ? (trainingPreview.is_final
                             ? 'Final training preview'
-                            : `Latest preview at ${trainingPreview.progress_percent ?? 0}% training`)
-                        : 'Waiting for the first training preview snapshot...'}
+                            : `Latest PLY snapshot at ${trainingPreview.progress_percent ?? 0}% training`)
+                        : 'Waiting for native live render updates...'}
                     </span>
                     {trainingPreview?.update_interval_percent ? (
                       <span className="brutal-badge">
@@ -2381,29 +2381,32 @@ export default function ProjectDetailPage() {
                     )}
                   </div>
 
-                  <div className="brutal-card h-[min(760px,calc(100vh-10rem))] min-h-[520px] overflow-hidden p-0">
-                    {trainingPreview?.preview_url ? (
-                      <Suspense
-                        fallback={
-                          <div className="flex h-full items-center justify-center">
-                            <Loader className="h-8 w-8 animate-spin text-[var(--ink)]" />
-                          </div>
+                  <div className="brutal-card relative h-[min(760px,calc(100vh-10rem))] min-h-[520px] overflow-hidden p-0">
+                    <Suspense
+                      fallback={
+                        <div className="flex h-full items-center justify-center">
+                          <Loader className="h-8 w-8 animate-spin text-[var(--ink)]" />
+                        </div>
+                      }
+                    >
+                      <TrainingSplatPreview
+                        projectId={projectId}
+                        plyUrl={trainingPreview?.preview_url}
+                        isTrainingLive={Boolean(trainingPreview?.is_live)}
+                        referenceFrames={hasSeparateTraining ? [...framePreview, ...trainingFramePreview] : framePreview}
+                        cameraPoses={liveCameraPoses}
+                        onOpenFullViewer={
+                          trainingPreview?.preview_url
+                            ? () => router.push(`/viewer?file=${encodeURIComponent(trainingPreview.preview_url)}`)
+                            : undefined
                         }
-                      >
-                        <TrainingSplatPreview
-                          plyUrl={trainingPreview.preview_url}
-                          referenceFrames={hasSeparateTraining ? trainingFramePreview : framePreview}
-                          cameraPoses={liveCameraPoses}
-                          onOpenFullViewer={() => router.push(`/viewer?file=${encodeURIComponent(trainingPreview.preview_url)}`)}
-                        />
-                      </Suspense>
-                    ) : (
-                      <div className="flex h-full items-center justify-center px-6 text-center text-sm text-[var(--text-secondary)]">
-                        {trainingPreviewLoading
-                          ? 'Loading training preview...'
-                          : trainingPreviewError
-                            ? trainingPreviewError
-                            : 'Training preview is not available yet.'}
+                      />
+                    </Suspense>
+                    {(trainingPreviewLoading || trainingPreviewError || liveCameraPoseLoading || liveCameraPoseError) && (
+                      <div className="pointer-events-none absolute bottom-4 left-4 z-20 max-w-lg border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-card)] px-3 py-2 text-xs font-bold text-[var(--ink)] shadow-[var(--shadow-sm)]">
+                        {trainingPreviewLoading || liveCameraPoseLoading
+                          ? 'Loading live training context...'
+                          : trainingPreviewError || liveCameraPoseError}
                       </div>
                     )}
                   </div>

@@ -248,6 +248,22 @@ def run_sparse_reconstruction_stage(
     sync_reconstruction_framework(
         project_id, config, colmap_cfg, phase="sparse_reconstruction"
     )
+    if (
+        colmap_cfg.get("recovery_matching_pass")
+        and not colmap_cfg.get("pre_sparse_recovery_attempted")
+    ):
+        colmap_cfg["pre_sparse_recovery_attempted"] = True
+        append_log_line(
+            project_id,
+            "🧠 Running the queued recovery matching pass before mapper registration starts",
+        )
+        helpers["clear_sparse_reconstruction_outputs"](paths["sparse_path"])
+        colmap_cfg = helpers["run_orbit_safe_bridge_recovery_matching_pass"](
+            project_id, paths, config, colmap_exe, colmap_cfg, has_cuda
+        )
+        return run_sparse_reconstruction_stage(
+            project_id, paths, config, colmap_cfg, helpers=helpers
+        )
 
     sfm_engine = normalize_sfm_engine(config.get("sfm_engine", "glomap"))
     sparse_retry_sfm_engine = config.get("sparse_retry_sfm_engine")

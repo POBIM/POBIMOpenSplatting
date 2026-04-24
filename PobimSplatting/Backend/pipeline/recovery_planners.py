@@ -874,11 +874,18 @@ def refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id=None):
     if not colmap_cfg.get('orbit_safe_mode'):
         return colmap_cfg
 
+    if colmap_cfg.get('matcher_type') != 'sequential':
+        return colmap_cfg
+
     geometry_stats = analyze_pair_geometry_stats(paths['database_path'])
     if not geometry_stats:
         return colmap_cfg
 
     original_matcher_params = dict(colmap_cfg.get('matcher_params') or {})
+    preserved_floor = merge_no_regression_floors(
+        colmap_cfg.get('no_regression_floor'),
+        capture_no_regression_floor(colmap_cfg),
+    )
     existing_final_recovery_matching_pass = colmap_cfg.get('final_recovery_matching_pass')
 
     profile_rank = {
@@ -933,6 +940,7 @@ def refine_orbit_safe_profile_from_geometry(paths, colmap_cfg, project_id=None):
     colmap_cfg['matcher_params'] = dict(refined_policy['matcher_params'])
     colmap_cfg['mapper_params'] = dict(refined_policy['mapper_params'])
     colmap_cfg['recovery_matching_pass'] = None
+    colmap_cfg['no_regression_floor'] = preserved_floor
     colmap_cfg['final_recovery_matching_pass'] = (
         existing_final_recovery_matching_pass
         if existing_final_recovery_matching_pass and not colmap_cfg.get('loop_detection_fallback_attempted')

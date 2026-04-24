@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -57,6 +58,9 @@ video_processor = VideoProcessor()
 TRAINING_PREVIEW_FILENAME = "preview_latest.ply"
 TRAINING_PREVIEW_METADATA_FILENAME = "preview_latest.json"
 LIVE_PREVIEW_PERCENT_STEP = 5
+TRAINING_LIVE_RENDER_DIRNAME = "live_training_preview"
+TRAINING_LIVE_CONTROL_FILENAME = "live_training_preview_control.json"
+TRAINING_LIVE_RENDER_PERCENT_STEP = 2
 
 
 def _calculate_progress_percent(current: int, total: int) -> int:
@@ -125,6 +129,98 @@ def _get_training_preview_paths(project_id: str) -> tuple[Path, Path]:
         results_dir / TRAINING_PREVIEW_FILENAME,
         results_dir / TRAINING_PREVIEW_METADATA_FILENAME,
     )
+
+
+def _get_training_live_preview_paths(project_id: str) -> tuple[Path, Path]:
+    results_dir = app_config.RESULTS_FOLDER / project_id
+    return (
+        results_dir / TRAINING_LIVE_RENDER_DIRNAME,
+        results_dir / TRAINING_LIVE_CONTROL_FILENAME,
+    )
+
+
+def _project_image_reference_url(project_id: str, image_name: str) -> str | None:
+    if not image_name:
+        return None
+
+    project_path = app_config.UPLOAD_FOLDER / project_id
+    for folder, route in (
+        ("images", "frame_preview"),
+        ("training_images", "training_frame_preview"),
+    ):
+        candidate = project_path / folder / image_name
+        if candidate.exists():
+            return _preview_url_with_version(
+                f"/api/{route}/{project_id}/{image_name}",
+                candidate,
+            )
+    return None
+
+
+def _safe_live_render_stem(image_name: str) -> str:
+    stem = Path(image_name).stem or "camera"
+    return "".join(
+        char if char.isalnum() or char in {"-", "_"} else "_" for char in stem
+    )
+
+
+def _latest_training_live_render(project_id: str, image_name: str) -> dict | None:
+    render_dir, _ = _get_training_live_preview_paths(project_id)
+    if not image_name or not render_dir.exists():
+        return None
+
+    prefix = f"live_{_safe_live_render_stem(image_name)}_"
+    candidates = sorted(
+        [
+            child
+            for child in render_dir.glob(f"{prefix}*.jpg")
+            if child.is_file()
+        ],
+        key=lambda child: (child.stat().st_mtime_ns, child.name),
+        reverse=True,
+    )
+    if not candidates:
+        return None
+
+    latest = candidates[0]
+    stat = latest.stat()
+    iteration = None
+    match = re.search(r"_(\d+)\.jpg$", latest.name)
+    if match:
+        iteration = int(match.group(1))
+
+    return {
+        "filename": latest.name,
+        "render_url": f"/api/project/{project_id}/training_live_preview/{latest.name}?v={stat.st_mtime_ns}",
+        "iteration": iteration,
+        "version": stat.st_mtime_ns,
+        "updated_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+    }
+
+
+def _write_training_live_control(
+    project_id: str,
+    *,
+    camera_id: int,
+    image_name: str,
+    enabled: bool = True,
+) -> dict:
+    render_dir, control_path = _get_training_live_preview_paths(project_id)
+    render_dir.mkdir(parents=True, exist_ok=True)
+    control_path.parent.mkdir(parents=True, exist_ok=True)
+    version = int(datetime.now().timestamp() * 1_000_000_000)
+    payload = {
+        "project_id": project_id,
+        "camera_id": camera_id,
+        "image_name": image_name,
+        "enabled": enabled,
+        "version": version,
+        "updated_at": datetime.now().isoformat(),
+    }
+    temp_path = control_path.with_suffix(".tmp")
+    temp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    os.replace(temp_path, control_path)
+    return payload
 
 
 def _load_training_preview_metadata(project_id: str):
@@ -2091,6 +2187,82 @@ def get_training_preview_file(project_id):
             f"Unexpected error serving training preview for project {project_id}"
         )
         return jsonify({"error": str(exc)}), 500
+
+
+@api_bp.route("/project/<project_id>/training_live_preview/select", methods=["POST"])
+def select_training_live_preview(project_id):
+    if project_id not in project_store.processing_status:
+        return jsonify({"error": "Project not found"}), 404
+
+    payload = request.get_json(silent=True) or {}
+    requested_image_name = str(payload.get("image_name") or "").strip()
+    requested_camera_id = payload.get("camera_id")
+
+    try:
+        _, cameras, _, _, _ = _load_project_camera_poses(project_id, prefer_live=True)
+    except FileNotFoundError as exc:
+        return jsonify({"error": str(exc)}), 404
+    except Exception as exc:
+        logger.exception("Failed to load camera poses for live preview selection")
+        return jsonify({"error": str(exc)}), 500
+
+    selected_index = None
+    if requested_image_name:
+        for index, camera in enumerate(cameras):
+            if camera.get("image_name") == requested_image_name:
+                selected_index = index
+                break
+
+    if selected_index is None and requested_camera_id is not None:
+        try:
+            candidate_index = int(requested_camera_id)
+        except (TypeError, ValueError):
+            candidate_index = -1
+        if 0 <= candidate_index < len(cameras):
+            selected_index = candidate_index
+
+    if selected_index is None:
+        return jsonify({"error": "Registered camera not found"}), 404
+
+    selected_camera = cameras[selected_index]
+    image_name = selected_camera.get("image_name") or requested_image_name
+    control = _write_training_live_control(
+        project_id,
+        camera_id=selected_index,
+        image_name=image_name,
+    )
+    reference_url = _project_image_reference_url(project_id, image_name)
+    latest_render = _latest_training_live_render(project_id, image_name) or {}
+
+    return jsonify(
+        {
+            "project_id": project_id,
+            "camera_id": selected_index,
+            "image_name": image_name,
+            "reference_url": reference_url,
+            "version": control["version"],
+            "updated_at": control["updated_at"],
+            **latest_render,
+        }
+    )
+
+
+@api_bp.route("/project/<project_id>/training_live_preview/<path:filename>", methods=["GET"])
+def get_training_live_preview_file(project_id, filename):
+    if project_id not in project_store.processing_status:
+        return jsonify({"error": "Project not found"}), 404
+
+    render_dir, _ = _get_training_live_preview_paths(project_id)
+    render_path = (render_dir / filename).resolve()
+    try:
+        render_path.relative_to(render_dir.resolve())
+    except ValueError:
+        return jsonify({"error": "Invalid render path"}), 400
+
+    if not render_path.exists():
+        return jsonify({"error": "Live training preview not found"}), 404
+
+    return _send_uncached_preview(render_path)
 
 
 @api_bp.route("/project/<project_id>/export_mesh", methods=["POST"])

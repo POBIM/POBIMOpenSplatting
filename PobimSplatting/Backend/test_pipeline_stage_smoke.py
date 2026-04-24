@@ -7,6 +7,8 @@ import unittest
 from unittest import mock
 
 from PobimSplatting.Backend.pipeline import runner
+from PobimSplatting.Backend.pipeline import config_builders
+from PobimSplatting.Backend.pipeline import recovery_planners
 from PobimSplatting.Backend.pipeline import runtime_support
 from PobimSplatting.Backend.pipeline import stage_features, stage_sparse, stage_training
 
@@ -197,6 +199,45 @@ class PipelineStageSmokeTests(unittest.TestCase):
         self.assertEqual(plan['mode'], 'cpu')
         self.assertEqual(plan['runtime_summary'], 'CPU bundle adjustment fallback')
 
+    def test_normalize_matcher_type_accepts_tree_alias(self):
+        self.assertEqual(runtime_support.normalize_matcher_type('tree'), 'vocab_tree')
+        self.assertEqual(
+            runtime_support.normalize_matcher_type('vocabulary-tree'),
+            'vocab_tree',
+        )
+
+    def test_get_colmap_config_honors_vocab_tree_override_in_orbit_safe_mode(self):
+        orbit_safe_policy = {
+            'profile_name': 'bridge-balanced',
+            'mapper_params': {
+                'Mapper.structure_less_registration_fallback': '1',
+                'Mapper.abs_pose_max_error': '12',
+                'Mapper.abs_pose_min_num_inliers': '14',
+                'Mapper.abs_pose_min_inlier_ratio': '0.10',
+                'Mapper.max_reg_trials': '12',
+            },
+            'min_num_matches_cap': 12,
+            'init_num_trials_floor': 200,
+            'capture_pattern': {'looks_like_video_orbit': True},
+            'bridge_risk_score': 2,
+        }
+
+        colmap_cfg = config_builders.get_colmap_config(
+            163,
+            quality_mode='hard',
+            preferred_matcher_type='vocab_tree',
+            orbit_safe_mode=True,
+            orbit_safe_policy=orbit_safe_policy,
+        )
+
+        self.assertEqual(colmap_cfg['matcher_type'], 'vocab_tree')
+        self.assertEqual(colmap_cfg['orbit_safe_mode'], True)
+        self.assertEqual(colmap_cfg['max_num_models'], 1)
+        self.assertEqual(
+            colmap_cfg['mapper_params']['Mapper.abs_pose_min_num_inliers'],
+            '14',
+        )
+
     def test_stage_sparse_logs_runtime_bundle_adjustment_mode(self):
         ba_plan = {
             'summary': 'GPU bundle adjustment via DENSE_SCHUR',
@@ -226,6 +267,143 @@ class PipelineStageSmokeTests(unittest.TestCase):
             [
                 mock.call('project', '[COLMAP] Bundle adjustment phase started: GPU dense BA (DENSE_SCHUR)'),
             ],
+        )
+
+    def test_refine_orbit_safe_profile_preserves_current_mapper_floor(self):
+        geometry_stats = {
+            'image_count': 409,
+            'bridge_min': 0,
+            'bridge_p10': 18,
+            'adjacent_p10': 20,
+            'weak_boundary_ratio': 0.1,
+            'weak_boundary_count': 3,
+            'zero_boundary_count': 3,
+            'weak_boundaries': [],
+        }
+        colmap_cfg = {
+            'orbit_safe_mode': True,
+            'orbit_safe_profile': 'bridge-recovery',
+            'matcher_type': 'sequential',
+            'matcher_params': {
+                'SequentialMatching.overlap': '61',
+                'SequentialMatching.quadratic_overlap': '1',
+                'SequentialMatching.loop_detection': '0',
+            },
+            'mapper_params': {
+                'Mapper.structure_less_registration_fallback': '1',
+                'Mapper.abs_pose_max_error': '16',
+                'Mapper.abs_pose_min_num_inliers': '10',
+                'Mapper.abs_pose_min_inlier_ratio': '0.06',
+                'Mapper.max_reg_trials': '24',
+            },
+            'min_num_matches': 8,
+            'init_num_trials': 5000,
+            'bridge_risk_score': 1,
+            'capture_pattern': {},
+            'no_regression_floor': None,
+        }
+
+        with mock.patch.object(
+            recovery_planners,
+            'analyze_pair_geometry_stats',
+            return_value=geometry_stats,
+        ), mock.patch.object(
+            recovery_planners,
+            'make_orbit_safe_policy',
+            return_value={
+                'profile_name': 'bridge-recovery',
+                'matcher_params': {
+                    'SequentialMatching.overlap': '52',
+                    'SequentialMatching.quadratic_overlap': '1',
+                    'SequentialMatching.loop_detection': '0',
+                },
+                'mapper_params': {
+                    'Mapper.structure_less_registration_fallback': '1',
+                    'Mapper.abs_pose_max_error': '14',
+                    'Mapper.abs_pose_min_num_inliers': '12',
+                    'Mapper.abs_pose_min_inlier_ratio': '0.08',
+                    'Mapper.max_reg_trials': '16',
+                },
+                'min_num_matches_cap': 8,
+                'init_num_trials_floor': 300,
+            },
+        ):
+            refined = recovery_planners.refine_orbit_safe_profile_from_geometry(
+                {'database_path': '/tmp/test.db'},
+                colmap_cfg,
+            )
+
+        self.assertEqual(refined['mapper_params']['Mapper.max_reg_trials'], '24')
+        self.assertEqual(refined['mapper_params']['Mapper.abs_pose_min_inlier_ratio'], '0.06')
+        self.assertEqual(refined['init_num_trials'], 5000)
+
+    def test_refine_orbit_safe_profile_skips_non_sequential_matcher_override(self):
+        colmap_cfg = {
+            'orbit_safe_mode': True,
+            'matcher_type': 'vocab_tree',
+            'matcher_params': {'VocabTreeMatching.num_images': '100'},
+            'mapper_params': {'Mapper.max_reg_trials': '12'},
+        }
+
+        with mock.patch.object(
+            recovery_planners,
+            'analyze_pair_geometry_stats',
+        ) as analyze_pair_geometry_stats:
+            refined = recovery_planners.refine_orbit_safe_profile_from_geometry(
+                {'database_path': '/tmp/test.db'},
+                colmap_cfg,
+            )
+
+        self.assertIs(refined, colmap_cfg)
+        self.assertEqual(refined['matcher_type'], 'vocab_tree')
+        analyze_pair_geometry_stats.assert_not_called()
+
+    def test_stage_sparse_runs_queued_recovery_before_mapper(self):
+        base_cfg = {
+            'orbit_safe_mode': True,
+            'matcher_type': 'sequential',
+            'matcher_params': {},
+            'mapper_params': {},
+            'min_num_matches': 6,
+            'init_num_trials': 320,
+            'capture_pattern': {},
+            'bridge_risk_score': 1,
+        }
+        queued_cfg = dict(
+            base_cfg,
+            recovery_matching_pass={
+                'matcher_params': {'SequentialMatching.overlap': '61'},
+                'reason': 'queued before mapper',
+            },
+        )
+        helpers = {
+            'get_colmap_config_for_pipeline': mock.Mock(
+                return_value=(12, dict(base_cfg), '/usr/bin/colmap', False)
+            ),
+            'refine_orbit_safe_profile_from_geometry': mock.Mock(return_value=queued_cfg),
+            'clear_sparse_reconstruction_outputs': mock.Mock(),
+            'run_orbit_safe_bridge_recovery_matching_pass': mock.Mock(
+                side_effect=RuntimeError('queued recovery invoked')
+            ),
+        }
+
+        with mock.patch.object(stage_sparse, 'sync_reconstruction_framework'), mock.patch.object(
+            stage_sparse,
+            'append_log_line',
+        ) as append_log_line:
+            with self.assertRaisesRegex(RuntimeError, 'queued recovery invoked'):
+                stage_sparse.run_sparse_reconstruction_stage(
+                    'project',
+                    {'sparse_path': '/tmp/sparse'},
+                    {'sfm_engine': 'colmap', 'force_cpu_sparse_reconstruction': True},
+                    helpers=helpers,
+                )
+
+        helpers['clear_sparse_reconstruction_outputs'].assert_called_once_with('/tmp/sparse')
+        helpers['run_orbit_safe_bridge_recovery_matching_pass'].assert_called_once()
+        append_log_line.assert_any_call(
+            'project',
+            '🧠 Running the queued recovery matching pass before mapper registration starts',
         )
 
 

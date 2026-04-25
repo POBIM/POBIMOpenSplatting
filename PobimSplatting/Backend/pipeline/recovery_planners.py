@@ -29,6 +29,7 @@ from .orbit_policy import (
 from .runtime_support import (
     get_gpu_total_vram_mb,
     is_gpu_matching_error_text,
+    normalize_matcher_type,
     resolve_colmap_feature_pipeline_profile,
     should_log_subprocess_line,
 )
@@ -328,6 +329,131 @@ def run_automatic_split_retry(
         project_id, paths, config, rerun_colmap_cfg
     )
     return rerun_sparse_reconstruction_stage(project_id, paths, config, rerun_colmap_cfg)
+
+
+def _select_matcher_fallback_retry_type(config, num_images):
+    configured_retry_type = normalize_matcher_type(
+        (config or {}).get('matcher_fallback_retry_type')
+    )
+    if configured_retry_type in {'exhaustive', 'vocab_tree'}:
+        return configured_retry_type
+    return 'exhaustive' if int(num_images or 0) <= 250 else 'vocab_tree'
+
+
+def _is_matcher_fallback_retry_candidate(config, colmap_cfg, sparse_summary, num_images):
+    if not sparse_summary:
+        return False
+
+    if colmap_cfg.get('matcher_fallback_retry_attempted'):
+        return False
+
+    if colmap_cfg.get('matcher_type') != 'sequential':
+        return False
+
+    requested_matcher = str((config or {}).get('matcher_type') or '').strip().lower()
+    if requested_matcher not in {'', 'auto'}:
+        return False
+
+    num_images = int(num_images or 0)
+    if num_images < 20:
+        return False
+
+    best_registered = int(sparse_summary.get('best_registered') or 0)
+    min_registered_for_training = min(num_images, max(8, int(num_images * 0.05)))
+    return best_registered < min_registered_for_training
+
+
+def run_matcher_fallback_retry(
+    project_id,
+    paths,
+    config,
+    colmap_cfg,
+    sparse_summary,
+    num_images,
+    *,
+    rerun_feature_extraction_stage,
+    rerun_feature_matching_stage,
+    rerun_sparse_reconstruction_stage,
+):
+    if not _is_matcher_fallback_retry_candidate(
+        config, colmap_cfg, sparse_summary, num_images
+    ):
+        return None
+
+    retry_matcher_type = _select_matcher_fallback_retry_type(config, num_images)
+    append_log_line(
+        project_id,
+        '🧠 Sparse reconstruction is still unusable after the default recovery ladder; '
+        f'automatically retrying once with {retry_matcher_type} matching while keeping the baseline first pass unchanged',
+    )
+
+    clear_sparse_reconstruction_outputs(paths['sparse_path'])
+    clear_colmap_database(paths['database_path'])
+
+    retry_config = dict(config or {})
+    retry_config['matcher_type'] = retry_matcher_type
+    retry_config['matcher_fallback_source'] = 'auto_sparse_failure'
+
+    _, rerun_colmap_cfg, _, _ = get_colmap_config_for_pipeline(
+        paths, retry_config, project_id
+    )
+    rerun_colmap_cfg['matcher_fallback_retry_attempted'] = True
+    rerun_colmap_cfg['last_sparse_summary'] = dict(sparse_summary)
+    rerun_colmap_cfg['no_regression_floor'] = merge_no_regression_floors(
+        colmap_cfg.get('no_regression_floor'),
+        capture_no_regression_floor(colmap_cfg),
+    )
+    rerun_colmap_cfg['recovery_history'] = list(
+        colmap_cfg.get('recovery_history') or []
+    )
+
+    _append_recovery_history(
+        rerun_colmap_cfg,
+        {
+            'kind': 'matcher_fallback_retry',
+            'label': 'Matcher fallback retry',
+            'reason_code': 'insufficient_registration',
+            'step_order': _recovery_step_order('final_loop_detection_subset') + 1,
+            'status': 'completed',
+            'outcome': 'rerun_started',
+            'reason': (
+                'default sequential recovery did not register enough images for training, '
+                f'so the pipeline automatically retried once with {retry_matcher_type} matching'
+            ),
+            'failed_step_key': None,
+            'fallback_step': retry_matcher_type,
+            'fallback_reason': 'auto_matcher_retry',
+            'subset_image_count': None,
+            'weak_boundary_count': int(
+                ((colmap_cfg.get('pair_geometry_stats') or {}).get('weak_boundary_count')) or 0
+            ),
+            'target_boundary_count': None,
+            'surviving_target_boundary_count': None,
+            'padding': None,
+            'overlap': None,
+            'quadratic_overlap': None,
+            'loop_detection': None,
+            'runtime_mode': 'automatic_rerun',
+            'tuned_decision_used': _tuned_decision_used(colmap_cfg),
+        },
+    )
+
+    append_log_line(
+        project_id,
+        '🔁 Automatic matcher fallback retry: '
+        f'matcher={retry_matcher_type} | '
+        f'best_registered={int(sparse_summary.get("best_registered") or 0)}/{int(num_images or 0)}',
+    )
+
+    rerun_colmap_cfg = rerun_feature_extraction_stage(
+        project_id, paths, retry_config, rerun_colmap_cfg
+    )
+    rerun_colmap_cfg = rerun_feature_matching_stage(
+        project_id, paths, retry_config, rerun_colmap_cfg
+    )
+    return rerun_sparse_reconstruction_stage(
+        project_id, paths, retry_config, rerun_colmap_cfg
+    )
 
 
 def _estimate_targeted_pair_budget(

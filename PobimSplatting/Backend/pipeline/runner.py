@@ -54,6 +54,7 @@ from .recovery_planners import (
     refine_orbit_safe_profile_from_geometry,
     run_automatic_split_retry,
     run_boundary_frame_densification_recovery as _run_boundary_frame_densification_recovery_impl,
+    run_matcher_fallback_retry,
     run_orbit_safe_bridge_recovery_matching_pass,
     should_run_final_loop_detection_recovery,
 )
@@ -250,6 +251,7 @@ def _sparse_stage_helpers():
         'rerun_feature_matching_stage': run_feature_matching_stage,
         'rerun_sparse_reconstruction_stage': run_sparse_reconstruction_stage,
         'run_boundary_frame_densification_recovery': run_boundary_frame_densification_recovery,
+        'run_matcher_fallback_retry': run_matcher_fallback_retry,
         'run_orbit_safe_bridge_recovery_matching_pass': run_orbit_safe_bridge_recovery_matching_pass,
         'select_best_sparse_model': select_best_sparse_model,
         'should_prefer_incremental_sfm': should_prefer_incremental_sfm,

@@ -12,6 +12,7 @@ from pathlib import Path
 from ..core.commands import run_command_with_logs
 from ..core.projects import (
     append_log_line,
+    emit_sparse_pose_update,
     emit_stage_progress,
     update_stage_detail,
     update_state,
@@ -35,7 +36,7 @@ from .runtime_support import (
     should_log_subprocess_line,
 )
 
-LIVE_SPARSE_SNAPSHOT_PERCENT_STEP = 5
+LIVE_SPARSE_POSE_UPDATE_IMAGE_STEP = 1
 
 
 SPARSE_RUNTIME_OVERRIDE_KEYS = {
@@ -94,12 +95,7 @@ def _resolve_mapper_cpu_threads(config) -> tuple[int, int, int | None]:
 
 
 def _choose_live_sparse_snapshot_frequency(num_images: int) -> int:
-    if num_images <= 0:
-        return 1
-    return max(
-        1,
-        int(num_images * (LIVE_SPARSE_SNAPSHOT_PERCENT_STEP / 100.0) + 0.5),
-    )
+    return 1
 
 
 def _log_colmap_ba_plan(project_id, ba_plan):
@@ -463,8 +459,8 @@ def run_sparse_reconstruction_stage(
             )
             append_log_line(
                 project_id,
-                f"📸 Live sparse snapshots enabled every {LIVE_SPARSE_SNAPSHOT_PERCENT_STEP}% "
-                f"({snapshot_frequency} registered images per update)",
+                "📸 Live sparse snapshots enabled per registered image "
+                f"({snapshot_frequency} registered image per update)",
             )
         for param, value in colmap_cfg.get("mapper_params", {}).items():
             cmd.extend([f"--{param}", str(value)])
@@ -533,6 +529,7 @@ def run_sparse_reconstruction_stage(
         "ba_total": 3,
         "last_registration_milestone": -1,
         "last_ba_milestone": -1,
+        "last_pose_update_registered": 0,
     }
 
     def sparse_line_handler(line):
@@ -816,6 +813,26 @@ def run_sparse_reconstruction_stage(
                     text=f"Images registered: {current}/{total}",
                     subtext="COLMAP",
                 )
+                last_pose_update_registered = int(
+                    sparse_tracker.get("last_pose_update_registered", 0)
+                )
+                if (
+                    current > last_pose_update_registered
+                    and current - last_pose_update_registered >= LIVE_SPARSE_POSE_UPDATE_IMAGE_STEP
+                ):
+                    sparse_tracker["last_pose_update_registered"] = current
+                    emit_sparse_pose_update(
+                        project_id,
+                        {
+                            "project_id": project_id,
+                            "camera_count": current,
+                            "total_images": total,
+                            "capture_progress_percent": percent,
+                            "snapshot_version": None,
+                            "source_type": "registration",
+                            "update_mode": "per_image",
+                        },
+                    )
                 registration_log_state = {
                     "last_milestone": sparse_tracker.get(
                         "last_registration_milestone", -1
@@ -1033,6 +1050,20 @@ def run_sparse_reconstruction_stage(
     )
     if automatic_split_retry is not None:
         return automatic_split_retry
+
+    matcher_fallback_retry = helpers['run_matcher_fallback_retry'](
+        project_id,
+        paths,
+        config,
+        colmap_cfg,
+        sparse_summary,
+        num_images,
+        rerun_feature_extraction_stage=helpers['rerun_feature_extraction_stage'],
+        rerun_feature_matching_stage=helpers['rerun_feature_matching_stage'],
+        rerun_sparse_reconstruction_stage=helpers['rerun_sparse_reconstruction_stage'],
+    )
+    if matcher_fallback_retry is not None:
+        return matcher_fallback_retry
 
     return colmap_cfg
 

@@ -97,7 +97,7 @@ static void writeLiveRender(Model &model,
     torch::Tensor rgb = model.forward(cam, static_cast<int>(step));
     cv::Mat image = tensorToImage(rgb.detach().cpu());
     cv::cvtColor(image, image, cv::COLOR_RGB2BGR);
-    cv::imwrite(outputPath.string(), image);
+    cv::imwrite(outputPath.string(), image, {cv::IMWRITE_JPEG_QUALITY, 82});
 
     json payload = {
         {"camera_id", cameraIndex},
@@ -106,6 +106,8 @@ static void writeLiveRender(Model &model,
         {"iteration", step},
         {"total_iterations", totalSteps},
         {"progress_percent", progressPercent(step, totalSteps)},
+        {"width", cam.width},
+        {"height", cam.height},
         {"version", control.version},
     };
 

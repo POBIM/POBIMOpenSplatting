@@ -169,6 +169,8 @@ export default function CameraPoseVisualization({ data, selectedCamera: selected
   const sparsePointsRef = useRef<THREE.Points | null>(null);
   const contentGroupRef = useRef<THREE.Group | null>(null);
   const animFrameRef = useRef<number>(0);
+  const onCameraSelectRef = useRef<Props['onCameraSelect']>(onCameraSelect);
+  const hasFramedSceneRef = useRef(false);
 
   const [hoveredCamera, setHoveredCamera] = useState<CameraPose | null>(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
@@ -183,6 +185,10 @@ export default function CameraPoseVisualization({ data, selectedCamera: selected
   const [rotYDeg, setRotYDeg] = useState(0);
   const [rotZDeg, setRotZDeg] = useState(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  useEffect(() => {
+    onCameraSelectRef.current = onCameraSelect;
+  }, [onCameraSelect]);
 
   const initScene = useCallback(() => {
     if (!containerRef.current) return;
@@ -221,145 +227,6 @@ export default function CameraPoseVisualization({ data, selectedCamera: selected
     contentGroupRef.current = contentGroup;
     scene.add(contentGroup);
 
-    const cameras = data.cameras;
-    const scale = computeSceneScale(cameras);
-    const center = computeCenter(cameras);
-
-    const gridSize = 10;
-    const gridDivisions = 20;
-    const gridHelper = new THREE.GridHelper(gridSize, gridDivisions, 0x333333, 0x1a1a1a);
-    gridHelper.position.set(center.x * scale, 0, center.z * scale);
-    scene.add(gridHelper);
-
-    const axesSize = gridSize * 0.3;
-    const axesGroup = new THREE.Group();
-    axesGroup.position.copy(gridHelper.position);
-
-    const xArrow = new THREE.ArrowHelper(
-      new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0.01, 0),
-      axesSize, 0xff3333, axesSize * 0.08, axesSize * 0.05
-    );
-    axesGroup.add(xArrow);
-
-    const yArrow = new THREE.ArrowHelper(
-      new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0.01, 0),
-      axesSize, 0x33ff33, axesSize * 0.08, axesSize * 0.05
-    );
-    axesGroup.add(yArrow);
-
-    const zArrow = new THREE.ArrowHelper(
-      new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0.01, 0),
-      axesSize, 0x3377ff, axesSize * 0.08, axesSize * 0.05
-    );
-    axesGroup.add(zArrow);
-
-    scene.add(axesGroup);
-
-    const frustumGroup = new THREE.Group();
-    frustumGroupRef.current = frustumGroup;
-    contentGroup.add(frustumGroup);
-
-    const hueStep = cameras.length > 1 ? 360 / cameras.length : 0;
-    const aspectRatio = cameras.length > 0 && cameras[0].width && cameras[0].height
-      ? cameras[0].width / cameras[0].height
-      : 16 / 9;
-
-    const baseFrustumDepth = 0.25;
-    const frustumGeometry = buildFrustumGeometry(aspectRatio, baseFrustumDepth);
-    const edgesGeometry = buildFrustumEdges(aspectRatio, baseFrustumDepth);
-
-    cameras.forEach((camPose, idx) => {
-      const hue = (idx * hueStep) % 360;
-      const color = new THREE.Color().setHSL(hue / 360, 0.85, 0.6);
-
-      const faceMaterial = new THREE.MeshStandardMaterial({
-        color,
-        transparent: true,
-        opacity: 0.25,
-        side: THREE.DoubleSide,
-        depthWrite: false,
-      });
-
-      const edgeMaterial = new THREE.LineBasicMaterial({
-        color,
-        transparent: true,
-        opacity: 0.9,
-      });
-
-      const mesh = new THREE.Mesh(frustumGeometry.clone(), faceMaterial);
-      const edges = new THREE.LineSegments(edgesGeometry.clone(), edgeMaterial);
-
-      const group = new THREE.Group();
-      group.add(mesh);
-      group.add(edges);
-
-      const pos = new THREE.Vector3(...camPose.position).multiplyScalar(scale);
-      group.position.copy(pos);
-
-      const q = new THREE.Quaternion(
-        camPose.quaternion[1],
-        camPose.quaternion[2],
-        camPose.quaternion[3],
-        camPose.quaternion[0]
-      );
-      group.setRotationFromQuaternion(q);
-
-      group.userData = { cameraPose: camPose, index: idx, baseColor: color };
-      frustumGroup.add(group);
-    });
-
-    if (data.sparse_points && data.sparse_points.length > 0) {
-      const sp = data.sparse_points;
-      const pointCount = sp.length;
-      const positions = new Float32Array(pointCount * 3);
-      const colors = new Float32Array(pointCount * 3);
-
-      for (let i = 0; i < pointCount; i++) {
-        positions[i * 3] = sp[i].position[0] * scale;
-        positions[i * 3 + 1] = sp[i].position[1] * scale;
-        positions[i * 3 + 2] = sp[i].position[2] * scale;
-
-        if (sp[i].color) {
-          colors[i * 3] = sp[i].color![0] / 255;
-          colors[i * 3 + 1] = sp[i].color![1] / 255;
-          colors[i * 3 + 2] = sp[i].color![2] / 255;
-        } else {
-          colors[i * 3] = 0.45;
-          colors[i * 3 + 1] = 0.45;
-          colors[i * 3 + 2] = 0.50;
-        }
-      }
-
-      const pointsGeometry = new THREE.BufferGeometry();
-      pointsGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-      pointsGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-
-      const pointsMaterial = new THREE.PointsMaterial({
-        size: INITIAL_POINT_SIZE,
-        vertexColors: true,
-        transparent: true,
-        opacity: 0.55,
-        sizeAttenuation: true,
-        depthWrite: false,
-      });
-
-      const sparsePointsObj = new THREE.Points(pointsGeometry, pointsMaterial);
-      sparsePointsObj.renderOrder = -1;
-      sparsePointsRef.current = sparsePointsObj;
-      contentGroup.add(sparsePointsObj);
-    } else {
-      sparsePointsRef.current = null;
-    }
-
-    const scaledCenter = center.clone().multiplyScalar(scale);
-    controls.target.copy(scaledCenter);
-    cam.position.set(
-      scaledCenter.x + 6,
-      scaledCenter.y + 4,
-      scaledCenter.z + 6
-    );
-    controls.update();
-
     const raycaster = new THREE.Raycaster();
     raycaster.params.Line = { threshold: 0.1 };
     const mouse = new THREE.Vector2();
@@ -372,7 +239,7 @@ export default function CameraPoseVisualization({ data, selectedCamera: selected
 
       raycaster.setFromCamera(mouse, cam);
       const meshChildren: THREE.Object3D[] = [];
-      frustumGroup.children.forEach(g => {
+      frustumGroupRef.current?.children.forEach(g => {
         g.children.forEach(child => {
           if (child instanceof THREE.Mesh) meshChildren.push(child);
         });
@@ -393,14 +260,14 @@ export default function CameraPoseVisualization({ data, selectedCamera: selected
     };
 
     const onClick = (event: MouseEvent) => {
-      if (!onCameraSelect) return;
+      if (!onCameraSelectRef.current) return;
       const rect = container.getBoundingClientRect();
       mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
       raycaster.setFromCamera(mouse, cam);
       const meshChildren: THREE.Object3D[] = [];
-      frustumGroup.children.forEach(g => {
+      frustumGroupRef.current?.children.forEach(g => {
         g.children.forEach(child => {
           if (child instanceof THREE.Mesh) meshChildren.push(child);
         });
@@ -411,11 +278,11 @@ export default function CameraPoseVisualization({ data, selectedCamera: selected
         const parentGroup = intersects[0].object.parent;
         const camData = parentGroup?.userData?.cameraPose as CameraPose | undefined;
         if (camData) {
-          onCameraSelect(camData);
+          onCameraSelectRef.current(camData);
           return;
         }
       }
-      onCameraSelect(null);
+      onCameraSelectRef.current(null);
     };
 
     container.addEventListener('mousemove', onMouseMove);
@@ -447,12 +314,147 @@ export default function CameraPoseVisualization({ data, selectedCamera: selected
         container.removeChild(renderer.domElement);
       }
     };
-  }, [data, onCameraSelect]);
+  }, []);
 
   useEffect(() => {
     const cleanup = initScene();
     return cleanup;
   }, [initScene]);
+
+  const rebuildPoseContent = useCallback(() => {
+    const contentGroup = contentGroupRef.current;
+    const controls = controlsRef.current;
+    const cam = cameraRef.current;
+    if (!contentGroup || !controls || !cam) return;
+
+    contentGroup.traverse(child => {
+      const mesh = child as THREE.Mesh;
+      if (mesh.geometry) {
+        mesh.geometry.dispose();
+      }
+      const material = mesh.material;
+      if (Array.isArray(material)) {
+        material.forEach(item => item.dispose());
+      } else if (material) {
+        material.dispose();
+      }
+    });
+    contentGroup.clear();
+    frustumGroupRef.current = null;
+    sparsePointsRef.current = null;
+
+    const cameras = data.cameras;
+    const scale = computeSceneScale(cameras);
+    const center = computeCenter(cameras);
+
+    const gridSize = 10;
+    const gridDivisions = 20;
+    const gridHelper = new THREE.GridHelper(gridSize, gridDivisions, 0x333333, 0x1a1a1a);
+    gridHelper.position.set(center.x * scale, 0, center.z * scale);
+    contentGroup.add(gridHelper);
+
+    const axesSize = gridSize * 0.3;
+    const axesGroup = new THREE.Group();
+    axesGroup.position.copy(gridHelper.position);
+    axesGroup.add(new THREE.ArrowHelper(
+      new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0.01, 0),
+      axesSize, 0xff3333, axesSize * 0.08, axesSize * 0.05
+    ));
+    axesGroup.add(new THREE.ArrowHelper(
+      new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0.01, 0),
+      axesSize, 0x33ff33, axesSize * 0.08, axesSize * 0.05
+    ));
+    axesGroup.add(new THREE.ArrowHelper(
+      new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0.01, 0),
+      axesSize, 0x3377ff, axesSize * 0.08, axesSize * 0.05
+    ));
+    contentGroup.add(axesGroup);
+
+    const frustumGroup = new THREE.Group();
+    frustumGroupRef.current = frustumGroup;
+    contentGroup.add(frustumGroup);
+
+    const hueStep = cameras.length > 1 ? 360 / cameras.length : 0;
+    const aspectRatio = cameras.length > 0 && cameras[0].width && cameras[0].height
+      ? cameras[0].width / cameras[0].height
+      : 16 / 9;
+    const baseFrustumDepth = 0.25;
+    const frustumGeometry = buildFrustumGeometry(aspectRatio, baseFrustumDepth);
+    const edgesGeometry = buildFrustumEdges(aspectRatio, baseFrustumDepth);
+
+    cameras.forEach((camPose, idx) => {
+      const hue = (idx * hueStep) % 360;
+      const color = new THREE.Color().setHSL(hue / 360, 0.85, 0.6);
+      const faceMaterial = new THREE.MeshStandardMaterial({
+        color,
+        transparent: true,
+        opacity: 0.25,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      });
+      const edgeMaterial = new THREE.LineBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.9,
+      });
+      const group = new THREE.Group();
+      group.add(new THREE.Mesh(frustumGeometry.clone(), faceMaterial));
+      group.add(new THREE.LineSegments(edgesGeometry.clone(), edgeMaterial));
+      group.position.copy(new THREE.Vector3(...camPose.position).multiplyScalar(scale));
+      group.setRotationFromQuaternion(new THREE.Quaternion(
+        camPose.quaternion[1],
+        camPose.quaternion[2],
+        camPose.quaternion[3],
+        camPose.quaternion[0],
+      ));
+      group.userData = { cameraPose: camPose, index: idx, baseColor: color };
+      frustumGroup.add(group);
+    });
+    frustumGeometry.dispose();
+    edgesGeometry.dispose();
+
+    if (data.sparse_points && data.sparse_points.length > 0) {
+      const sp = data.sparse_points;
+      const pointCount = sp.length;
+      const positions = new Float32Array(pointCount * 3);
+      const colors = new Float32Array(pointCount * 3);
+      for (let i = 0; i < pointCount; i++) {
+        positions[i * 3] = sp[i].position[0] * scale;
+        positions[i * 3 + 1] = sp[i].position[1] * scale;
+        positions[i * 3 + 2] = sp[i].position[2] * scale;
+        colors[i * 3] = sp[i].color ? sp[i].color![0] / 255 : 0.45;
+        colors[i * 3 + 1] = sp[i].color ? sp[i].color![1] / 255 : 0.45;
+        colors[i * 3 + 2] = sp[i].color ? sp[i].color![2] / 255 : 0.50;
+      }
+      const pointsGeometry = new THREE.BufferGeometry();
+      pointsGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      pointsGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+      const pointsMaterial = new THREE.PointsMaterial({
+        size: INITIAL_POINT_SIZE,
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.55,
+        sizeAttenuation: true,
+        depthWrite: false,
+      });
+      const sparsePointsObj = new THREE.Points(pointsGeometry, pointsMaterial);
+      sparsePointsObj.renderOrder = -1;
+      sparsePointsRef.current = sparsePointsObj;
+      contentGroup.add(sparsePointsObj);
+    }
+
+    if (!hasFramedSceneRef.current) {
+      const scaledCenter = center.clone().multiplyScalar(scale);
+      controls.target.copy(scaledCenter);
+      cam.position.set(scaledCenter.x + 6, scaledCenter.y + 4, scaledCenter.z + 6);
+      controls.update();
+      hasFramedSceneRef.current = true;
+    }
+  }, [data]);
+
+  useEffect(() => {
+    rebuildPoseContent();
+  }, [rebuildPoseContent]);
 
   useEffect(() => {
     if (!frustumGroupRef.current) return;
@@ -494,13 +496,13 @@ export default function CameraPoseVisualization({ data, selectedCamera: selected
       const scale = isSelected ? 1.6 : isHovered ? 1.3 : 1.0;
       group.scale.setScalar(scale * frustumScale);
     });
-  }, [hoveredCamera, selectedCameraProp, frustumScale]);
+  }, [data, hoveredCamera, selectedCameraProp, frustumScale]);
 
   useEffect(() => {
     if (!sparsePointsRef.current) return;
     const mat = sparsePointsRef.current.material as THREE.PointsMaterial;
     mat.size = pointSize;
-  }, [pointSize]);
+  }, [data, pointSize]);
 
   useEffect(() => {
     if (!contentGroupRef.current) return;

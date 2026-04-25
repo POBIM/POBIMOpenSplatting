@@ -6,7 +6,6 @@ import json
 import logging
 import os
 import re
-import shutil
 import time
 from datetime import datetime
 from pathlib import Path
@@ -28,22 +27,9 @@ from .runtime_support import should_emit_progress_milestone, should_log_subproce
 
 logger = logging.getLogger(__name__)
 
-TRAINING_PREVIEW_FILENAME = "preview_latest.ply"
-TRAINING_PREVIEW_METADATA_FILENAME = "preview_latest.json"
-TRAINING_PREVIEW_UPDATE_PERCENT_STEP = 5
 TRAINING_LIVE_RENDER_DIRNAME = "live_training_preview"
 TRAINING_LIVE_CONTROL_FILENAME = "live_training_preview_control.json"
 TRAINING_LIVE_RENDER_PERCENT_STEP = 2
-
-
-def _choose_training_preview_save_every(iteration_total: int) -> int:
-    if iteration_total <= 0:
-        return 1
-
-    return max(
-        1,
-        int(iteration_total * (TRAINING_PREVIEW_UPDATE_PERCENT_STEP / 100.0) + 0.5),
-    )
 
 
 def _calculate_progress_percent(current: int, total: int) -> int:
@@ -95,74 +81,29 @@ def _build_training_live_payload(project_id: str, render_data: dict) -> dict:
     except FileNotFoundError:
         render_version = int(datetime.now().timestamp() * 1_000_000_000)
 
-    return {
+    payload = {
         "project_id": project_id,
         "camera_id": render_data.get("camera_id"),
         "image_name": image_name,
         "filename": filename,
         "render_url": f"/api/project/{project_id}/training_live_preview/{filename}?v={render_version}",
+        "frame_mime": "image/jpeg",
+        "frame_bytes": None,
         "reference_url": _reference_url_for_project_image(project_id, image_name),
         "iteration": render_data.get("iteration"),
         "total_iterations": render_data.get("total_iterations"),
         "progress_percent": render_data.get("progress_percent"),
+        "width": render_data.get("width"),
+        "height": render_data.get("height"),
         "version": render_data.get("version", render_version),
         "updated_at": datetime.now().isoformat(),
     }
+    try:
+        payload["frame_bytes"] = render_path.read_bytes()
+    except OSError:
+        payload["frame_bytes"] = None
+    return payload
 
-
-def _write_training_preview_metadata(
-    metadata_path: Path,
-    *,
-    iteration: int,
-    total_iterations: int,
-    progress_percent: int,
-    file_path: Path,
-    source_filename: str,
-    is_final: bool,
-) -> None:
-    payload = {
-        "filename": file_path.name,
-        "source_filename": source_filename,
-        "iteration": iteration,
-        "total_iterations": total_iterations,
-        "progress_percent": progress_percent,
-        "update_interval_percent": TRAINING_PREVIEW_UPDATE_PERCENT_STEP,
-        "is_final": is_final,
-        "updated_at": datetime.now().isoformat(),
-        "size_bytes": file_path.stat().st_size if file_path.exists() else 0,
-        "version": file_path.stat().st_mtime_ns if file_path.exists() else 0,
-    }
-    metadata_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-
-
-def _promote_training_preview_snapshot(
-    source_path: Path,
-    preview_path: Path,
-    metadata_path: Path,
-    *,
-    iteration: int,
-    total_iterations: int,
-    progress_percent: int,
-    is_final: bool,
-) -> None:
-    preview_path.parent.mkdir(parents=True, exist_ok=True)
-
-    if is_final:
-        temp_preview_path = preview_path.with_suffix(".tmp")
-        shutil.copy2(source_path, temp_preview_path)
-        os.replace(temp_preview_path, preview_path)
-    else:
-        os.replace(source_path, preview_path)
-
-    _write_training_preview_metadata(
-        metadata_path,
-        iteration=iteration,
-        total_iterations=total_iterations,
-        progress_percent=progress_percent,
-        file_path=preview_path,
-        source_filename=source_path.name,
-        is_final=is_final,
-    )
 
 
 def finalize_project(project_id):
@@ -307,17 +248,12 @@ def run_opensplat_training(
             paths["results_path"]
             / f"{project_id}_{quality_mode}_{enhanced_iterations}iter.ply"
         )
-        preview_path = paths["results_path"] / TRAINING_PREVIEW_FILENAME
-        preview_metadata_path = (
-            paths["results_path"] / TRAINING_PREVIEW_METADATA_FILENAME
-        )
         live_render_dir = paths["results_path"] / TRAINING_LIVE_RENDER_DIRNAME
         live_render_control_path = (
             paths["results_path"] / TRAINING_LIVE_CONTROL_FILENAME
         )
         live_render_dir.mkdir(parents=True, exist_ok=True)
         _write_training_live_control(project_id, live_render_control_path)
-        preview_save_every = _choose_training_preview_save_every(enhanced_iterations)
         cmd = [
             str(opensplat_binary),
             str(paths["project_path"].absolute()),
@@ -325,8 +261,6 @@ def run_opensplat_training(
             str(enhanced_iterations),
             "--output",
             str(output_ply.absolute()),
-            "--save-every",
-            str(preview_save_every),
             "--live-render-dir",
             str(live_render_dir.absolute()),
             "--live-render-control",
@@ -336,12 +270,8 @@ def run_opensplat_training(
         ]
         append_log_line(
             project_id,
-            f"🪟 Training preview snapshots enabled every {TRAINING_PREVIEW_UPDATE_PERCENT_STEP}% "
-            f"({preview_save_every} iterations per update)",
-        )
-        append_log_line(
-            project_id,
-            f"📡 Native live comparison renders enabled every {TRAINING_LIVE_RENDER_PERCENT_STEP}%",
+            f"📡 Native live comparison renders enabled every {TRAINING_LIVE_RENDER_PERCENT_STEP}% "
+            "(source resolution, binary websocket delivery)",
         )
 
         crop_size = config.get("crop_size", 0)
@@ -496,7 +426,6 @@ def run_opensplat_training(
         training_progress = {"current": 0, "total": iteration_total}
         training_progress_log = {"last_bucket": -1}
         splats_state = {"current": 0, "max": 0}
-        preview_state = {"latest_iteration": 0}
 
         splats_patterns = (
             re.compile(r"new count\s+(\d+)", re.IGNORECASE),
@@ -552,62 +481,6 @@ def run_opensplat_training(
                         )
                     return
 
-                preview_candidate_path = None
-                direct_candidate = Path(line_stripped)
-                if direct_candidate.suffix.lower() == ".ply" and direct_candidate.exists():
-                    preview_candidate_path = direct_candidate
-                else:
-                    wrote_match = re.search(r"\bWrote\s+(.+?\.ply)\s*$", line_stripped)
-                    if wrote_match:
-                        wrote_candidate = Path(wrote_match.group(1).strip())
-                        if wrote_candidate.exists():
-                            preview_candidate_path = wrote_candidate
-
-                preview_candidate = preview_candidate_path
-                if preview_candidate is not None:
-                    preview_iteration_match = re.search(
-                        r"(?:^|[_-])(\d+)(?:iter|iters|steps?)?\.ply$",
-                        preview_candidate.name,
-                        re.IGNORECASE,
-                    )
-                    if preview_candidate.resolve() == output_ply.resolve():
-                        _promote_training_preview_snapshot(
-                            preview_candidate,
-                            preview_path,
-                            preview_metadata_path,
-                            iteration=iteration_total,
-                            total_iterations=iteration_total,
-                            progress_percent=100,
-                            is_final=True,
-                        )
-                        preview_state["latest_iteration"] = iteration_total
-                        append_log_line(
-                            project_id,
-                            "🪟 Training preview updated with final output",
-                        )
-                    elif preview_iteration_match:
-                        preview_iteration = int(preview_iteration_match.group(1))
-                        if preview_iteration > preview_state["latest_iteration"]:
-                            _promote_training_preview_snapshot(
-                                preview_candidate,
-                                preview_path,
-                                preview_metadata_path,
-                                iteration=preview_iteration,
-                                total_iterations=iteration_total,
-                                progress_percent=_calculate_progress_percent(
-                                    preview_iteration, iteration_total
-                                ),
-                                is_final=False,
-                            )
-                            preview_state["latest_iteration"] = preview_iteration
-                            preview_percent = _calculate_progress_percent(
-                                preview_iteration, iteration_total
-                            )
-                            append_log_line(
-                                project_id,
-                                f"🪟 Training preview updated at {preview_percent}% "
-                                f"({preview_iteration}/{iteration_total} iterations)",
-                            )
             patterns = [
                 r"Iteration\s+(\d+)/(\d+)",
                 r"Step\s+(\d+)/(\d+)",

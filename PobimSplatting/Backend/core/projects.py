@@ -35,6 +35,7 @@ _emit_stage_progress: Optional[
 ] = None
 _emit_log_message: Optional[Callable[[str, str, str], None]] = None
 _emit_training_live_preview: Optional[Callable[[str, Dict[str, Any]], None]] = None
+_emit_sparse_pose_update: Optional[Callable[[str, Dict[str, Any]], None]] = None
 
 
 def register_emitters(
@@ -44,15 +45,17 @@ def register_emitters(
     ] = None,
     emit_log_message: Optional[Callable[[str, str, str], None]] = None,
     emit_training_live_preview: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+    emit_sparse_pose_update: Optional[Callable[[str, Dict[str, Any]], None]] = None,
 ) -> None:
     """
     Register callbacks used to push realtime updates.
     """
 
-    global _emit_stage_progress, _emit_log_message, _emit_training_live_preview
+    global _emit_stage_progress, _emit_log_message, _emit_training_live_preview, _emit_sparse_pose_update
     _emit_stage_progress = emit_stage_progress
     _emit_log_message = emit_log_message
     _emit_training_live_preview = emit_training_live_preview
+    _emit_sparse_pose_update = emit_sparse_pose_update
 
 
 # ----------------------------------------------------------------------------
@@ -354,6 +357,12 @@ def emit_training_live_preview(project_id: str, payload: Dict[str, Any]) -> None
     """Proxy for emitting native live training preview renders."""
     if _emit_training_live_preview:
         _emit_training_live_preview(project_id, payload)
+
+
+def emit_sparse_pose_update(project_id: str, payload: Dict[str, Any]) -> None:
+    """Proxy for emitting lightweight sparse camera pose updates."""
+    if _emit_sparse_pose_update:
+        _emit_sparse_pose_update(project_id, payload)
 
 
 # ----------------------------------------------------------------------------

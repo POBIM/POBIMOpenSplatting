@@ -289,6 +289,7 @@ export default function ProjectDetailPage() {
   const [liveCameraPoses, setLiveCameraPoses] = useState<CameraPosesData | null>(null);
   const [liveCameraPoseLoading, setLiveCameraPoseLoading] = useState(false);
   const [liveCameraPoseError, setLiveCameraPoseError] = useState<string | null>(null);
+  const liveCameraPoseVersionRef = useRef<number | string | null>(null);
   const [selectedSparseCamera, setSelectedSparseCamera] = useState<CameraPose | null>(null);
   const [trainingPreview, setTrainingPreview] = useState<TrainingPreview | null>(null);
   const [trainingPreviewLoading, setTrainingPreviewLoading] = useState(false);
@@ -520,12 +521,25 @@ export default function ProjectDetailPage() {
     }
   }, [projectId]);
 
-  const loadLiveCameraPoses = useCallback(async (options: { silent?: boolean } = {}) => {
+  const loadLiveCameraPoses = useCallback(async (options: { silent?: boolean; retryOnUnchanged?: boolean } = {}) => {
     try {
       if (!options.silent) {
         setLiveCameraPoseLoading(true);
       }
-      const data = await api.getCameraPoses(projectId, { preferLive: true });
+      const data = await api.getCameraPoseManifest(projectId, {
+        preferLive: true,
+        since: options.silent ? liveCameraPoseVersionRef.current || undefined : undefined,
+      });
+      if (data?.unchanged) {
+        setLiveCameraPoseError(null);
+        if (options.retryOnUnchanged) {
+          window.setTimeout(() => {
+            void loadLiveCameraPoses({ silent: true });
+          }, 750);
+        }
+        return;
+      }
+      liveCameraPoseVersionRef.current = data.snapshot_version || null;
       setLiveCameraPoses(data);
       setLiveCameraPoseError(null);
       setSelectedSparseCamera((prev) => {
@@ -553,6 +567,25 @@ export default function ProjectDetailPage() {
       }
     }
   }, [projectId]);
+
+  const handleSparsePoseUpdate = useCallback((payload: any) => {
+    if (!showSparsePoseViewer && !showTrainingPreview) {
+      return;
+    }
+    if (payload?.project_id && payload.project_id !== projectId) {
+      return;
+    }
+    if (
+      payload?.snapshot_version &&
+      liveCameraPoseVersionRef.current &&
+      String(payload.snapshot_version) === String(liveCameraPoseVersionRef.current)
+    ) {
+      return;
+    }
+    window.setTimeout(() => {
+      void loadLiveCameraPoses({ silent: true, retryOnUnchanged: true });
+    }, 250);
+  }, [loadLiveCameraPoses, projectId, showSparsePoseViewer, showTrainingPreview]);
 
   const loadTrainingPreview = useCallback(async (options: { silent?: boolean } = {}) => {
     try {
@@ -745,20 +778,23 @@ export default function ProjectDetailPage() {
     const unsubscribeStatus = websocket.on('project_status', handleProjectStatus);
     const unsubscribeStage = websocket.on('stage_progress', handleStageProgress);
     const unsubscribeLog = websocket.on('log_message', handleLogMessage);
+    const unsubscribeSparsePose = websocket.on('sparse_pose_update', handleSparsePoseUpdate);
 
     return () => {
       unsubscribeStatus();
       unsubscribeStage();
       unsubscribeLog();
+      unsubscribeSparsePose();
       websocket.unsubscribeFromProject(projectId);
     };
-  }, [projectId, handleProjectStatus, handleStageProgress, handleLogMessage]);
+  }, [projectId, handleProjectStatus, handleStageProgress, handleLogMessage, handleSparsePoseUpdate]);
 
   useEffect(() => {
     if (!projectId) {
       return;
     }
 
+    liveCameraPoseVersionRef.current = null;
     loadProject();
     loadFramePreviews();
   }, [projectId, loadProject, loadFramePreviews]);
@@ -782,15 +818,6 @@ export default function ProjectDetailPage() {
     }
 
     loadLiveCameraPoses();
-    if (sparseStage?.status !== 'running') {
-      return;
-    }
-
-    const interval = setInterval(() => {
-      void loadLiveCameraPoses({ silent: true });
-    }, 5000);
-
-    return () => clearInterval(interval);
   }, [showSparsePoseViewer, sparseStage?.status, loadLiveCameraPoses]);
 
   useEffect(() => {
@@ -806,7 +833,6 @@ export default function ProjectDetailPage() {
 
     const interval = setInterval(() => {
       void loadTrainingPreview({ silent: true });
-      void loadLiveCameraPoses({ silent: true });
     }, 5000);
 
     return () => clearInterval(interval);
@@ -2262,9 +2288,9 @@ export default function ProjectDetailPage() {
                     <span className="brutal-badge brutal-badge-info">
                       {liveCameraPoses?.source_label || 'Waiting for sparse snapshot...'}
                     </span>
-                    {liveCameraPoses?.update_interval_percent ? (
+                    {liveCameraPoses ? (
                       <span className="brutal-badge">
-                        Updates every {liveCameraPoses.update_interval_percent}%
+                        Updates per registered image
                       </span>
                     ) : null}
                     {liveCameraPoses?.sparse_point_count ? (

@@ -55,12 +55,10 @@ logger = logging.getLogger(__name__)
 
 video_processor = VideoProcessor()
 
-TRAINING_PREVIEW_FILENAME = "preview_latest.ply"
-TRAINING_PREVIEW_METADATA_FILENAME = "preview_latest.json"
-LIVE_PREVIEW_PERCENT_STEP = 5
 TRAINING_LIVE_RENDER_DIRNAME = "live_training_preview"
 TRAINING_LIVE_CONTROL_FILENAME = "live_training_preview_control.json"
-TRAINING_LIVE_RENDER_PERCENT_STEP = 2
+_CAMERA_POSE_MANIFEST_CACHE: dict[tuple[str, int], dict] = {}
+_CAMERA_POSE_MANIFEST_CACHE_MAX = 16
 
 
 def _calculate_progress_percent(current: int, total: int) -> int:
@@ -121,14 +119,6 @@ def _send_uncached_binary(
     response.cache_control.must_revalidate = True
     response.expires = 0
     return response
-
-
-def _get_training_preview_paths(project_id: str) -> tuple[Path, Path]:
-    results_dir = app_config.RESULTS_FOLDER / project_id
-    return (
-        results_dir / TRAINING_PREVIEW_FILENAME,
-        results_dir / TRAINING_PREVIEW_METADATA_FILENAME,
-    )
 
 
 def _get_training_live_preview_paths(project_id: str) -> tuple[Path, Path]:
@@ -223,38 +213,17 @@ def _write_training_live_control(
     return payload
 
 
-def _load_training_preview_metadata(project_id: str):
-    preview_path, metadata_path = _get_training_preview_paths(project_id)
-    if not preview_path.exists():
-        raise FileNotFoundError("No training preview available for this project")
+def _latest_project_ply(project_id: str) -> Path | None:
+    results_dir = app_config.RESULTS_FOLDER / project_id
+    if not results_dir.exists():
+        return None
 
-    metadata = {}
-    if metadata_path.exists():
-        try:
-            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            metadata = {}
-
-    stat = preview_path.stat()
-    metadata.setdefault("filename", preview_path.name)
-    metadata.setdefault("iteration", 0)
-    metadata.setdefault("total_iterations", 0)
-    metadata.setdefault(
-        "progress_percent",
-        _calculate_progress_percent(
-            int(metadata.get("iteration") or 0),
-            int(metadata.get("total_iterations") or 0),
-        ),
+    ply_files = sorted(
+        [path for path in results_dir.glob("*.ply") if path.is_file()],
+        key=lambda path: (path.stat().st_mtime_ns, path.name),
+        reverse=True,
     )
-    metadata.setdefault("update_interval_percent", LIVE_PREVIEW_PERCENT_STEP)
-    metadata.setdefault("is_final", False)
-    metadata.setdefault("updated_at", datetime.fromtimestamp(stat.st_mtime).isoformat())
-    metadata["size_bytes"] = stat.st_size
-    metadata["version"] = stat.st_mtime_ns
-    metadata["preview_url"] = (
-        f"/api/project/{project_id}/training_preview_file?v={metadata['version']}"
-    )
-    return preview_path, metadata
+    return ply_files[0] if ply_files else None
 
 
 def _prepare_retry_artifacts(project_id: str, paths: dict, from_stage: str) -> None:
@@ -703,6 +672,22 @@ def _find_latest_sparse_snapshot(project_path: Path) -> Path | None:
     return None
 
 
+def _get_sparse_model_version(sparse_model_path: Path) -> int:
+    version = sparse_model_path.stat().st_mtime_ns
+    for filename in (
+        "cameras.txt",
+        "images.txt",
+        "points3D.txt",
+        "cameras.bin",
+        "images.bin",
+        "points3D.bin",
+    ):
+        candidate = sparse_model_path / filename
+        if candidate.exists():
+            version = max(version, candidate.stat().st_mtime_ns)
+    return version
+
+
 def _resolve_project_camera_pose_model_path(
     project_id: str, *, prefer_live: bool = True
 ) -> tuple[Path | None, str]:
@@ -775,13 +760,113 @@ def _load_project_camera_poses(project_id, *, prefer_live: bool = True):
             image["image_url"] = image["image_url"].format(project_id=project_id)
         sparse_points, sparse_point_count = _parse_colmap_points3d_txt(points_path)
         _apply_opensplat_center_scale(images, sparse_points)
+        snapshot_version = _get_sparse_model_version(sparse_model_path)
         return (
             str(sparse_model_path),
             images,
             sparse_points,
             sparse_point_count,
             source_type,
+            snapshot_version,
         )
+    finally:
+        for path in cleanup_paths:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+
+def _build_camera_pose_source_label(
+    source_type: str,
+    camera_count: int,
+    total_images: int,
+    capture_progress_percent: int,
+) -> str:
+    if source_type == "snapshot":
+        return (
+            f"Live sparse snapshot at {capture_progress_percent}% "
+            f"({camera_count}/{total_images} cameras)"
+            if total_images > 0
+            else "Live sparse snapshot"
+        )
+    return (
+        f"Final sparse model with {camera_count}/{total_images} cameras"
+        if total_images > 0
+        else "Final sparse model"
+    )
+
+
+def _load_project_camera_pose_manifest(project_id, *, prefer_live: bool = True) -> dict:
+    project_path = (app_config.UPLOAD_FOLDER / project_id).resolve()
+    if not project_path.exists():
+        raise FileNotFoundError("Project not found")
+
+    sparse_model_path, source_type = _resolve_project_camera_pose_model_path(
+        project_id, prefer_live=prefer_live
+    )
+    if not sparse_model_path or not sparse_model_path.exists():
+        raise FileNotFoundError("No sparse reconstruction found for this project")
+
+    snapshot_version = _get_sparse_model_version(sparse_model_path)
+    cache_key = (str(sparse_model_path), snapshot_version)
+    cached = _CAMERA_POSE_MANIFEST_CACHE.get(cache_key)
+    if cached is not None:
+        return dict(cached)
+
+    cleanup_paths = []
+    try:
+        cameras_ref, images_ref, points_ref = _ensure_sparse_text_model(sparse_model_path)
+        if isinstance(cameras_ref, str):
+            cleanup_paths.append(cameras_ref)
+            cameras_path = Path(cameras_ref)
+        else:
+            cameras_path = cameras_ref
+        if isinstance(images_ref, str):
+            cleanup_paths.append(images_ref)
+            images_path = Path(images_ref)
+        else:
+            images_path = images_ref
+        if isinstance(points_ref, str):
+            cleanup_paths.append(points_ref)
+
+        cameras = _parse_colmap_cameras_txt(cameras_path)
+        images = _parse_colmap_images_txt(images_path, cameras)
+        for image in images:
+            image["image_url"] = image["image_url"].format(project_id=project_id)
+        _apply_opensplat_center_scale(images, [])
+
+        project_data = project_store.processing_status.get(project_id, {})
+        metadata = project_data.get("metadata") or {}
+        config = project_data.get("config") or {}
+        total_images = _count_project_images(project_id)
+        capture_progress_percent = _calculate_progress_percent(len(images), total_images)
+
+        manifest = {
+            "project_id": project_id,
+            "project_name": metadata.get("name"),
+            "sfm_engine": config.get("sfm_engine"),
+            "camera_count": len(images),
+            "total_images": total_images,
+            "capture_progress_percent": capture_progress_percent,
+            "update_mode": "per_image",
+            "cameras": images,
+            "is_live": bool(prefer_live and source_type == "snapshot"),
+            "source_type": source_type,
+            "source_label": _build_camera_pose_source_label(
+                source_type,
+                len(images),
+                total_images,
+                capture_progress_percent,
+            ),
+            "sparse_model_path": str(sparse_model_path),
+            "snapshot_version": snapshot_version,
+        }
+
+        _CAMERA_POSE_MANIFEST_CACHE[cache_key] = dict(manifest)
+        while len(_CAMERA_POSE_MANIFEST_CACHE) > _CAMERA_POSE_MANIFEST_CACHE_MAX:
+            _CAMERA_POSE_MANIFEST_CACHE.pop(next(iter(_CAMERA_POSE_MANIFEST_CACHE)))
+        return manifest
     finally:
         for path in cleanup_paths:
             try:
@@ -1779,6 +1864,7 @@ def retry_project(project_id):
                 "init_num_trials",
                 "mapper_cpu_threads",
                 "force_cpu_sparse_reconstruction",
+                "matcher_fallback_retry_type",
                 "sparse_retry_sfm_engine",
                 "cpu_sparse_registration_profile",
                 "structure_less_registration_fallback",
@@ -2086,7 +2172,14 @@ def get_camera_poses(project_id):
             "false",
             "no",
         }
-        sparse_model_path, cameras, sparse_points, sparse_point_count, source_type = (
+        (
+            sparse_model_path,
+            cameras,
+            sparse_points,
+            sparse_point_count,
+            source_type,
+            snapshot_version,
+        ) = (
             _load_project_camera_poses(project_id, prefer_live=prefer_live)
         )
         project_data = project_store.processing_status.get(project_id, {})
@@ -2094,19 +2187,12 @@ def get_camera_poses(project_id):
         config = project_data.get("config") or {}
         total_images = _count_project_images(project_id)
         capture_progress_percent = _calculate_progress_percent(len(cameras), total_images)
-        if source_type == "snapshot":
-            source_label = (
-                f"Live sparse snapshot at {capture_progress_percent}% "
-                f"({len(cameras)}/{total_images} cameras)"
-                if total_images > 0
-                else "Live sparse snapshot"
-            )
-        else:
-            source_label = (
-                f"Final sparse model with {len(cameras)}/{total_images} cameras"
-                if total_images > 0
-                else "Final sparse model"
-            )
+        source_label = _build_camera_pose_source_label(
+            source_type,
+            len(cameras),
+            total_images,
+            capture_progress_percent,
+        )
 
         return jsonify(
             {
@@ -2116,7 +2202,7 @@ def get_camera_poses(project_id):
                 "camera_count": len(cameras),
                 "total_images": total_images,
                 "capture_progress_percent": capture_progress_percent,
-                "update_interval_percent": LIVE_PREVIEW_PERCENT_STEP,
+                "update_mode": "per_image",
                 "sparse_model_path": sparse_model_path,
                 "sparse_point_count": sparse_point_count,
                 "sparse_points": sparse_points,
@@ -2124,6 +2210,7 @@ def get_camera_poses(project_id):
                 "is_live": bool(prefer_live and source_type == "snapshot"),
                 "source_type": source_type,
                 "source_label": source_label,
+                "snapshot_version": snapshot_version,
             }
         )
     except FileNotFoundError as exc:
@@ -2138,13 +2225,56 @@ def get_camera_poses(project_id):
         return jsonify({"error": str(exc)}), 500
 
 
+@api_bp.route("/project/<project_id>/camera_poses/manifest", methods=["GET"])
+def get_camera_pose_manifest(project_id):
+    if project_id not in project_store.processing_status:
+        return jsonify({"error": "Project not found"}), 404
+
+    try:
+        prefer_live = request.args.get("prefer_live", "1").lower() not in {
+            "0",
+            "false",
+            "no",
+        }
+        since = request.args.get("since")
+        manifest = _load_project_camera_pose_manifest(
+            project_id, prefer_live=prefer_live
+        )
+        snapshot_version = str(manifest.get("snapshot_version") or "")
+        if since and since == snapshot_version:
+            return jsonify(
+                {
+                    "project_id": project_id,
+                    "unchanged": True,
+                    "snapshot_version": manifest.get("snapshot_version"),
+                    "camera_count": manifest.get("camera_count"),
+                    "total_images": manifest.get("total_images"),
+                    "capture_progress_percent": manifest.get(
+                        "capture_progress_percent"
+                    ),
+                }
+            )
+        return jsonify(manifest)
+    except FileNotFoundError as exc:
+        return jsonify({"error": str(exc)}), 404
+    except RuntimeError as exc:
+        logger.error(
+            f"Failed to load camera pose manifest for project {project_id}: {exc}"
+        )
+        return jsonify({"error": str(exc)}), 500
+    except Exception as exc:
+        logger.exception(
+            f"Unexpected error loading camera pose manifest for project {project_id}"
+        )
+        return jsonify({"error": str(exc)}), 500
+
+
 @api_bp.route("/project/<project_id>/training_preview", methods=["GET"])
 def get_training_preview(project_id):
     if project_id not in project_store.processing_status:
         return jsonify({"error": "Project not found"}), 404
 
     try:
-        _, metadata = _load_training_preview_metadata(project_id)
         project_data = project_store.processing_status.get(project_id, {})
         progress_states = project_data.get("progress_states") or []
         training_stage = next(
@@ -2155,16 +2285,46 @@ def get_training_preview(project_id):
             ),
             None,
         )
-        return jsonify(
-            {
-                "project_id": project_id,
-                "available": True,
-                "is_live": bool(training_stage and training_stage.get("status") == "running"),
-                **metadata,
-            }
+        latest_ply = _latest_project_ply(project_id)
+        progress_percent = (
+            int(training_stage.get("progress") or 0) if training_stage else 0
         )
-    except FileNotFoundError as exc:
-        return jsonify({"error": str(exc), "available": False}), 404
+        iteration = None
+        total_iterations = None
+        training_details = (project_data.get("stage_details") or {}).get(
+            "gaussian_splatting", {}
+        )
+        current_iterations = training_details.get("current_item")
+        total_items = training_details.get("total_items")
+        if isinstance(current_iterations, int):
+            iteration = current_iterations
+        if isinstance(total_items, int):
+            total_iterations = total_items
+
+        response = {
+            "project_id": project_id,
+            "available": latest_ply is not None,
+            "is_live": bool(training_stage and training_stage.get("status") == "running"),
+            "iteration": iteration or 0,
+            "total_iterations": total_iterations or 0,
+            "progress_percent": progress_percent,
+            "update_interval_percent": 2,
+            "is_final": bool(latest_ply and project_data.get("status") == "completed"),
+        }
+
+        if latest_ply is not None:
+            stat = latest_ply.stat()
+            response.update(
+                {
+                    "filename": latest_ply.name,
+                    "updated_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                    "size_bytes": stat.st_size,
+                    "version": stat.st_mtime_ns,
+                    "preview_url": f"/api/project/{project_id}/training_preview_file?v={stat.st_mtime_ns}",
+                }
+            )
+
+        return jsonify(response)
     except Exception as exc:
         logger.exception(
             f"Unexpected error loading training preview for project {project_id}"
@@ -2178,7 +2338,9 @@ def get_training_preview_file(project_id):
         return jsonify({"error": "Project not found"}), 404
 
     try:
-        preview_path, _ = _load_training_preview_metadata(project_id)
+        preview_path = _latest_project_ply(project_id)
+        if preview_path is None:
+            raise FileNotFoundError("No final training preview available for this project")
         return _send_uncached_binary(preview_path)
     except FileNotFoundError as exc:
         return jsonify({"error": str(exc)}), 404
@@ -2199,7 +2361,7 @@ def select_training_live_preview(project_id):
     requested_camera_id = payload.get("camera_id")
 
     try:
-        _, cameras, _, _, _ = _load_project_camera_poses(project_id, prefer_live=True)
+        _, cameras, _, _, _, _ = _load_project_camera_poses(project_id, prefer_live=True)
     except FileNotFoundError as exc:
         return jsonify({"error": str(exc)}), 404
     except Exception as exc:

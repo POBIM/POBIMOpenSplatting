@@ -48,6 +48,7 @@ def init_socketio(app) -> Optional["FlaskSocketIO"]:
         emit_stage_progress=_emit_stage_progress,
         emit_log_message=_emit_log_message,
         emit_training_live_preview=_emit_training_live_preview,
+        emit_sparse_pose_update=_emit_sparse_pose_update,
     )
     _register_handlers()
     return socketio
@@ -60,7 +61,10 @@ def _emit_progress_update(project_id: str, event_type: str, data: Dict[str, Any]
 
     try:
         socketio.emit(event_type, data, to=project_id)
-        logger.debug("Emitted %s to room %s: %s", event_type, project_id, data)
+        if event_type == "training_live_preview":
+            logger.debug("Emitted %s to room %s", event_type, project_id)
+        else:
+            logger.debug("Emitted %s to room %s: %s", event_type, project_id, data)
     except Exception as exc:  # pragma: no cover - logging only
         logger.error("Failed to emit progress update: %s", exc)
 
@@ -82,6 +86,10 @@ def _emit_log_message(project_id: str, message: str, timestamp: str) -> None:
 
 def _emit_training_live_preview(project_id: str, payload: Dict[str, Any]) -> None:
     _emit_progress_update(project_id, "training_live_preview", payload)
+
+
+def _emit_sparse_pose_update(project_id: str, payload: Dict[str, Any]) -> None:
+    _emit_progress_update(project_id, "sparse_pose_update", payload)
 
 
 def _register_handlers() -> None:

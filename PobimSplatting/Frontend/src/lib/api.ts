@@ -433,6 +433,7 @@ export interface CameraPosesData {
   total_images?: number;
   capture_progress_percent?: number;
   update_interval_percent?: number;
+  update_mode?: 'per_image' | string;
   cameras: CameraPose[];
   sparse_point_count?: number;
   sparse_points?: SparsePoint[];
@@ -440,6 +441,8 @@ export interface CameraPosesData {
   source_type?: 'snapshot' | 'final' | string;
   source_label?: string;
   sparse_model_path?: string;
+  snapshot_version?: number | string;
+  unchanged?: boolean;
 }
 
 export interface TrainingPreview {
@@ -914,6 +917,23 @@ export const api = {
         options.preferLive === undefined
           ? undefined
           : { prefer_live: options.preferLive ? '1' : '0' },
+    });
+    return response.data;
+  },
+
+  getCameraPoseManifest: async (
+    id: string,
+    options: { preferLive?: boolean; since?: number | string } = {}
+  ) => {
+    const params: Record<string, string> = {};
+    if (options.preferLive !== undefined) {
+      params.prefer_live = options.preferLive ? '1' : '0';
+    }
+    if (options.since !== undefined && options.since !== null && options.since !== '') {
+      params.since = String(options.since);
+    }
+    const response = await apiClient.get(`/api/project/${id}/camera_poses/manifest`, {
+      params,
     });
     return response.data;
   },

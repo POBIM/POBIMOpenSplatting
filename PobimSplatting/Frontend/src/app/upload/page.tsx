@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
-import { Upload, FileVideo, Image, CheckCircle, AlertCircle, Settings, Info, Zap, Sliders, Wrench } from 'lucide-react';
+import { useState, useCallback, useEffect, type ReactNode } from 'react';
+import { Upload, FileVideo, Image, AlertCircle, Settings, Info, Zap, Sliders, Wrench } from 'lucide-react';
 import { Accordion } from '@/components/ui';
 import { api, UploadPolicyPreview } from '@/lib/api';
-import { getMatcherLabelWithMode, getSfmEngineCompactLabel, getSfmEngineLabel } from '@/lib/sfm-display';
+import { getMatcherLabelWithMode, getSfmEngineCompactLabel } from '@/lib/sfm-display';
 import { useRouter } from 'next/navigation';
 
 type MatcherMode = 'auto' | 'sequential' | 'exhaustive' | 'vocab_tree';
@@ -12,6 +12,15 @@ type SfmBackendMode = 'cli' | 'pycolmap';
 
 const DEFAULT_CPU_CHUNK_WORKERS = 8;
 const CPU_CHUNK_WORKER_SUGGESTIONS = [2, 4, 8, 12, 14];
+
+function TooltipLabel({ children, tip }: { children: ReactNode; tip: string }) {
+  return (
+    <span className="inline-flex cursor-help items-center gap-1" title={tip}>
+      {children}
+      <Info className="h-3.5 w-3.5 opacity-60" aria-hidden="true" />
+    </span>
+  );
+}
 
 export default function UploadPage() {
   const router = useRouter();
@@ -46,8 +55,8 @@ export default function UploadPage() {
     use_gpu_extraction: true,  // GPU-accelerated video frame extraction (5-10x faster)
     mixed_precision: false,
     // New resolution-based extraction settings
-    colmap_resolution: '2K',  // Resolution for COLMAP feature extraction (720p, 1080p, 2K, 4K, 8K, original)
-    training_resolution: '4K',  // Resolution for 3DGS training (higher quality)
+    colmap_resolution: '720p',  // Resolution for COLMAP feature extraction (720p, 1080p, 2K, 4K, 8K, original)
+    training_resolution: '720p',  // Resolution for 3DGS training
     use_separate_training_images: false,  // Extract separate high-res images for training
     // 8K Optimization
     crop_size: 0  // Patch-based training (0 = disabled)
@@ -665,13 +674,15 @@ export default function UploadPage() {
     <div className="brutal-shell">
       <section className="brutal-section-tight">
         <div className="brutal-container max-w-6xl space-y-4">
-          <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
-            <div className="space-y-2">
-              <span className="brutal-eyebrow rotate-1">Upload Wizard</span>
-              <div>
-                <h1 className="brutal-h1">Upload Media</h1>
-                <p className="mt-1 text-sm font-medium text-[color:var(--text-secondary)]">Images or videos for 3D reconstruction</p>
-              </div>
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="brutal-h2">Upload</h1>
+              <span
+                className="brutal-badge cursor-help"
+                title="Images or videos for 3D reconstruction. Supports common video and image formats up to 5GB each."
+              >
+                Media
+              </span>
             </div>
             {files.length > 0 && (
               <div className="flex flex-wrap gap-2 text-xs font-bold uppercase tracking-[0.12em]">
@@ -683,7 +694,7 @@ export default function UploadPage() {
           </div>
 
       <div
-        className={`relative overflow-hidden border-2 border-dashed p-5 text-center transition-all md:p-6 ${isDragging
+        className={`relative overflow-hidden border-2 border-dashed p-3 text-center transition-all md:p-4 ${isDragging
           ? 'border-[color:var(--ink)] bg-[color:var(--paper-muted)] shadow-[var(--shadow-md)]'
           : 'border-[color:var(--ink)] bg-[color:var(--paper-card)] shadow-[var(--shadow-sm)] hover:-translate-x-0.5 hover:-translate-y-0.5 hover:shadow-[var(--shadow-md)]'
           }`}
@@ -697,15 +708,13 @@ export default function UploadPage() {
             onDragOver={handleDragOver}
             onDrop={handleDrop}
           >
-            <div className="mx-auto mb-3 flex h-11 w-11 items-center justify-center border border-[color:var(--ink)] bg-[color:var(--paper-muted)] shadow-[var(--shadow-sm)]">
+            <div className="mx-auto mb-2 flex h-10 w-10 items-center justify-center border border-[color:var(--ink)] bg-[color:var(--paper-muted)] shadow-[var(--shadow-sm)]">
               <Upload className="h-5 w-5 text-[color:var(--ink)]" />
             </div>
-            <p className="brutal-h3 mb-1">
-              Drop your files here or click to browse
+            <p className="brutal-h3 mb-1" title="Drop files here or click to browse. MP4, AVI, MOV, JPG, PNG, WebP, TIFF. Max 5GB per file.">
+              Drop or browse
             </p>
-            <p className="mx-auto mb-4 max-w-xl text-xs font-medium text-[color:var(--text-secondary)]">
-              Supports MP4, AVI, MOV, JPG, PNG, WebP, TIFF files up to 5GB each
-            </p>
+            <p className="mx-auto mb-3 max-w-xl text-xs font-medium text-[color:var(--text-secondary)]">Video / image</p>
             <input
               type="file"
               accept="video/*,image/*"
@@ -714,19 +723,19 @@ export default function UploadPage() {
               className="hidden"
               id="file-input"
             />
-            <span className="brutal-btn brutal-btn-primary">
-              Choose Files
+            <span className="brutal-btn brutal-btn-primary" title="Select one or more image/video files">
+              Choose
             </span>
           </label>
         ) : (
-          <div className="space-y-4">
+          <div className="space-y-3">
             {/* File List */}
-            <div className="brutal-card-muted p-3 text-left">
+            <div className="brutal-card-muted p-2.5 text-left">
               <div className="flex items-center justify-between gap-3">
-                <h4 className="brutal-h3">Selected Files ({files.length})</h4>
+                <h4 className="brutal-h3">Files ({files.length})</h4>
                 <span className="brutal-badge -rotate-1">{formatFileSize(totalSize)}</span>
               </div>
-              <div className="brutal-scroll mt-3 space-y-1.5 max-h-36 overflow-y-auto pr-1">
+              <div className="brutal-scroll mt-2 space-y-1.5 max-h-28 overflow-y-auto pr-1">
                 {files.map((file, index) => (
                   <div key={`${file.name}-${file.size}-${index}`} className="flex items-center justify-between border border-[color:var(--ink)] bg-[color:var(--paper-card)] px-2.5 py-2">
                     <div className="flex min-w-0 items-center space-x-2.5">
@@ -752,74 +761,78 @@ export default function UploadPage() {
                   </div>
                 ))}
               </div>
-              <p className="mt-2 text-[11px] font-medium uppercase tracking-wide text-[color:var(--text-secondary)]">Total size: {formatFileSize(totalSize)}</p>
             </div>
 
             {/* Configuration Options */}
-            <div className="space-y-4">
+            <div className="space-y-3">
               {/* Project Details */}
-              <div className="grid md:grid-cols-2 gap-4">
+              <div className="grid gap-3 md:grid-cols-2">
                 <div>
-                  <label htmlFor="project-name" className="brutal-label mb-2 inline-block">Project Name</label>
+                  <label htmlFor="project-name" className="brutal-label mb-1.5 inline-block">
+                    <TooltipLabel tip="Optional. Leave blank to let the backend name the project.">Project</TooltipLabel>
+                  </label>
                   <input
                     id="project-name"
                     type="text"
                     value={config.project_name}
                     onChange={(e) => setConfig({ ...config, project_name: e.target.value })}
                     className="brutal-input"
-                    placeholder="My Awesome 3D Model"
+                    placeholder="Project name"
                   />
                 </div>
                 <div>
-                  <label htmlFor="quality-mode" className="brutal-label mb-2 inline-block">Quality Preset</label>
+                  <label htmlFor="quality-mode" className="brutal-label mb-1.5 inline-block">
+                    <TooltipLabel tip="Controls training iterations and reconstruction policy. Hard starts with coverage-first COLMAP settings.">Quality</TooltipLabel>
+                  </label>
                   <select
                     id="quality-mode"
                     value={config.quality_mode}
                     onChange={(e) => setConfig({ ...config, quality_mode: e.target.value })}
                     className="brutal-select"
                   >
-                    <option value="hard">🧱 Hard ({getQualityInfo('hard').iterations} iter) - {getQualityInfo('hard').time} - AGGRESSIVE COVERAGE</option>
-                    <option value="high">🎯 High ({getQualityInfo('high').iterations} iter) - {getQualityInfo('high').time}</option>
-                    <option value="ultra">✨ Ultra ({getQualityInfo('ultra').iterations} iter) - {getQualityInfo('ultra').time}</option>
-                    <option value="professional">💎 Professional ({getQualityInfo('professional').iterations} iter) - {getQualityInfo('professional').time} - 4K+ SUPPORT</option>
-                    <option value="ultra_professional">🏆 Ultra Professional ({getQualityInfo('ultra_professional').iterations} iter) - {getQualityInfo('ultra_professional').time} - HIGHEST QUALITY</option>
-                    <option value="custom">⚙️ Custom - Fine-tune all parameters</option>
+                    <option value="hard">Hard - {getQualityInfo('hard').time}</option>
+                    <option value="high">High - {getQualityInfo('high').time}</option>
+                    <option value="ultra">Ultra - {getQualityInfo('ultra').time}</option>
+                    <option value="professional">Professional - {getQualityInfo('professional').time}</option>
+                    <option value="ultra_professional">Ultra Pro - {getQualityInfo('ultra_professional').time}</option>
+                    <option value="custom">Custom</option>
                   </select>
-                  <p className="mt-2 text-xs font-medium text-[color:var(--text-secondary)]">
-                    {config.quality_mode === 'custom' ? 'Fine-tune all parameters' : getQualityInfo(config.quality_mode).desc}
-                  </p>
                   {config.quality_mode === 'hard' && (
-                    <div className="mt-3 border border-[color:var(--ink)] px-3 py-3 text-sm" style={{ background: 'var(--warning-bg)', color: 'var(--warning-text)' }}>
-                      <strong>Hard mode plan:</strong> เน้นเก็บ sparse coverage และ feature matching ให้กว้างก่อน โดยเริ่มเทรนเพียง 5000 รอบ
-                      ถ้าภาพรวมดีค่อย Retry ต่อเป็น Professional หรือเพิ่ม iterations ภายหลัง
-                    </div>
+                    <span
+                      className="mt-1.5 inline-flex cursor-help border border-[color:var(--ink)] px-2 py-1 text-[11px] font-bold uppercase tracking-wide"
+                      style={{ background: 'var(--warning-bg)', color: 'var(--warning-text)' }}
+                      title="Hard mode: coverage-first COLMAP pass with 5000 training iterations. Retry later with Professional or more iterations if needed."
+                    >
+                      coverage-first
+                    </span>
                   )}
                 </div>
               </div>
 
-              <div className={`border p-3 shadow-[var(--shadow-sm)] ${resolvedExpectedPolicy.tone}`} style={{ borderColor: 'var(--ink)' }}>
-                <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+              <div className={`border p-2.5 shadow-[var(--shadow-sm)] ${resolvedExpectedPolicy.tone}`} style={{ borderColor: 'var(--ink)' }}>
+                <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                   <div>
-                      <p className="brutal-label opacity-70">Expected Policy</p>
-                      <div className="mt-1 flex items-center gap-3">
-                        <div className={`flex h-9 w-9 items-center justify-center border shadow-[var(--shadow-sm)] ${resolvedExpectedPolicy.badgeTone}`}>
+                      <p className="brutal-label opacity-70">
+                        <TooltipLabel tip={resolvedExpectedPolicy.summary}>Policy</TooltipLabel>
+                      </p>
+                      <div className="mt-1 flex items-center gap-2">
+                        <div className={`flex h-8 w-8 items-center justify-center border shadow-[var(--shadow-sm)] ${resolvedExpectedPolicy.badgeTone}`}>
                           <PolicyIcon className="h-4 w-4" />
                         </div>
                         <div>
                           <h3 className="brutal-h3">{resolvedExpectedPolicy.title}</h3>
-                          <p className="text-xs font-medium uppercase tracking-wide opacity-70">
+                          <p className="text-[11px] font-medium uppercase tracking-wide opacity-70">
                             {policyPreviewLoading ? 'Refreshing backend heuristic...' : 'Resolved from backend preview heuristic'}
                           </p>
                         </div>
                       </div>
-                      <p className="mt-1 text-sm font-medium opacity-90">{resolvedExpectedPolicy.summary}</p>
                     </div>
                     <div className="flex flex-wrap gap-2 text-xs font-medium">
                       <span className={`border px-2 py-1 shadow-[2px_2px_0_var(--ink)] ${resolvedExpectedPolicy.badgeTone}`}>{resolvedExpectedPolicy.profileBadge}</span>
-                      <span className="border border-[color:var(--ink)] bg-white/70 px-2 py-1">matcher: {resolvedExpectedPolicy.matcherBadge}</span>
-                      <span className="border border-[color:var(--ink)] bg-white/70 px-2 py-1">engine: {resolvedExpectedPolicy.engineBadge}</span>
+                      <span className="border border-[color:var(--ink)] bg-white/70 px-2 py-1" title="Feature matcher">M: {resolvedExpectedPolicy.matcherBadge}</span>
+                      <span className="border border-[color:var(--ink)] bg-white/70 px-2 py-1" title="SfM engine">E: {resolvedExpectedPolicy.engineBadge}</span>
                       {resolvedEstimatedNumImages ? (
-                        <span className="border border-[color:var(--ink)] bg-white/70 px-2 py-1">est. frames/images: {resolvedEstimatedNumImages}</span>
+                        <span className="border border-[color:var(--ink)] bg-white/70 px-2 py-1" title="Estimated frames/images">~{resolvedEstimatedNumImages}</span>
                       ) : null}
                     </div>
                   </div>
@@ -830,16 +843,20 @@ export default function UploadPage() {
                     <div className="h-3 w-4/5 bg-white/60" />
                   </div>
                 )}
-                <div className="mt-3 border border-[color:var(--ink)] bg-white/70 p-3 text-gray-900 shadow-[var(--shadow-sm)]">
-                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div className="mt-2 border border-[color:var(--ink)] bg-white/70 p-2.5 text-gray-900 shadow-[var(--shadow-sm)]">
+                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                     <div>
-                      <p className="brutal-label">Preview Confidence</p>
-                      <div className="mt-1 flex items-center gap-3">
+                      <p className="brutal-label">
+                        <TooltipLabel tip={`Signals: ${resolvedConfidenceSignals.map((signal) => `${signal.label}: ${signal.detail}`).join(' | ')}`}>
+                          Confidence
+                        </TooltipLabel>
+                      </p>
+                      <div className="mt-1 flex items-center gap-2">
                         <span className={`border px-2 py-1 text-xs font-semibold shadow-[2px_2px_0_var(--ink)] ${resolvedConfidence.tone}`}>{resolvedConfidence.label}</span>
                         <span className="text-sm font-medium text-gray-600">score {resolvedConfidence.score}/100</span>
                       </div>
                     </div>
-                    <div className="text-xs font-medium text-gray-500">
+                    <div className="truncate text-xs font-medium text-gray-500 md:max-w-[45%]" title={resolvedConfidenceSignals.map((signal) => `${signal.label}: ${signal.detail}`).join(' | ')}>
                       Signals: {resolvedConfidenceSignals.slice(0, 3).map((signal) => signal.label).join(' • ')}
                     </div>
                   </div>
@@ -863,7 +880,7 @@ export default function UploadPage() {
                         className={`border px-2 py-1 ${signal.delta >= 0 ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-amber-200 bg-amber-50 text-amber-900'}`}
                         title={`${signal.label}: ${signal.detail} (${signal.delta >= 0 ? '+' : ''}${signal.delta})`}
                       >
-                        {signal.label} {signal.delta >= 0 ? `+${signal.delta}` : signal.delta}
+                        {signal.label}
                       </span>
                     ))}
                   </div>
@@ -909,7 +926,10 @@ export default function UploadPage() {
                   </div>
                 </div>
                 {autoTuningSummary && (
-                  <div className="mt-3 border border-[color:var(--ink)] bg-white/70 p-3 text-gray-900 shadow-[var(--shadow-sm)]">
+                  <details className="mt-2 border border-[color:var(--ink)] bg-white/70 p-2.5 text-gray-900 shadow-[var(--shadow-sm)]">
+                    <summary className="cursor-pointer text-xs font-black uppercase tracking-[0.14em] text-gray-800">
+                      Tuning
+                    </summary>
                     <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
                       <div>
                         <p className="brutal-label">Policy Source</p>
@@ -959,7 +979,7 @@ export default function UploadPage() {
                         ))}
                       </div>
                     )}
-                  </div>
+                  </details>
                 )}
                 {adaptiveComparisons.length > 0 && (
                   <details className="mt-3 border border-[color:var(--ink)] bg-white/70 p-3 text-gray-900 shadow-[var(--shadow-sm)]">
@@ -1046,7 +1066,11 @@ export default function UploadPage() {
                     </div>
                   </details>
                 )}
-                <div className="mt-3 grid gap-2 md:grid-cols-3">
+                <details className="mt-2 border border-[color:var(--ink)] bg-white/60 p-2.5">
+                  <summary className="cursor-pointer text-xs font-black uppercase tracking-[0.14em] text-gray-800">
+                    Policy Details
+                  </summary>
+                <div className="mt-2 grid gap-2 md:grid-cols-3">
                   {policyLegend.map((entry) => {
                     const LegendIcon = entry.icon;
                     const isActive = entry.key === resolvedInputProfile;
@@ -1066,12 +1090,11 @@ export default function UploadPage() {
                     );
                   })}
                 </div>
-                <details className="mt-3 border border-[color:var(--ink)] bg-white/60 p-3">
+                <details className="mt-2 border border-[color:var(--ink)] bg-white/60 p-2.5">
                   <summary className="cursor-pointer text-xs font-black uppercase tracking-[0.14em] text-gray-800">
-                    Live Rule Preview
+                    Rules
                   </summary>
                   <div className="mt-2 space-y-2">
-                    <p className="brutal-label opacity-70">Live Rule Preview</p>
                   {resolvedPreviewRules.map((rule, index) => (
                     <div
                       key={`${rule.level}-${index}`}
@@ -1087,9 +1110,7 @@ export default function UploadPage() {
                   ))}
                   </div>
                 </details>
-                <p className="mt-3 text-xs opacity-75">
-                  This is a pre-upload recommendation only. After matching, the backend can still refine the policy again from pair geometry.
-                </p>
+                </details>
               </div>
 
               {/* Advanced Options Accordion */}
@@ -1101,10 +1122,10 @@ export default function UploadPage() {
               >
                 <div className="space-y-4">
                   {/* SfM Engine Selection */}
-              <div className="brutal-card-muted p-3 text-left">
-                <h4 className="brutal-h3 mb-2 flex items-center">
+              <div className="brutal-card-muted p-2.5 text-left">
+                <h4 className="brutal-h3 mb-2 flex items-center" title={engineRecommendation}>
                   <span className="text-xl mr-2">⚡</span>
-                  Structure-from-Motion Engine
+                  SfM Engine
                 </h4>
                 <div className="grid md:grid-cols-1 gap-4">
                   <div>
@@ -1121,14 +1142,13 @@ export default function UploadPage() {
                           onChange={(e) => setConfig({ ...config, sfm_engine: e.target.value })}
                           className="sr-only"
                         />
-                        <div className="flex items-center justify-between">
+                        <div className="flex items-center justify-between" title="Global sparse solve. Best for most unordered photo sets.">
                           <div>
-                            <span className="font-bold text-green-700 text-lg">🚀 {getSfmEngineLabel('glomap')}</span>
-                            <span className="ml-2 px-2 py-0.5 bg-green-500 text-white text-xs rounded-full">RECOMMENDED</span>
+                            <span className="font-bold text-green-700 text-lg">{getSfmEngineCompactLabel('glomap')}</span>
+                            <span className="ml-2 px-2 py-0.5 bg-green-500 text-white text-xs rounded-full">REC</span>
                           </div>
-                          <span className="text-green-600 font-semibold">Global SfM</span>
+                          <span className="text-green-600 font-semibold">Global</span>
                         </div>
-                        <p className="text-xs text-gray-600 mt-2">Global sparse solve. Best for most unordered photo sets.</p>
                       </label>
 
                       <label className={`border-2 p-3 cursor-pointer transition-all ${config.sfm_engine === 'fastmap'
@@ -1143,14 +1163,13 @@ export default function UploadPage() {
                           onChange={(e) => setConfig({ ...config, sfm_engine: e.target.value })}
                           className="sr-only"
                         />
-                        <div className="flex items-center justify-between">
+                        <div className="flex items-center justify-between" title="GPU-first throughput for dense video/capture streams.">
                           <div>
-                            <span className="font-bold text-purple-700 text-lg">⚡ FastMap</span>
+                            <span className="font-bold text-purple-700 text-lg">FastMap</span>
                             <span className="ml-2 px-2 py-0.5 bg-purple-500 text-white text-xs rounded-full">NEW</span>
                           </div>
-                          <span className="text-purple-600 font-semibold">GPU-First</span>
+                          <span className="text-purple-600 font-semibold">GPU</span>
                         </div>
-                        <p className="text-xs text-gray-600 mt-2">GPU-first throughput for dense video/capture streams.</p>
                       </label>
 
                       <label className={`border-2 p-3 cursor-pointer transition-all ${config.sfm_engine === 'colmap'
@@ -1165,47 +1184,45 @@ export default function UploadPage() {
                           onChange={(e) => setConfig({ ...config, sfm_engine: e.target.value })}
                           className="sr-only"
                         />
-                        <div className="flex items-center justify-between">
+                        <div className="flex items-center justify-between" title="Incremental SfM for conservative fallback and hard inputs.">
                           <div>
-                            <span className="font-bold text-blue-700 text-lg">🔧 COLMAP</span>
+                            <span className="font-bold text-blue-700 text-lg">COLMAP</span>
                             <span className="ml-2 px-2 py-0.5 bg-gray-400 text-white text-xs rounded-full">CLASSIC</span>
                           </div>
-                          <span className="text-gray-500 font-semibold">Standard Speed</span>
+                          <span className="text-gray-500 font-semibold">Classic</span>
                         </div>
-                        <p className="text-xs text-gray-600 mt-2">Incremental SfM for conservative fallback and hard inputs.</p>
                       </label>
                     </div>
 
                     {config.sfm_engine === 'fastmap' && (
-                      <div className="mt-3 border border-[color:var(--ink)] bg-yellow-50 p-3">
+                      <div className="mt-3 border border-[color:var(--ink)] bg-yellow-50 p-2.5" title="Best for video frames with dense scene coverage. May fail on sparse photo collections or low-quality images.">
                         <p className="text-sm text-yellow-800">
-                          <strong>⚠️ FastMap Notice:</strong> Best for video frames with dense scene coverage. 
-                          May fail on sparse photo collections or low-quality images. 
-                          Use COLMAP Global SfM or COLMAP Incremental for more robust results.
+                          <strong>FastMap:</strong> dense video only
                         </p>
                       </div>
                     )}
 
                     {usesGlobalSfm && (
                       <div className="mt-3 border border-[color:var(--ink)] bg-white px-4 py-3">
-                        <p className="brutal-label mb-2">Global SfM Backend</p>
+                        <p className="brutal-label mb-2">
+                          <TooltipLabel tip="pycolmap is experimental here. Backend falls back to CLI global mapper if unavailable or too old.">
+                            Backend
+                          </TooltipLabel>
+                        </p>
                         <select
                           value={config.sfm_backend}
                           onChange={(e) => setConfig({ ...config, sfm_backend: e.target.value as SfmBackendMode })}
                           className="brutal-select"
                         >
-                          <option value="cli">CLI Global Mapper (Recommended)</option>
-                          <option value="pycolmap">pycolmap.global_mapping (Experimental)</option>
+                          <option value="cli">CLI mapper</option>
+                          <option value="pycolmap">pycolmap</option>
                         </select>
-                        <p className="mt-2 text-xs text-gray-600">
-                          `pycolmap` is experimental here. The backend will try Python global mapping first, then fall back to the CLI global mapper automatically if the installed `pycolmap` is missing or too old.
-                        </p>
                       </div>
                     )}
 
-                    <div className="mt-3 border border-[color:var(--ink)] bg-emerald-50 px-4 py-3">
+                    <div className="mt-3 border border-[color:var(--ink)] bg-emerald-50 px-3 py-2" title={engineRecommendation}>
                       <p className="text-sm text-emerald-900">
-                        <strong>Dynamic reconstruction framework:</strong> {engineRecommendation}
+                        <strong>Recommendation:</strong> {getSfmEngineCompactLabel(config.sfm_engine)}
                       </p>
                     </div>
                   </div>
@@ -1213,17 +1230,14 @@ export default function UploadPage() {
               </div>
 
                   {/* Feature Extraction Method Selection */}
-              <div className="brutal-card-muted p-3 text-left">
+              <div className="brutal-card-muted p-2.5 text-left">
                 <div className="flex items-center justify-between mb-3">
-                  <h4 className="brutal-h3 flex items-center">
+                  <h4 className="brutal-h3 flex items-center" title="Neural features can reduce matching cost versus SIFT on high-resolution images.">
                     <span className="mr-2">🔬</span>
-                    Feature Extraction Method
-                    <span className="ml-2 text-xs bg-cyan-100 text-cyan-700 px-2 py-1 rounded-full">ULTRA SPEED</span>
+                    Features
+                    <span className="ml-2 text-xs bg-cyan-100 text-cyan-700 px-2 py-1 rounded-full">FAST</span>
                   </h4>
                 </div>
-                <p className="text-xs text-gray-600 mb-3">
-                  Neural features (ALIKED/SuperPoint) can substantially reduce matching cost versus traditional SIFT on high-resolution images
-                </p>
                 <div className="space-y-3">
                   <div className="flex flex-wrap gap-3">
                     <label className={`flex-1 min-w-[180px] border-2 p-3 cursor-pointer transition-all ${config.feature_method === 'aliked'
@@ -1239,10 +1253,8 @@ export default function UploadPage() {
                           className="sr-only"
                         />
                         <div>
-                          <span className="font-bold text-cyan-700 text-lg">⚡ ALIKED</span>
+                          <span className="font-bold text-cyan-700 text-lg">ALIKED</span>
                           <span className="ml-2 text-xs bg-cyan-200 text-cyan-800 px-2 py-0.5 rounded">Fastest</span>
-                          <p className="text-xs text-gray-500 mt-1">Native neural features inside COLMAP</p>
-                          <p className="text-xs text-cyan-600 mt-1">+ Native COLMAP LightGlue matching</p>
                         </div>
                       </div>
                     </label>
@@ -1259,10 +1271,8 @@ export default function UploadPage() {
                           className="sr-only"
                         />
                         <div>
-                          <span className="font-bold text-indigo-700 text-lg">🎯 SuperPoint</span>
-                          <span className="ml-2 text-xs bg-indigo-200 text-indigo-800 px-2 py-0.5 rounded">Best Quality</span>
-                          <p className="text-xs text-gray-500 mt-1">Deep learning features @ 45 FPS</p>
-                          <p className="text-xs text-indigo-600 mt-1">+ LightGlue matching (excellent accuracy)</p>
+                          <span className="font-bold text-indigo-700 text-lg">SuperPoint</span>
+                          <span className="ml-2 text-xs bg-indigo-200 text-indigo-800 px-2 py-0.5 rounded">Quality</span>
                         </div>
                       </div>
                     </label>
@@ -1279,21 +1289,19 @@ export default function UploadPage() {
                           className="sr-only"
                         />
                         <div>
-                          <span className="font-bold text-gray-700 text-lg">📐 SIFT</span>
+                          <span className="font-bold text-gray-700 text-lg">SIFT</span>
                           <span className="ml-2 text-xs bg-gray-200 text-gray-800 px-2 py-0.5 rounded">Classic</span>
-                          <p className="text-xs text-gray-500 mt-1">Traditional COLMAP features</p>
-                          <p className="text-xs text-gray-500 mt-1">Slower but most compatible</p>
                         </div>
                       </div>
                     </label>
                   </div>
                   {(config.feature_method === 'aliked' || config.feature_method === 'superpoint') && (
-                    <div className="mt-3 border border-[color:var(--ink)] bg-cyan-50 p-3">
+                    <div className="mt-3 border border-[color:var(--ink)] bg-cyan-50 p-2.5" title={config.feature_method === 'aliked'
+                      ? 'Using native COLMAP ALIKED + LightGlue inside the standard reconstruction pipeline.'
+                      : 'Using hloc SuperPoint + LightGlue, then importing results into COLMAP.'}
+                    >
                       <p className="text-sm text-cyan-800">
-                        <strong>🚀 Neural Features:</strong> {config.feature_method === 'aliked'
-                          ? 'Using native COLMAP ALIKED + LightGlue inside the standard reconstruction pipeline.'
-                          : 'Using hloc SuperPoint + LightGlue, then importing the results into the COLMAP database.'}
-                        {' '}This is aimed at stronger high-resolution matching coverage than the classic SIFT path.
+                        <strong>Neural:</strong> {config.feature_method}
                       </p>
                     </div>
                   )}
@@ -1303,32 +1311,41 @@ export default function UploadPage() {
                   {/* Resolution Settings */}
                   <div className="grid md:grid-cols-2 gap-4">
                     <div>
-                      <p className="brutal-label mb-2">COLMAP Resolution</p>
+                      <p className="brutal-label mb-2">
+                        <TooltipLabel tip="Resolution for COLMAP feature extraction. 720p is the default for faster uploads.">
+                          COLMAP Res
+                        </TooltipLabel>
+                      </p>
                       <select
                         value={config.colmap_resolution}
                         onChange={(e) => setConfig({ ...config, colmap_resolution: e.target.value })}
                         className="brutal-select"
                       >
-                        <option value="720p">720p (1280x720) - Fast</option>
-                        <option value="1080p">1080p (1920x1080) - Standard</option>
-                        <option value="2K">2K (2560x1440) - Recommended</option>
-                        <option value="4K">4K (3840x2160) - High Quality</option>
-                        <option value="8K">8K (7680x4320) - Maximum</option>
-                        <option value="original">Original Resolution</option>
+                        <option value="720p">720p</option>
+                        <option value="1080p">1080p</option>
+                        <option value="2K">2K</option>
+                        <option value="4K">4K</option>
+                        <option value="8K">8K</option>
+                        <option value="original">Original</option>
                       </select>
                     </div>
                     <div>
-                      <p className="brutal-label mb-2">Training Resolution</p>
+                      <p className="brutal-label mb-2">
+                        <TooltipLabel tip="Resolution for 3DGS training frames. 720p is the default to keep processing light.">
+                          Train Res
+                        </TooltipLabel>
+                      </p>
                       <select
                         value={config.training_resolution}
                         onChange={(e) => setConfig({ ...config, training_resolution: e.target.value })}
                         className="brutal-select"
                       >
-                        <option value="1080p">1080p (1920x1080)</option>
-                        <option value="2K">2K (2560x1440)</option>
-                        <option value="4K">4K (3840x2160) - Recommended</option>
-                        <option value="8K">8K (7680x4320) - Maximum</option>
-                        <option value="original">Original Resolution</option>
+                        <option value="720p">720p</option>
+                        <option value="1080p">1080p</option>
+                        <option value="2K">2K</option>
+                        <option value="4K">4K</option>
+                        <option value="8K">8K</option>
+                        <option value="original">Original</option>
                       </select>
                     </div>
                   </div>
@@ -1340,8 +1357,7 @@ export default function UploadPage() {
                         <div className="flex items-center">
                           <Zap className="h-5 w-5 text-yellow-600 mr-2" />
                           <div>
-                            <span className="font-medium text-gray-900">GPU Extraction</span>
-                            <p className="text-xs text-gray-600">5-10x faster video decoding</p>
+                          <span className="font-medium text-gray-900" title="GPU-accelerated video decoding, usually 5-10x faster.">GPU Extract</span>
                           </div>
                         </div>
                         <div className="relative">
@@ -1360,8 +1376,7 @@ export default function UploadPage() {
                         <div className="flex items-center">
                           <Zap className="h-5 w-5 text-yellow-600 mr-2" />
                           <div>
-                            <span className="font-medium text-gray-900">Mixed Precision (FP16)</span>
-                            <p className="text-xs text-gray-600">30-50% lower VRAM usage</p>
+                            <span className="font-medium text-gray-900" title="FP16 training can reduce VRAM usage by roughly 30-50%.">FP16</span>
                           </div>
                         </div>
                         <div className="relative">
@@ -1378,14 +1393,18 @@ export default function UploadPage() {
                   </div>
 
                   {/* 8K Optimization - Patch Training */}
-                  <div className="brutal-card-muted p-3 md:p-4 text-left">
-                    <h4 className="brutal-h3 mb-3 flex items-center">
+                  <div className="brutal-card-muted p-2.5 text-left">
+                    <h4 className="brutal-h3 mb-3 flex items-center" title="Patch-based training for very high-resolution images.">
                       <span className="text-xl mr-2">🧩</span>
-                      8K Optimization (Patch-based Training)
+                      8K Patch
                     </h4>
                     <div className="grid md:grid-cols-2 gap-4">
                       <div>
-                        <p className="brutal-label mb-2">Crop Size (pixels)</p>
+                        <p className="brutal-label mb-2">
+                          <TooltipLabel tip="0 uses the full image. 512-1024 is useful for 8K images to reduce VRAM.">
+                            Crop
+                          </TooltipLabel>
+                        </p>
                         <input
                           type="number"
                           value={config.crop_size}
@@ -1396,17 +1415,11 @@ export default function UploadPage() {
                           className="brutal-input"
                           placeholder="0"
                         />
-                        <p className="text-xs text-gray-500 mt-1">
-                          0 = Use full image | 512-1024 = Recommended for 8K images
-                        </p>
                       </div>
                       <div className="flex items-center">
-                          <div className="border border-[color:var(--ink)] bg-white p-3">
+                          <div className="border border-[color:var(--ink)] bg-white p-2.5" title="Use 512 or 1024 for 8K images to lower VRAM usage.">
                           <p className="text-sm text-purple-800">
-                            <strong>💡 Tip:</strong> ใช้ค่า 512 หรือ 1024 สำหรับภาพ 8K เพื่อลด VRAM
-                          </p>
-                          <p className="text-xs text-gray-600 mt-1">
-                            ช่วยให้เทรนภาพความละเอียดสูงได้โดยไม่ต้องใช้ GPU ที่มี VRAM เยอะ
+                            <strong>Tip:</strong> 512 / 1024 for 8K
                           </p>
                         </div>
                       </div>
@@ -1416,21 +1429,26 @@ export default function UploadPage() {
                       {/* COLMAP Options */}
                   <div className="grid md:grid-cols-2 gap-4">
                     <div>
-                      <p className="brutal-label mb-2">Feature Matching</p>
+                      <p className="brutal-label mb-2">
+                        <TooltipLabel tip={matcherRecommendation}>Matching</TooltipLabel>
+                      </p>
                       <select
                         value={config.matcher_type}
                         onChange={(e) => setConfig({ ...config, matcher_type: e.target.value as MatcherMode })}
                         className="brutal-select"
                       >
-                        <option value="auto">Auto (Recommended, backend decides)</option>
-                        <option value="sequential">Sequential (Ordered sequences / video)</option>
-                        <option value="exhaustive">Exhaustive (Smaller unordered photo sets)</option>
-                        <option value="vocab_tree">Vocabulary Tree (Experimental, large unordered photo sets)</option>
+                        <option value="auto">Auto</option>
+                        <option value="sequential">Sequential</option>
+                        <option value="exhaustive">Exhaustive</option>
+                        <option value="vocab_tree">Vocabulary Tree</option>
                       </select>
-                      <p className="mt-2 text-xs text-gray-500">{matcherRecommendation}</p>
                     </div>
                     <div>
-                      <p className="brutal-label mb-2">Camera Model</p>
+                      <p className="brutal-label mb-2">
+                        <TooltipLabel tip="Camera intrinsics model for COLMAP. SIMPLE_RADIAL is the safe default for most uploads.">
+                          Camera
+                        </TooltipLabel>
+                      </p>
                       <select
                         value={config.camera_model}
                         onChange={(e) => setConfig({ ...config, camera_model: e.target.value })}
@@ -1445,13 +1463,16 @@ export default function UploadPage() {
                   </div>
                   {hasVideo && (
                     <div className="mt-3">
-                      <p className="brutal-label mb-2">Adaptive Pair Scheduling</p>
+                      <p className="brutal-label mb-2">
+                        <TooltipLabel tip="Starts with lighter matching, then expands overlap/loops only when pair geometry is weak.">
+                          Pair Schedule
+                        </TooltipLabel>
+                      </p>
                       <label className="flex items-center justify-between cursor-pointer border border-[color:var(--ink)] bg-gradient-to-r from-amber-50 to-orange-50 p-3">
                         <div className="flex items-center">
                           <Zap className="h-5 w-5 text-amber-600 mr-2" />
                           <div>
-                            <span className="font-medium text-gray-900">Expand sequential matching in checkpoints</span>
-                            <p className="text-xs text-gray-600">เริ่มจาก pass เบาก่อน แล้วค่อยขยาย overlap/loop เฉพาะเมื่อ pair geometry ยังอ่อน</p>
+                            <span className="font-medium text-gray-900">Adaptive pairs</span>
                           </div>
                         </div>
                         <div className="relative">
@@ -1469,14 +1490,18 @@ export default function UploadPage() {
 
                   {/* Video Options */}
                   {hasVideo && (
-                    <div className="brutal-card-muted p-3 md:p-4 text-left">
+                    <div className="brutal-card-muted p-2.5 text-left">
                       <h4 className="brutal-h3 mb-3 flex items-center">
                         <FileVideo className="h-5 w-5 mr-2" />
-                        Video Frame Extraction Settings
+                        Video Frames
                       </h4>
                       <div className="grid md:grid-cols-2 gap-4">
                         <div>
-                          <p className="brutal-label mb-2">Extraction Mode</p>
+                          <p className="brutal-label mb-2">
+                            <TooltipLabel tip="Choose how the backend samples frames from video. Target FPS is the default.">
+                              Mode
+                            </TooltipLabel>
+                          </p>
                           <select
                             value={config.extraction_mode}
                             onChange={(e) => setConfig({ ...config, extraction_mode: e.target.value })}
@@ -1490,7 +1515,7 @@ export default function UploadPage() {
                         <div>
                           {config.extraction_mode === 'frames' ? (
                             <div>
-                              <p className="brutal-label mb-2">Maximum Frames</p>
+                              <p className="brutal-label mb-2">Max Frames</p>
                               <input
                                 type="number"
                                 value={config.max_frames}
@@ -1499,7 +1524,6 @@ export default function UploadPage() {
                                 step="1"
                                 className="brutal-input"
                               />
-                              <p className="mt-1 text-xs text-gray-500">โหมดเดิม: จำกัดจำนวนภาพสูงสุด แล้ว backend อาจตัดทอนเพิ่มเติมภายหลัง</p>
                             </div>
                           ) : config.extraction_mode === 'target_count' ? (
                             <div>
@@ -1513,7 +1537,6 @@ export default function UploadPage() {
                                 className="brutal-input"
                                 placeholder="เช่น 150 / 200 / 300"
                               />
-                              <p className="mt-1 text-xs text-gray-500">ระบบจะคำนวณ spacing ตามความยาววิดีโอให้เอง แต่คงจำนวนภาพปลายทางให้ตรงเลขนี้แบบ FPS-style</p>
                             </div>
                           ) : (
                             <div>
@@ -1538,10 +1561,9 @@ export default function UploadPage() {
                         <label className="flex items-center justify-between cursor-pointer">
                           <div className="flex items-center">
                             <Image className="h-5 w-5 text-purple-600 mr-2" />
-                            <div>
-                              <span className="font-medium text-gray-900">Use High-Res Training Images</span>
-                              <p className="text-xs text-gray-600">Extract separate higher resolution images for 3DGS training</p>
-                            </div>
+                          <div title="Extract separate higher-resolution frames for 3DGS training.">
+                            <span className="font-medium text-gray-900">Hi-res train</span>
+                          </div>
                           </div>
                           <div className="relative">
                             <input
@@ -1555,13 +1577,16 @@ export default function UploadPage() {
                         </label>
                       </div>
                       <div className="mt-3">
-                        <p className="brutal-label mb-2">Oversample And Select</p>
+                        <p className="brutal-label mb-2">
+                          <TooltipLabel tip="Extract a denser candidate pool first, then keep the sharpest frames at the requested FPS/count.">
+                            Oversample
+                          </TooltipLabel>
+                        </p>
                         <label className="flex items-center justify-between cursor-pointer border border-[color:var(--ink)] bg-gradient-to-r from-sky-50 to-cyan-50 p-3">
                           <div className="flex items-center">
                             <Image className="h-5 w-5 text-sky-600 mr-2" />
                             <div>
-                              <span className="font-medium text-gray-900">Keep sharper frames after dense extraction</span>
-                              <p className="text-xs text-gray-600">Extract a denser candidate pool first, then keep the sharpest frames at the requested FPS/count</p>
+                              <span className="font-medium text-gray-900">Sharp frames</span>
                             </div>
                           </div>
                           <div className="relative">
@@ -1576,13 +1601,16 @@ export default function UploadPage() {
                         </label>
                       </div>
                       <div className="mt-3">
-                        <p className="brutal-label mb-2">Adaptive Frame Budget</p>
+                        <p className="brutal-label mb-2">
+                          <TooltipLabel tip="Backend adjusts candidate density from duration, FPS, resolution, bitrate, and preview quality.">
+                            Frame Budget
+                          </TooltipLabel>
+                        </p>
                         <label className="flex items-center justify-between cursor-pointer border border-[color:var(--ink)] bg-gradient-to-r from-emerald-50 to-lime-50 p-3">
                           <div className="flex items-center">
                             <Zap className="h-5 w-5 text-emerald-600 mr-2" />
                             <div>
-                              <span className="font-medium text-gray-900">Let the backend tighten or widen candidate density</span>
-                              <p className="text-xs text-gray-600">ดูจาก duration, fps, resolution, bitrate, และ preview quality เพื่อไม่ให้ใช้ทรัพยากรหนักเกินโดยไม่จำเป็น</p>
+                              <span className="font-medium text-gray-900">Adaptive budget</span>
                             </div>
                           </div>
                           <div className="relative">
@@ -1597,11 +1625,15 @@ export default function UploadPage() {
                           </div>
                         </label>
                         {!config.smart_frame_selection && (
-                          <p className="mt-1 text-xs text-gray-500">เปิดได้เมื่อใช้ oversample-and-select เท่านั้น</p>
+                          <p className="mt-1 text-xs text-gray-500">Needs oversample</p>
                         )}
                       </div>
                       <div className="mt-3">
-                        <p className="brutal-label mb-2">CPU Chunk Workers</p>
+                        <p className="brutal-label mb-2">
+                          <TooltipLabel tip={`Default is ${DEFAULT_CPU_CHUNK_WORKERS}. Higher values use more CPU and RAM.`}>
+                            CPU Workers
+                          </TooltipLabel>
+                        </p>
                         <input
                           type="number"
                           min={1}
@@ -1627,12 +1659,13 @@ export default function UploadPage() {
                             </option>
                           ))}
                         </datalist>
-                        <p className="mt-1 text-xs text-gray-500">
-                          ค่าเริ่มต้นคือ {DEFAULT_CPU_CHUNK_WORKERS} และสามารถพิมพ์ค่าเองได้ ค่าเยอะขึ้นจะใช้ CPU และ RAM มากขึ้น
-                        </p>
                       </div>
                       <div className="mt-3">
-                        <p className="brutal-label mb-2">Oversample Factor</p>
+                        <p className="brutal-label mb-2">
+                          <TooltipLabel tip={`Candidate pool estimate: ${estimatedCandidatePool}.`}>
+                            Oversample Factor
+                          </TooltipLabel>
+                        </p>
                         <select
                           value={config.oversample_factor}
                           onChange={(e) => setConfig({ ...config, oversample_factor: parseInt(e.target.value, 10) || 10 })}
@@ -1640,16 +1673,17 @@ export default function UploadPage() {
                           disabled={!config.smart_frame_selection}
                         >
                           <option value={5}>5x</option>
-                          <option value={10}>10x - Recommended</option>
+                          <option value={10}>10x</option>
                           <option value={15}>15x</option>
                           <option value={20}>20x</option>
                         </select>
-                        <p className="mt-1 text-xs text-gray-500">
-                          ถ้าเปิดโหมดนี้ ระบบจะถอด candidate ให้ถี่ขึ้นก่อนประมาณ {estimatedCandidatePool} แล้วค่อยคัดกลับให้เหลือเท่าค่าเป้าหมาย
-                        </p>
                       </div>
                       <div className="mt-3">
-                        <p className="brutal-label mb-2">Minimum Search Radius</p>
+                        <p className="brutal-label mb-2">
+                          <TooltipLabel tip={`Minimum replacement search radius. Current estimate: ${estimatedSearchWindow}.`}>
+                            Search Radius
+                          </TooltipLabel>
+                        </p>
                         <select
                           value={config.replacement_search_radius}
                           onChange={(e) => setConfig({ ...config, replacement_search_radius: parseInt(e.target.value) || 4 })}
@@ -1657,14 +1691,11 @@ export default function UploadPage() {
                           disabled={!config.smart_frame_selection}
                         >
                           <option value={2}>±2 frames</option>
-                          <option value={4}>±4 frames - Recommended</option>
+                          <option value={4}>±4 frames</option>
                           <option value={6}>±6 frames</option>
                           <option value={8}>±8 frames</option>
                           <option value={12}>±12 frames</option>
                         </select>
-                        <p className="mt-1 text-xs text-gray-500">
-                          ใช้เป็นค่าขั้นต่ำของช่วงค้นหา และ backend จะขยายเพิ่มตาม spacing จริงเมื่อจำเป็น ตอนนี้คาดว่าจะค้นหา {estimatedSearchWindow}
-                        </p>
                       </div>
                     </div>
                   )}
@@ -2040,25 +2071,17 @@ export default function UploadPage() {
                 </div>
               </Accordion>
 
-              {/* Requirements Info */}
-                <div className="brutal-card-muted p-3 md:p-4 text-left">
-                  <h4 className="brutal-h3 mb-2 flex items-center gap-2">
-                    <Info className="h-5 w-5 mr-2" />
-                    Processing Requirements
-                  </h4>
-                  <ul className="space-y-1 text-sm font-medium text-[color:var(--text-secondary)]">
-                  <li>• Minimum 10 images/frames required for 3D reconstruction</li>
-                  <li>• Videos will be automatically converted to frames</li>
-                  <li>• Feature matching defaults to Auto and uses the backend reconstruction framework for orbit/video safety</li>
-                  <li>• Higher quality = longer processing time (30s-30m)</li>
-                  <li>• Best results with good lighting and multiple angles</li>
-                  <li>• Current input profile: {inputProfile}</li>
-                  <li>• Estimated time: {getQualityInfo(config.quality_mode).time} for {config.quality_mode} quality</li>
-                  {config.quality_mode === 'hard' && (
-                    <li>• Hard mode uses a heavier COLMAP policy first, then leaves long training for a later retry</li>
-                  )}
+              <details className="brutal-card-muted p-2.5 text-left">
+                <summary className="cursor-pointer text-xs font-black uppercase tracking-[0.14em] text-[color:var(--ink)]">
+                  Notes
+                </summary>
+                <ul className="mt-2 space-y-1 text-sm font-medium text-[color:var(--text-secondary)]">
+                  <li>Minimum 10 images/frames.</li>
+                  <li>Videos convert to frames automatically.</li>
+                  <li>Estimated time: {getQualityInfo(config.quality_mode).time}.</li>
+                  <li>Profile: {inputProfile}.</li>
                 </ul>
-              </div>
+              </details>
             </div>
 
             {uploading ? (
@@ -2099,7 +2122,7 @@ export default function UploadPage() {
                   onClick={() => setFiles([])}
                   className="brutal-btn"
                 >
-                  Clear All
+                  Clear
                 </button>
                 <button
                   type="button"
@@ -2107,7 +2130,7 @@ export default function UploadPage() {
                   className="brutal-btn brutal-btn-primary"
                 >
                   <Settings className="h-5 w-5 mr-2" />
-                  Start Creating 3D Model
+                  Start
                 </button>
               </div>
             )}
@@ -2122,22 +2145,10 @@ export default function UploadPage() {
         </div>
       )}
 
-          <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="brutal-card p-4">
-          <CheckCircle className="mb-2 h-8 w-8" style={{ color: 'var(--success-icon)' }} />
-          <h3 className="brutal-h3">Step 1: Upload</h3>
-          <p className="mt-1 text-sm font-medium text-[color:var(--text-secondary)]">Select your video or images</p>
-        </div>
-        <div className="brutal-card p-4">
-          <CheckCircle className="mb-2 h-8 w-8" style={{ color: 'var(--success-icon)' }} />
-          <h3 className="brutal-h3">Step 2: Process</h3>
-          <p className="mt-1 text-sm font-medium text-[color:var(--text-secondary)]">AI reconstructs 3D model</p>
-        </div>
-        <div className="brutal-card p-4">
-          <CheckCircle className="mb-2 h-8 w-8" style={{ color: 'var(--success-icon)' }} />
-          <h3 className="brutal-h3">Step 3: View</h3>
-          <p className="mt-1 text-sm font-medium text-[color:var(--text-secondary)]">Explore your 3D splat</p>
-        </div>
+          <div className="mt-4 flex flex-wrap gap-2 text-xs font-black uppercase tracking-[0.14em]">
+            <span className="brutal-badge" title="Select your video or images">1 Upload</span>
+            <span className="brutal-badge" title="Backend reconstructs and trains the 3D model">2 Process</span>
+            <span className="brutal-badge" title="Open the completed 3D splat viewer">3 View</span>
           </div>
         </div>
       </section>

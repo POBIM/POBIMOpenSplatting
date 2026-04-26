@@ -114,6 +114,13 @@ is_file_lock_free() {
     local lock_path="$1"
     local python_bin=""
 
+    if command -v fuser &> /dev/null; then
+        if fuser "$lock_path" >/dev/null 2>&1; then
+            return 1
+        fi
+        return 0
+    fi
+
     if command -v python3 &> /dev/null; then
         python_bin="python3"
     elif command -v python &> /dev/null; then
@@ -128,12 +135,22 @@ import os
 import sys
 
 path = sys.argv[1]
-fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+if not os.path.exists(path):
+    raise SystemExit(0)
+
 try:
-    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    fd = os.open(path, os.O_RDONLY)
+except PermissionError:
+    raise SystemExit(0)
+
+try:
+    fcntl.lockf(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
 except BlockingIOError:
     os.close(fd)
     raise SystemExit(1)
+except OSError:
+    os.close(fd)
+    raise SystemExit(0)
 
 os.close(fd)
 raise SystemExit(0)

@@ -459,6 +459,7 @@ export interface TrainingPreview {
   size_bytes?: number;
   version?: number;
   preview_url?: string;
+  live_preview?: TrainingLivePreview | null;
 }
 
 export interface TrainingLivePreview {
@@ -475,6 +476,17 @@ export interface TrainingLivePreview {
   progress_percent?: number;
   width?: number;
   height?: number;
+  version?: number;
+  updated_at?: string;
+  history?: TrainingLivePreviewFrame[];
+}
+
+export interface TrainingLivePreviewFrame {
+  filename?: string;
+  render_url?: string;
+  iteration?: number;
+  total_iterations?: number;
+  progress_percent?: number;
   version?: number;
   updated_at?: string;
 }
@@ -497,6 +509,13 @@ export interface UploadConfig {
   oversample_factor?: number;
   replacement_search_radius?: number;
   ffmpeg_cpu_workers?: number;
+  training_live_preview_interval_percent?: number;
+  colmap_resolution?: string;
+  training_resolution?: string;
+  use_separate_training_images?: boolean;
+  colmap_sharpness_boost?: number;
+  crop_size?: number;
+  mixed_precision?: boolean;
   adaptive_pair_scheduling?: boolean;
   custom_params?: any;
 }
@@ -689,6 +708,9 @@ export const api = {
     if (config.oversample_factor !== undefined) formData.append('oversample_factor', config.oversample_factor.toString());
     if (config.replacement_search_radius !== undefined) formData.append('replacement_search_radius', config.replacement_search_radius.toString());
     if (config.ffmpeg_cpu_workers !== undefined) formData.append('ffmpeg_cpu_workers', config.ffmpeg_cpu_workers.toString());
+    if (config.training_live_preview_interval_percent !== undefined) {
+      formData.append('training_live_preview_interval_percent', config.training_live_preview_interval_percent.toString());
+    }
     if (config.vram_size !== undefined) formData.append('vram_size', config.vram_size.toString());
     // GPU acceleration for video frame extraction (5-10x faster with NVDEC)
     if (config.use_gpu_extraction !== undefined) formData.append('use_gpu_extraction', config.use_gpu_extraction.toString());
@@ -697,6 +719,7 @@ export const api = {
     if (config.colmap_resolution) formData.append('colmap_resolution', config.colmap_resolution);
     if (config.training_resolution) formData.append('training_resolution', config.training_resolution);
     if (config.use_separate_training_images !== undefined) formData.append('use_separate_training_images', config.use_separate_training_images.toString());
+    if (config.colmap_sharpness_boost !== undefined) formData.append('colmap_sharpness_boost', config.colmap_sharpness_boost.toString());
     if (config.adaptive_pair_scheduling !== undefined) formData.append('adaptive_pair_scheduling', config.adaptive_pair_scheduling.toString());
 
     // Custom parameters - send each parameter individually

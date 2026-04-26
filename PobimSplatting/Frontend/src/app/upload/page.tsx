@@ -48,6 +48,7 @@ export default function UploadPage() {
     oversample_factor: 10,
     replacement_search_radius: 4,
     ffmpeg_cpu_workers: DEFAULT_CPU_CHUNK_WORKERS,
+    training_live_preview_interval_percent: 2,
     sfm_engine: 'glomap',  // Auto-shifted to COLMAP Incremental for video/mixed uploads below
     sfm_backend: 'cli' as SfmBackendMode,
     feature_method: 'sift',  // 'sift' (classic COLMAP), 'aliked' (native COLMAP neural), 'superpoint' (hloc)
@@ -58,6 +59,7 @@ export default function UploadPage() {
     colmap_resolution: '720p',  // Resolution for COLMAP feature extraction (720p, 1080p, 2K, 4K, 8K, original)
     training_resolution: '720p',  // Resolution for 3DGS training
     use_separate_training_images: false,  // Extract separate high-res images for training
+    colmap_sharpness_boost: 0,  // Unsharp-mask boost applied to COLMAP images before feature extraction
     // 8K Optimization
     crop_size: 0  // Patch-based training (0 = disabled)
   });
@@ -766,7 +768,7 @@ export default function UploadPage() {
             {/* Configuration Options */}
             <div className="space-y-3">
               {/* Project Details */}
-              <div className="grid gap-3 md:grid-cols-2">
+              <div className="grid gap-3 md:grid-cols-3">
                 <div>
                   <label htmlFor="project-name" className="brutal-label mb-1.5 inline-block">
                     <TooltipLabel tip="Optional. Leave blank to let the backend name the project.">Project</TooltipLabel>
@@ -806,6 +808,21 @@ export default function UploadPage() {
                       coverage-first
                     </span>
                   )}
+                </div>
+                <div>
+                  <label htmlFor="live-preview-interval" className="brutal-label mb-1.5 inline-block">
+                    <TooltipLabel tip="Native render comparison cadence during training. 2% is the default balance.">Preview</TooltipLabel>
+                  </label>
+                  <select
+                    id="live-preview-interval"
+                    value={config.training_live_preview_interval_percent}
+                    onChange={(e) => setConfig({ ...config, training_live_preview_interval_percent: Number(e.target.value) })}
+                    className="brutal-select"
+                  >
+                    <option value={1}>Every 1%</option>
+                    <option value={2}>Every 2%</option>
+                    <option value={5}>Every 5%</option>
+                  </select>
                 </div>
               </div>
 
@@ -903,6 +920,9 @@ export default function UploadPage() {
                           hi-res training: {config.use_separate_training_images ? 'enabled' : 'off'}
                         </span>
                       )}
+                      <span className="border border-[color:var(--ink)] bg-white px-2 py-1">
+                        sharpness boost: {config.colmap_sharpness_boost > 0 ? `${config.colmap_sharpness_boost}%` : 'off'}
+                      </span>
                       {hasVideo && (
                         <span className="border border-[color:var(--ink)] bg-white px-2 py-1">
                           chunk workers: {config.ffmpeg_cpu_workers}
@@ -1309,7 +1329,7 @@ export default function UploadPage() {
               </div>
 
                   {/* Resolution Settings */}
-                  <div className="grid md:grid-cols-2 gap-4">
+                  <div className="grid gap-4 md:grid-cols-3">
                     <div>
                       <p className="brutal-label mb-2">
                         <TooltipLabel tip="Resolution for COLMAP feature extraction. 720p is the default for faster uploads.">
@@ -1328,6 +1348,38 @@ export default function UploadPage() {
                         <option value="8K">8K</option>
                         <option value="original">Original</option>
                       </select>
+                    </div>
+                    <div>
+                      <p className="brutal-label mb-2">
+                        <TooltipLabel tip="Applies unsharp masking to the selected COLMAP image set after frame selection and before feature extraction. Keep this moderate for noisy footage.">
+                          Sharpness
+                        </TooltipLabel>
+                      </p>
+                      <div className="border border-[color:var(--ink)] bg-white p-3 shadow-[var(--shadow-sm)]">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="text-sm font-bold text-gray-900">
+                            {config.colmap_sharpness_boost > 0 ? `${config.colmap_sharpness_boost}%` : 'Off'}
+                          </span>
+                          <span className="text-xs font-medium uppercase tracking-wide text-gray-500">
+                            COLMAP only
+                          </span>
+                        </div>
+                        <input
+                          type="range"
+                          min={0}
+                          max={100}
+                          step={25}
+                          value={config.colmap_sharpness_boost}
+                          onChange={(e) => setConfig({ ...config, colmap_sharpness_boost: Number(e.target.value) })}
+                          className="mt-3 w-full accent-[var(--accent)]"
+                          aria-label="COLMAP sharpness boost"
+                        />
+                        <div className="mt-1 flex justify-between text-[10px] font-bold uppercase tracking-wide text-gray-500">
+                          <span>Off</span>
+                          <span>Light</span>
+                          <span>Strong</span>
+                        </div>
+                      </div>
                     </div>
                     <div>
                       <p className="brutal-label mb-2">
@@ -2079,6 +2131,8 @@ export default function UploadPage() {
                   <li>Minimum 10 images/frames.</li>
                   <li>Videos convert to frames automatically.</li>
                   <li>Estimated time: {getQualityInfo(config.quality_mode).time}.</li>
+                  <li>Training preview: every {config.training_live_preview_interval_percent}%.</li>
+                  <li>COLMAP sharpness boost: {config.colmap_sharpness_boost > 0 ? `${config.colmap_sharpness_boost}%` : 'off'}.</li>
                   <li>Profile: {inputProfile}.</li>
                 </ul>
               </details>

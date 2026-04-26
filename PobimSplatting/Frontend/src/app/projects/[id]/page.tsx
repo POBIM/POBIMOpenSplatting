@@ -299,6 +299,7 @@ export default function ProjectDetailPage() {
     quality_mode: '',
     iterations: '',
     learning_rate: '',
+    training_live_preview_interval_percent: '',
     // COLMAP Feature Extraction params
     max_num_features: '',
     max_image_size: '',
@@ -599,7 +600,9 @@ export default function ProjectDetailPage() {
           prev?.preview_url === data.preview_url &&
           prev?.progress_percent === data.progress_percent &&
           prev?.iteration === data.iteration &&
-          prev?.is_live === data.is_live
+          prev?.is_live === data.is_live &&
+          prev?.live_preview?.version === data.live_preview?.version &&
+          prev?.live_preview?.image_name === data.live_preview?.image_name
         ) {
           return prev;
         }
@@ -982,6 +985,9 @@ export default function ProjectDetailPage() {
         if (retryParams.learning_rate) {
           params.learning_rate = parseFloat(retryParams.learning_rate);
         }
+        if (retryParams.training_live_preview_interval_percent) {
+          params.training_live_preview_interval_percent = parseInt(retryParams.training_live_preview_interval_percent);
+        }
         // Add training images option
         if (retryParams.use_separate_training_images) {
           params.use_separate_training_images = true;
@@ -998,6 +1004,7 @@ export default function ProjectDetailPage() {
         quality_mode: '',
         iterations: '',
         learning_rate: '',
+        training_live_preview_interval_percent: '',
         matcher_type: '',
         max_num_features: '',
         max_image_size: '',
@@ -1063,6 +1070,8 @@ export default function ProjectDetailPage() {
         quality_mode: (project as any).quality_mode || '',
         iterations: (project as any).iterations?.toString() || '',
         learning_rate: '',
+        training_live_preview_interval_percent:
+          project?.config?.training_live_preview_interval_percent?.toString() || '',
         matcher_type: project?.config?.matcher_type || '',
         max_num_features: '',
         max_image_size: '',
@@ -2434,6 +2443,7 @@ export default function ProjectDetailPage() {
                         projectId={projectId}
                         plyUrl={trainingPreview?.preview_url}
                         isTrainingLive={Boolean(trainingPreview?.is_live)}
+                        initialLivePreview={trainingPreview?.live_preview}
                         referenceFrames={hasSeparateTraining ? [...framePreview, ...trainingFramePreview] : framePreview}
                         cameraPoses={liveCameraPoses}
                         onOpenFullViewer={
@@ -2869,6 +2879,22 @@ export default function ProjectDetailPage() {
                       onChange={(e) => setRetryParams({...retryParams, learning_rate: e.target.value})}
                       className="brutal-input"
                     />
+                  </div>
+
+                  <div>
+                    <p className="brutal-label mb-1 block">
+                      Preview Interval
+                    </p>
+                    <select
+                      value={retryParams.training_live_preview_interval_percent}
+                      onChange={(e) => setRetryParams({...retryParams, training_live_preview_interval_percent: e.target.value})}
+                      className="brutal-select"
+                    >
+                      <option value="">ใช้ค่าเดิม</option>
+                      <option value="1">Every 1%</option>
+                      <option value="2">Every 2%</option>
+                      <option value="5">Every 5%</option>
+                    </select>
                   </div>
 
                   {/* Training Images Option */}

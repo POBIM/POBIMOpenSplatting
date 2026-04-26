@@ -1,8 +1,26 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, Eye, ImageIcon, Loader, RefreshCw } from 'lucide-react';
-import { api, CameraPose, CameraPosesData, TrainingLivePreview } from '@/lib/api';
+import {
+  AlertTriangle,
+  ChevronLeft,
+  ChevronRight,
+  Eye,
+  ImageIcon,
+  Loader,
+  Pause,
+  Play,
+  RefreshCw,
+  SkipBack,
+  SkipForward,
+} from 'lucide-react';
+import {
+  api,
+  CameraPose,
+  CameraPosesData,
+  TrainingLivePreview,
+  TrainingLivePreviewFrame,
+} from '@/lib/api';
 import { websocket } from '@/lib/websocket';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000';
@@ -25,6 +43,58 @@ const toAssetUrl = (url?: string | null) => {
 
 const formatIteration = (value?: number) =>
   typeof value === 'number' && Number.isFinite(value) ? value.toLocaleString() : '--';
+
+const historyFrameKey = (frame: TrainingLivePreviewFrame) =>
+  frame.filename || frame.render_url || String(frame.version || '');
+
+const normalizeRenderHistory = (payload?: TrainingLivePreview | null) => {
+  if (!payload) {
+    return [];
+  }
+
+  const frames = Array.isArray(payload.history) ? [...payload.history] : [];
+  if (payload.render_url) {
+    frames.push({
+      filename: payload.filename,
+      render_url: payload.render_url,
+      iteration: payload.iteration,
+      total_iterations: payload.total_iterations,
+      progress_percent: payload.progress_percent,
+      version: payload.version,
+      updated_at: payload.updated_at,
+    });
+  }
+
+  const unique = new Map<string, TrainingLivePreviewFrame>();
+  frames.forEach((frame) => {
+    if (!frame?.render_url) {
+      return;
+    }
+    const key = historyFrameKey(frame);
+    if (!key) {
+      return;
+    }
+    unique.set(key, frame);
+  });
+
+  return Array.from(unique.values()).sort((a, b) => {
+    const aIteration = typeof a.iteration === 'number' ? a.iteration : 0;
+    const bIteration = typeof b.iteration === 'number' ? b.iteration : 0;
+    if (aIteration !== bIteration) {
+      return aIteration - bIteration;
+    }
+    return String(a.filename || a.render_url).localeCompare(String(b.filename || b.render_url));
+  });
+};
+
+const mergeRenderHistory = (
+  current: TrainingLivePreviewFrame[],
+  incoming: TrainingLivePreviewFrame[]
+) => normalizeRenderHistory({
+  project_id: '',
+  image_name: '',
+  history: [...current, ...incoming],
+});
 
 const createFrameObjectUrl = (payload: TrainingLivePreview) => {
   const bytes = payload.frame_bytes;
@@ -54,6 +124,7 @@ export default function TrainingSplatPreview({
   projectId,
   plyUrl,
   isTrainingLive = true,
+  initialLivePreview,
   referenceFrames = [],
   cameraPoses,
   onOpenFullViewer,
@@ -61,6 +132,7 @@ export default function TrainingSplatPreview({
   projectId: string;
   plyUrl?: string;
   isTrainingLive?: boolean;
+  initialLivePreview?: TrainingLivePreview | null;
   referenceFrames?: FramePreview[];
   cameraPoses?: CameraPosesData | null;
   onOpenFullViewer?: () => void;
@@ -82,14 +154,41 @@ export default function TrainingSplatPreview({
   const [selectedCamera, setSelectedCamera] = useState<CameraPose | null>(null);
   const selectedCameraRef = useRef<CameraPose | null>(null);
   const [livePreview, setLivePreview] = useState<TrainingLivePreview | null>(null);
+  const renderPreviewByImageNameRef = useRef<Map<string, TrainingLivePreview>>(new Map());
+  const [renderHistory, setRenderHistory] = useState<TrainingLivePreviewFrame[]>([]);
+  const [historyIndex, setHistoryIndex] = useState<number | null>(null);
+  const historyIndexRef = useRef<number | null>(null);
+  const [isPlaybackPlaying, setIsPlaybackPlaying] = useState(false);
+  const isPlaybackPlayingRef = useRef(false);
+  const playbackDirectionRef = useRef(1);
   const [binaryRenderUrl, setBinaryRenderUrl] = useState('');
   const binaryRenderUrlRef = useRef('');
+  const binaryRenderImageNameRef = useRef('');
   const [selecting, setSelecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     selectedCameraRef.current = selectedCamera;
   }, [selectedCamera]);
+
+  useEffect(() => {
+    historyIndexRef.current = historyIndex;
+  }, [historyIndex]);
+
+  useEffect(() => {
+    isPlaybackPlayingRef.current = isPlaybackPlaying;
+  }, [isPlaybackPlaying]);
+
+  const selectedHistoryFrame = useMemo(() => {
+    if (historyIndex === null) {
+      return null;
+    }
+    return renderHistory[historyIndex] || null;
+  }, [historyIndex, renderHistory]);
+
+  const displayedPreview = selectedHistoryFrame || (
+    livePreview?.image_name === selectedCamera?.image_name ? livePreview : null
+  );
 
   const referenceUrl = useMemo(() => {
     if (!selectedCamera) {
@@ -103,17 +202,27 @@ export default function TrainingSplatPreview({
   }, [frameUrlByName, livePreview, selectedCamera]);
 
   const renderUrl = useMemo(() => {
-    if (!selectedCamera || livePreview?.image_name !== selectedCamera.image_name) {
+    if (!selectedCamera) {
       return '';
     }
-    return binaryRenderUrl || toAssetUrl(livePreview.render_url);
-  }, [binaryRenderUrl, livePreview, selectedCamera]);
+    if (selectedHistoryFrame?.render_url) {
+      return toAssetUrl(selectedHistoryFrame.render_url);
+    }
+    const matchingLivePreview =
+      livePreview?.image_name === selectedCamera.image_name ? livePreview : null;
+    const cachedPreview = renderPreviewByImageNameRef.current.get(selectedCamera.image_name);
+    const matchingBinaryRender =
+      binaryRenderImageNameRef.current === selectedCamera.image_name ? binaryRenderUrl : '';
+
+    return matchingBinaryRender || toAssetUrl(matchingLivePreview?.render_url || cachedPreview?.render_url);
+  }, [binaryRenderUrl, livePreview, selectedCamera, selectedHistoryFrame]);
 
   const clearBinaryRenderUrl = useCallback(() => {
     if (binaryRenderUrlRef.current) {
       URL.revokeObjectURL(binaryRenderUrlRef.current);
       binaryRenderUrlRef.current = '';
     }
+    binaryRenderImageNameRef.current = '';
     setBinaryRenderUrl('');
   }, []);
 
@@ -124,21 +233,42 @@ export default function TrainingSplatPreview({
         URL.revokeObjectURL(binaryRenderUrlRef.current);
       }
       binaryRenderUrlRef.current = objectUrl;
+      binaryRenderImageNameRef.current = payload.image_name || '';
       setBinaryRenderUrl(objectUrl);
-    } else if (!payload.render_url) {
+    } else {
       clearBinaryRenderUrl();
+    }
+    if (payload.image_name && payload.render_url) {
+      const incomingHistory = normalizeRenderHistory(payload);
+      renderPreviewByImageNameRef.current.set(payload.image_name, {
+        ...payload,
+        frame_bytes: null,
+        history: incomingHistory,
+      });
+      if (selectedCameraRef.current?.image_name === payload.image_name) {
+        setRenderHistory((current) => mergeRenderHistory(current, incomingHistory));
+      }
     }
     setLivePreview(payload);
   }, [clearBinaryRenderUrl]);
 
   const selectCamera = useCallback(async (camera: CameraPose, cameraId: number) => {
+    const isSameCamera = selectedCameraRef.current?.image_name === camera.image_name;
+    const cachedPreview = renderPreviewByImageNameRef.current.get(camera.image_name);
     setSelectedCamera(camera);
-    clearBinaryRenderUrl();
-    setLivePreview({
-      project_id: projectId,
-      camera_id: cameraId,
-      image_name: camera.image_name,
-    });
+    if (!isSameCamera) {
+      clearBinaryRenderUrl();
+      setIsPlaybackPlaying(false);
+      setHistoryIndex(null);
+    }
+    setRenderHistory(normalizeRenderHistory(cachedPreview));
+    setLivePreview(
+      cachedPreview || {
+        project_id: projectId,
+        camera_id: cameraId,
+        image_name: camera.image_name,
+      }
+    );
     setSelecting(true);
     setError(null);
     try {
@@ -150,6 +280,10 @@ export default function TrainingSplatPreview({
         ...response,
         image_name: response.image_name || camera.image_name,
       });
+      setRenderHistory(normalizeRenderHistory({
+        ...response,
+        image_name: response.image_name || camera.image_name,
+      }));
     } catch (err: any) {
       setError(
         err?.response?.data?.error ||
@@ -165,8 +299,35 @@ export default function TrainingSplatPreview({
     if (!cameras.length || selectedCamera) {
       return;
     }
+    if (initialLivePreview?.image_name) {
+      const initialCameraIndex = cameras.findIndex(
+        (camera) => camera.image_name === initialLivePreview.image_name
+      );
+      if (initialCameraIndex >= 0) {
+        const initialCamera = cameras[initialCameraIndex];
+        if (initialLivePreview.render_url) {
+          renderPreviewByImageNameRef.current.set(initialLivePreview.image_name, {
+            ...initialLivePreview,
+            camera_id: initialLivePreview.camera_id ?? initialCameraIndex,
+            frame_bytes: null,
+          });
+        }
+        setSelectedCamera(initialCamera);
+        setRenderHistory(normalizeRenderHistory({
+          ...initialLivePreview,
+          camera_id: initialLivePreview.camera_id ?? initialCameraIndex,
+        }));
+        setHistoryIndex(null);
+        setIsPlaybackPlaying(false);
+        setLivePreview({
+          ...initialLivePreview,
+          camera_id: initialLivePreview.camera_id ?? initialCameraIndex,
+        });
+        return;
+      }
+    }
     void selectCamera(cameras[0], 0);
-  }, [cameras, selectedCamera, selectCamera]);
+  }, [cameras, initialLivePreview, selectedCamera, selectCamera]);
 
   useEffect(() => {
     const unsubscribe = websocket.on('training_live_preview', (payload: TrainingLivePreview) => {
@@ -183,12 +344,81 @@ export default function TrainingSplatPreview({
   }, [applyLivePreview]);
 
   useEffect(() => {
+    if (!isPlaybackPlaying || renderHistory.length < 2) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      setHistoryIndex((current) => {
+        const currentIndex = current ?? 0;
+        let nextIndex = currentIndex + playbackDirectionRef.current;
+        if (nextIndex >= renderHistory.length) {
+          playbackDirectionRef.current = -1;
+          nextIndex = Math.max(0, renderHistory.length - 2);
+        } else if (nextIndex < 0) {
+          playbackDirectionRef.current = 1;
+          nextIndex = Math.min(renderHistory.length - 1, 1);
+        }
+        return nextIndex;
+      });
+    }, 700);
+
+    return () => window.clearInterval(interval);
+  }, [isPlaybackPlaying, renderHistory.length]);
+
+  useEffect(() => {
     return () => {
       if (binaryRenderUrlRef.current) {
         URL.revokeObjectURL(binaryRenderUrlRef.current);
       }
     };
   }, []);
+
+  const timelinePosition = historyIndex ?? Math.max(0, renderHistory.length - 1);
+  const canUseHistory = renderHistory.length > 0;
+
+  const showPreviousFrame = useCallback(() => {
+    if (!canUseHistory) {
+      return;
+    }
+    setIsPlaybackPlaying(false);
+    setHistoryIndex((current) => Math.max(0, (current ?? renderHistory.length - 1) - 1));
+  }, [canUseHistory, renderHistory.length]);
+
+  const showNextFrame = useCallback(() => {
+    if (!canUseHistory) {
+      return;
+    }
+    setIsPlaybackPlaying(false);
+    setHistoryIndex((current) => Math.min(renderHistory.length - 1, (current ?? 0) + 1));
+  }, [canUseHistory, renderHistory.length]);
+
+  const showFirstFrame = useCallback(() => {
+    if (!canUseHistory) {
+      return;
+    }
+    setIsPlaybackPlaying(false);
+    setHistoryIndex(0);
+  }, [canUseHistory]);
+
+  const showLatestFrame = useCallback(() => {
+    setIsPlaybackPlaying(false);
+    setHistoryIndex(null);
+    playbackDirectionRef.current = 1;
+  }, []);
+
+  const togglePlayback = useCallback(() => {
+    if (renderHistory.length < 2) {
+      return;
+    }
+    if (isPlaybackPlayingRef.current) {
+      setIsPlaybackPlaying(false);
+      return;
+    }
+    setHistoryIndex((current) => current ?? 0);
+    playbackDirectionRef.current = historyIndexRef.current === renderHistory.length - 1 ? -1 : 1;
+    setIsPlaybackPlaying(true);
+  }, [renderHistory.length]);
 
   if (!cameras.length) {
     return (
@@ -253,12 +483,17 @@ export default function TrainingSplatPreview({
         <section className="relative min-h-0 border-b-[var(--border-w)] border-[var(--ink)] bg-black">
           <div className="absolute left-3 top-3 z-10 flex flex-wrap items-center gap-2">
             <span className="brutal-badge brutal-badge-success">Native Live Render</span>
-            {livePreview?.progress_percent !== undefined && livePreview.image_name === selectedCamera?.image_name && (
-              <span className="brutal-badge">{livePreview.progress_percent}%</span>
+            {displayedPreview?.progress_percent !== undefined && (
+              <span className="brutal-badge">{displayedPreview.progress_percent}%</span>
             )}
-            {livePreview?.iteration && livePreview.image_name === selectedCamera?.image_name && (
+            {displayedPreview?.iteration && (
               <span className="brutal-badge">
-                {formatIteration(livePreview.iteration)}/{formatIteration(livePreview.total_iterations)} iter
+                {formatIteration(displayedPreview.iteration)}/{formatIteration(displayedPreview.total_iterations)} iter
+              </span>
+            )}
+            {historyIndex !== null && (
+              <span className="brutal-badge brutal-badge-info">
+                History {timelinePosition + 1}/{renderHistory.length}
               </span>
             )}
             {selecting && (
@@ -278,6 +513,76 @@ export default function TrainingSplatPreview({
               <Eye className="h-3.5 w-3.5" />
               Open Full Viewer
             </button>
+          )}
+
+          {canUseHistory && (
+            <div className="absolute bottom-3 left-3 right-3 z-10 border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-card)] p-2 shadow-[var(--shadow-sm)]">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="brutal-badge">
+                  {historyIndex === null ? 'Latest' : 'Timeline'}
+                </span>
+                <button
+                  type="button"
+                  onClick={showFirstFrame}
+                  className="brutal-btn brutal-btn-xs"
+                  title="First render"
+                >
+                  <SkipBack className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={showPreviousFrame}
+                  className="brutal-btn brutal-btn-xs"
+                  title="Previous render"
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={togglePlayback}
+                  className="brutal-btn brutal-btn-xs"
+                  title={isPlaybackPlaying ? 'Pause timeline' : 'Play timeline'}
+                  disabled={renderHistory.length < 2}
+                >
+                  {isPlaybackPlaying ? (
+                    <Pause className="h-3.5 w-3.5" />
+                  ) : (
+                    <Play className="h-3.5 w-3.5" />
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={showNextFrame}
+                  className="brutal-btn brutal-btn-xs"
+                  title="Next render"
+                >
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={showLatestFrame}
+                  className="brutal-btn brutal-btn-xs"
+                  title="Latest render"
+                >
+                  <SkipForward className="h-3.5 w-3.5" />
+                </button>
+                <input
+                  type="range"
+                  min={0}
+                  max={Math.max(0, renderHistory.length - 1)}
+                  value={timelinePosition}
+                  onChange={(event) => {
+                    setIsPlaybackPlaying(false);
+                    setHistoryIndex(Number(event.target.value));
+                  }}
+                  className="h-2 min-w-[160px] flex-1 accent-[var(--accent)]"
+                  aria-label="Training render timeline"
+                />
+                <span className="min-w-[90px] text-right text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--ink)]">
+                  {timelinePosition + 1}/{renderHistory.length}
+                </span>
+              </div>
+            </div>
           )}
 
           {renderUrl ? (

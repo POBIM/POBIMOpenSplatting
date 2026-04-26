@@ -87,7 +87,11 @@ if(GPU_RUNTIME STREQUAL "CUDA")
         endif()
         if(NOT OPENSPLAT_MAX_CUDA_COMPATIBILITY)
             if(NOT CMAKE_CUDA_ARCHITECTURES)
-                SET(CMAKE_CUDA_ARCHITECTURES 70;75;80)
+                if(CUDAToolkit_VERSION_MAJOR VERSION_GREATER_EQUAL 13)
+                    SET(CMAKE_CUDA_ARCHITECTURES 75;80;86;89)
+                else()
+                    SET(CMAKE_CUDA_ARCHITECTURES 70;75;80)
+                endif()
                 execute_process(
                     COMMAND "${CUDAToolkit_NVCC_EXECUTABLE}" --list-gpu-arch
                     OUTPUT_VARIABLE SUPPORTED_GPU_ARCHS

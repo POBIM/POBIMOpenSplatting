@@ -52,6 +52,7 @@ echo ""
 # Check 3: CUDA Libraries
 echo -e "${BOLD}[3/5] Checking CUDA Libraries...${NC}"
 CUDA_PATHS=(
+    "/usr/local/cuda-13.0"
     "/usr/local/cuda"
     "/usr/local/cuda-12.6"
     "/usr/local/cuda-12.1"

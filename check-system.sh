@@ -126,11 +126,23 @@ else
 fi
 
 # Check for specific CUDA versions
-for version in 12.6 12.1 11.8; do
+for version in 13.0 12.6 12.1 11.8; do
     if [ -d "/usr/local/cuda-${version}" ]; then
         check_info "Found CUDA ${version} at /usr/local/cuda-${version}"
     fi
 done
+
+if [ -L "/usr/local/cuda" ]; then
+    CUDA_SYMLINK_TARGET=$(readlink -f /usr/local/cuda)
+    case "$CUDA_SYMLINK_TARGET" in
+        /usr/local/cuda-13.0|/usr/local/cuda-12.6|/usr/local/cuda-12.1|/usr/local/cuda-11.8)
+            check_info "/usr/local/cuda points to $CUDA_SYMLINK_TARGET"
+            ;;
+        *)
+            check_warn "/usr/local/cuda points to unexpected target: $CUDA_SYMLINK_TARGET"
+            ;;
+    esac
+fi
 
 # =============================================================================
 # Check System Resources

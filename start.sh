@@ -66,6 +66,7 @@ check_installation() {
 setup_environment() {
     # LibTorch paths
     LIBTORCH_DIRS=(
+        "$PROJECT_ROOT/libtorch-cuda130"
         "$PROJECT_ROOT/libtorch-cuda126"
         "$PROJECT_ROOT/libtorch-cuda121"
         "$PROJECT_ROOT/libtorch-cuda118"

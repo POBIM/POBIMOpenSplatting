@@ -110,8 +110,10 @@ PobimSplatting/runtime/*
 
 # Local build artifacts (Ceres w/ CUDA + cuDSS shim)
 ceres-build/
+ceres-build.backup.*/
 ceres-solver/
 cudss-shim/
+colmap-build.backup.*/
 
 # OpenCode / agent tooling
 .opencode/

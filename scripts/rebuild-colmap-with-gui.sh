@@ -95,16 +95,18 @@ if [ -z "$CUDA_HOME" ]; then
     exit 1
 fi
 
+colmap_ensure_source "$PROJECT_ROOT" || exit 1
+
 export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$LD_LIBRARY_PATH"
 export CUDA_HOME
 
 CUDSS_LIB_DIR="$(colmap_detect_cudss_lib_dir || true)"
-if [ -n "$CUDSS_LIB_DIR" ]; then
+if colmap_cudss_enabled_for_cuda "$CUDA_HOME" && [ -n "$CUDSS_LIB_DIR" ]; then
     export LD_LIBRARY_PATH="$CUDSS_LIB_DIR:$LD_LIBRARY_PATH"
 fi
 
-GPU_ARCHS="$(colmap_detect_gpu_archs "70;75;80;86;89")"
+GPU_ARCHS="$(colmap_detect_gpu_archs "89")"
 echo -e "${CYAN}ℹ Using CUDA from: $CUDA_HOME${NC}"
 echo -e "${CYAN}ℹ Building for GPU architectures: $GPU_ARCHS${NC}"
 
@@ -128,7 +130,11 @@ fi
 
 # Clean build directory
 echo -e "${CYAN}Cleaning build directory...${NC}"
-rm -rf "$COLMAP_BUILD_DIR"
+if [ -d "$COLMAP_BUILD_DIR" ]; then
+    COLMAP_BACKUP_DIR="${COLMAP_BUILD_DIR}.backup.$(date +%Y%m%d%H%M%S)"
+    mv "$COLMAP_BUILD_DIR" "$COLMAP_BACKUP_DIR"
+    echo -e "${YELLOW}⚠ Backed up old build directory: $COLMAP_BACKUP_DIR${NC}"
+fi
 mkdir -p "$COLMAP_BUILD_DIR"
 cd "$COLMAP_BUILD_DIR"
 
@@ -142,12 +148,16 @@ fi
 
 CERES_CMAKE_DIR="$(colmap_ceres_cmake_dir "$PROJECT_ROOT" || true)"
 CERES_LIB_DIR="$(colmap_ceres_lib_dir "$PROJECT_ROOT" || true)"
-CUDSS_CMAKE_DIR="$(colmap_prepare_cudss_cmake_shim "$PROJECT_ROOT" || true)"
-if [ -z "$CUDSS_CMAKE_DIR" ]; then
-    CUDSS_CMAKE_DIR="$(colmap_detect_cudss_cmake_dir || true)"
+CUDSS_CMAKE_DIR=""
+CUDSS_LIB_DIR=""
+if colmap_cudss_enabled_for_cuda "$CUDA_HOME"; then
+    CUDSS_CMAKE_DIR="$(colmap_prepare_cudss_cmake_shim "$PROJECT_ROOT" || true)"
+    if [ -z "$CUDSS_CMAKE_DIR" ]; then
+        CUDSS_CMAKE_DIR="$(colmap_detect_cudss_cmake_dir || true)"
+    fi
+    CUDSS_LIB_DIR="$(colmap_detect_cudss_lib_dir || true)"
 fi
-CUDSS_LIB_DIR="$(colmap_detect_cudss_lib_dir || true)"
-COLMAP_CMAKE_PREFIX_PATH="$PROJECT_ROOT/ceres-build/install"
+COLMAP_CMAKE_PREFIX_PATH="$(colmap_ceres_install_dir "$PROJECT_ROOT")"
 if [ -n "$CUDSS_CMAKE_DIR" ]; then
     COLMAP_CMAKE_PREFIX_PATH="$COLMAP_CMAKE_PREFIX_PATH;$(cd "$CUDSS_CMAKE_DIR/../.." && pwd)"
 fi
@@ -169,6 +179,7 @@ cmake "$PROJECT_ROOT/colmap" \
     -DGUI_ENABLED=ON \
     -DCeres_DIR="$CERES_CMAKE_DIR" \
     -Dcudss_DIR="$CUDSS_CMAKE_DIR" \
+    -DCMAKE_DISABLE_FIND_PACKAGE_cudss="$([ -n "$CUDSS_CMAKE_DIR" ] && echo OFF || echo ON)" \
     -DCMAKE_BUILD_RPATH="$CERES_LIB_DIR;$CUDA_HOME/lib64${CUDSS_LIB_DIR:+;$CUDSS_LIB_DIR}" \
     -DCMAKE_INSTALL_RPATH="$CERES_LIB_DIR;$CUDA_HOME/lib64${CUDSS_LIB_DIR:+;$CUDSS_LIB_DIR}" \
     -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=ON

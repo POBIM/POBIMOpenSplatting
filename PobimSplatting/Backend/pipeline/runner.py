@@ -43,6 +43,10 @@ from .frame_manifest import (
     persist_frame_selection_manifest,
     should_run_boundary_frame_densification,
 )
+from .image_preprocessing import (
+    apply_colmap_sharpness_boost,
+    normalize_colmap_sharpness_boost,
+)
 from .orbit_policy import (
     resolve_orbit_safe_policy,
     sync_reconstruction_framework,
@@ -674,6 +678,33 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
         if start_index <= stage_order.index('ingest'):
             update_state(project_id, 'ingest', status='completed', progress=100)
             total_images = len(list(paths['images_path'].glob('*')))
+            sharpness_boost = normalize_colmap_sharpness_boost(
+                config.get('colmap_sharpness_boost')
+            )
+            if sharpness_boost > 0:
+                append_log_line(
+                    project_id,
+                    f"🔎 Applying COLMAP sharpness boost: {sharpness_boost}%",
+                )
+                sharpen_stats = apply_colmap_sharpness_boost(
+                    paths['images_path'],
+                    paths['project_path'],
+                    sharpness_boost,
+                )
+                append_log_line(
+                    project_id,
+                    "🔎 COLMAP sharpness boost complete: "
+                    f"processed={sharpen_stats.get('processed', 0)} | "
+                    f"skipped={sharpen_stats.get('skipped', 0)} | "
+                    f"failed={sharpen_stats.get('failed', 0)}",
+                )
+                if sharpen_stats.get('before_mean_sharpness') is not None:
+                    append_log_line(
+                        project_id,
+                        "   sharpness mean "
+                        f"{sharpen_stats.get('before_mean_sharpness')} -> "
+                        f"{sharpen_stats.get('after_mean_sharpness')}",
+                    )
             append_log_line(project_id, f"📸 Total images for reconstruction: {total_images}")
             update_stage_detail(project_id, 'ingest', text=f'Images ready: {total_images}', subtext=None)
             _persist_resource_coordination(

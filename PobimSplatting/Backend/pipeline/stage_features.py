@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import sqlite3
 import subprocess
+import time
 import traceback
 from pathlib import Path
 
@@ -35,6 +36,28 @@ from .runtime_support import (
     should_emit_progress_milestone,
     should_log_subprocess_line,
 )
+
+
+MATCHER_PARAM_PREFIXES = {
+    'sequential': ('SequentialMatching.',),
+    'vocab_tree': ('VocabTreeMatching.',),
+    'exhaustive': (),
+}
+
+
+def filter_matcher_params_for_colmap(matcher_type, matcher_params):
+    allowed_prefixes = MATCHER_PARAM_PREFIXES.get(matcher_type, ())
+    if not allowed_prefixes:
+        return {}, dict(matcher_params or {})
+
+    filtered = {}
+    dropped = {}
+    for param, value in dict(matcher_params or {}).items():
+        if any(param.startswith(prefix) for prefix in allowed_prefixes):
+            filtered[param] = value
+        else:
+            dropped[param] = value
+    return filtered, dropped
 
 
 def run_hloc_feature_extraction_stage(project_id, paths, config, colmap_config=None, *, helpers):
@@ -462,6 +485,17 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None, *,
     if colmap_config:
         colmap_cfg = colmap_config
     colmap_cfg, _ = apply_no_regression_floor(colmap_cfg, project_id=project_id, reason='before COLMAP feature matching')
+    filtered_matcher_params, dropped_matcher_params = filter_matcher_params_for_colmap(
+        colmap_cfg.get('matcher_type'),
+        colmap_cfg.get('matcher_params'),
+    )
+    if dropped_matcher_params:
+        append_log_line(
+            project_id,
+            "🧹 Dropped matcher params that are invalid for "
+            f"{colmap_cfg.get('matcher_type')} matcher: {', '.join(sorted(dropped_matcher_params))}",
+        )
+    colmap_cfg['matcher_params'] = filtered_matcher_params
     feature_profile = resolve_colmap_feature_pipeline_profile(config, colmap_cfg, colmap_exe)
 
     loop_detection_enabled = colmap_cfg['matcher_params'].get('SequentialMatching.loop_detection') == '1'
@@ -519,6 +553,11 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None, *,
         'current_pass_label': None,
         'current_pass_index': None,
         'current_pass_count': None,
+        'command_started_at': None,
+    }
+    matching_monitor_state = {
+        'last_verified_pairs': -1,
+        'last_elapsed_bucket': -1,
     }
     matching_checkpoints = []
 
@@ -593,14 +632,117 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None, *,
                             append_log_line(project_id, f"🔗 Feature matching progress: {current}/{total} units ({progress_percent}%) | mode={runtime_mode}")
                 return
 
+    def estimated_matching_work_units():
+        if colmap_cfg.get('matcher_type') == 'exhaustive':
+            return max(0, (num_images * (num_images - 1)) // 2)
+        if colmap_cfg.get('matcher_type') == 'sequential':
+            try:
+                overlap = int(colmap_cfg.get('matcher_params', {}).get('SequentialMatching.overlap', 0))
+            except (TypeError, ValueError):
+                overlap = 0
+            return max(0, num_images * max(overlap, 1))
+        return 0
+
+    def matching_progress_monitor():
+        started_at = matching_runtime.get('command_started_at')
+        if not started_at:
+            return
+
+        elapsed_seconds = int(time.monotonic() - started_at)
+        elapsed_bucket = elapsed_seconds // 15
+        verified_pairs = count_verified_matching_pairs(paths['database_path'])
+        total_units = estimated_matching_work_units()
+        if (
+            verified_pairs == matching_monitor_state['last_verified_pairs']
+            and elapsed_bucket == matching_monitor_state['last_elapsed_bucket']
+        ):
+            return
+
+        matching_monitor_state['last_verified_pairs'] = verified_pairs
+        matching_monitor_state['last_elapsed_bucket'] = elapsed_bucket
+        runtime_mode = 'GPU' if matching_runtime['last_use_gpu'] else 'CPU'
+        matcher_label = colmap_cfg.get('matcher_type', 'unknown')
+        pair_summary = (
+            f"verified_pairs={verified_pairs}/{total_units} estimated"
+            if total_units > 0
+            else f"verified_pairs={verified_pairs}"
+        )
+        append_log_line(
+            project_id,
+            f"🔗 Feature matching still running: matcher={matcher_label} | mode={runtime_mode} | "
+            f"{pair_summary} | elapsed={elapsed_seconds}s",
+        )
+
+        if total_units > 0 and verified_pairs > 0:
+            progress_percent = max(1, min(99, int((verified_pairs / total_units) * 100)))
+            details = {
+                'text': f'Matched pairs: {verified_pairs}/{total_units} estimated',
+                'current_item': verified_pairs,
+                'total_items': total_units,
+                'item_name': f'Pair {verified_pairs}',
+            }
+            emit_stage_progress(project_id, 'feature_matching', progress_percent, details)
+            update_state(project_id, 'feature_matching', progress=progress_percent, details=details)
+            update_stage_detail(
+                project_id,
+                'feature_matching',
+                text=f'Matched pairs: {verified_pairs}/{total_units} estimated',
+                subtext=f'{matcher_label} matcher running ({runtime_mode})',
+            )
+        elif elapsed_seconds > 0:
+            update_stage_detail(
+                project_id,
+                'feature_matching',
+                text=f'{matcher_label} matcher running',
+                subtext=f'{runtime_mode} | elapsed {elapsed_seconds}s',
+            )
+
     def run_matching_command(command):
-        run_command_with_logs(project_id, command, line_handler=matching_line_handler, raw_line_filter=should_log_subprocess_line)
+        matching_runtime['command_started_at'] = time.monotonic()
+        matching_monitor_state['last_verified_pairs'] = -1
+        matching_monitor_state['last_elapsed_bucket'] = -1
+        total_units = estimated_matching_work_units()
+        if total_units > 0 and not matching_runtime['current_pass_label']:
+            runtime_mode = 'GPU' if matching_runtime['last_use_gpu'] else 'CPU'
+            matcher_label = colmap_cfg.get('matcher_type', 'unknown')
+            append_log_line(
+                project_id,
+                f"🔗 Feature matching monitor active: matcher={matcher_label} | mode={runtime_mode} | "
+                f"estimated_work={total_units} pairs | heartbeat=15s",
+            )
+            update_stage_detail(
+                project_id,
+                'feature_matching',
+                text=f'Matching pairs: 0/{total_units} estimated',
+                subtext=f'{matcher_label} matcher running ({runtime_mode})',
+            )
+        try:
+            run_command_with_logs(
+                project_id,
+                command,
+                line_handler=matching_line_handler,
+                raw_line_filter=should_log_subprocess_line,
+                progress_monitor=matching_progress_monitor,
+                progress_interval=15.0,
+            )
+        finally:
+            matching_runtime['command_started_at'] = None
 
     def reset_matching_health():
         matching_health['gpu_issue_detected'] = False
         matching_health['last_gpu_issue'] = None
 
     def build_matching_cmd(max_num_matches, use_gpu, matcher_params):
+        safe_matcher_params, dropped_params = filter_matcher_params_for_colmap(
+            colmap_cfg.get('matcher_type'),
+            matcher_params,
+        )
+        if dropped_params:
+            append_log_line(
+                project_id,
+                "🧹 Dropped matcher params that are invalid for "
+                f"{colmap_cfg.get('matcher_type')} matcher: {', '.join(sorted(dropped_params))}",
+            )
         rebuilt = [
             colmap_exe, matcher_cmd,
             '--database_path', str(paths['database_path']),
@@ -609,7 +751,7 @@ def run_feature_matching_stage(project_id, paths, config, colmap_config=None, *,
         ]
         if feature_profile['matcher_args']:
             rebuilt.extend(feature_profile['matcher_args'])
-        for param, value in matcher_params.items():
+        for param, value in safe_matcher_params.items():
             rebuilt.extend([f'--{param}', value])
         return rebuilt
 

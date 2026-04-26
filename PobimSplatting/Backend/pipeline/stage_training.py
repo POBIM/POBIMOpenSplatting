@@ -29,13 +29,24 @@ logger = logging.getLogger(__name__)
 
 TRAINING_LIVE_RENDER_DIRNAME = "live_training_preview"
 TRAINING_LIVE_CONTROL_FILENAME = "live_training_preview_control.json"
-TRAINING_LIVE_RENDER_PERCENT_STEP = 2
+DEFAULT_TRAINING_LIVE_RENDER_PERCENT_STEP = 2
+ALLOWED_TRAINING_LIVE_RENDER_PERCENT_STEPS = {1, 2, 5}
 
 
 def _calculate_progress_percent(current: int, total: int) -> int:
     if total <= 0:
         return 0
     return max(0, min(100, int((min(current, total) / total) * 100)))
+
+
+def _training_live_render_percent_step(config: dict) -> int:
+    try:
+        value = int(config.get("training_live_preview_interval_percent"))
+    except (TypeError, ValueError):
+        return DEFAULT_TRAINING_LIVE_RENDER_PERCENT_STEP
+    if value in ALLOWED_TRAINING_LIVE_RENDER_PERCENT_STEPS:
+        return value
+    return DEFAULT_TRAINING_LIVE_RENDER_PERCENT_STEP
 
 
 def _reference_url_for_project_image(project_id: str, image_name: str) -> str | None:
@@ -196,6 +207,7 @@ def run_opensplat_training(
         )
 
         enhanced_iterations = opensplat_config["iterations"]
+        live_render_percent_step = _training_live_render_percent_step(config)
         if quality_mode == "custom":
             append_log_line(
                 project_id,
@@ -266,11 +278,11 @@ def run_opensplat_training(
             "--live-render-control",
             str(live_render_control_path.absolute()),
             "--live-render-every-percent",
-            str(TRAINING_LIVE_RENDER_PERCENT_STEP),
+            str(live_render_percent_step),
         ]
         append_log_line(
             project_id,
-            f"📡 Native live comparison renders enabled every {TRAINING_LIVE_RENDER_PERCENT_STEP}% "
+            f"📡 Native live comparison renders enabled every {live_render_percent_step}% "
             "(source resolution, binary websocket delivery)",
         )
 

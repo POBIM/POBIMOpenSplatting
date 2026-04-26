@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from PobimSplatting.Backend.pipeline import runner
 from PobimSplatting.Backend.pipeline import config_builders
+from PobimSplatting.Backend.pipeline import orbit_policy
 from PobimSplatting.Backend.pipeline import recovery_planners
 from PobimSplatting.Backend.pipeline import runtime_support
 from PobimSplatting.Backend.pipeline import stage_features, stage_sparse, stage_training
@@ -21,6 +23,61 @@ class PipelineStageSmokeTests(unittest.TestCase):
         self.assertTrue(callable(stage_sparse.run_model_conversion_stage))
         self.assertTrue(callable(stage_training.run_opensplat_training))
         self.assertTrue(callable(stage_training.finalize_project))
+
+    def test_exhaustive_matching_drops_sequential_only_params(self):
+        filtered, dropped = stage_features.filter_matcher_params_for_colmap(
+            'exhaustive',
+            {
+                'SequentialMatching.overlap': '44',
+                'SequentialMatching.quadratic_overlap': '1',
+            },
+        )
+
+        self.assertEqual(filtered, {})
+        self.assertEqual(
+            dropped,
+            {
+                'SequentialMatching.overlap': '44',
+                'SequentialMatching.quadratic_overlap': '1',
+            },
+        )
+
+    def test_no_regression_floor_keeps_exhaustive_matcher_params_empty(self):
+        colmap_cfg = {
+            'matcher_type': 'exhaustive',
+            'matcher_params': {},
+            'mapper_params': {},
+            'no_regression_floor': {
+                'matcher_params': {
+                    'SequentialMatching.overlap': '44',
+                    'SequentialMatching.quadratic_overlap': '1',
+                },
+            },
+        }
+
+        updated, changed = orbit_policy.apply_no_regression_floor(colmap_cfg)
+
+        self.assertFalse(changed)
+        self.assertEqual(updated['matcher_params'], {})
+
+    def test_no_regression_floor_still_applies_to_sequential_matcher(self):
+        colmap_cfg = {
+            'matcher_type': 'sequential',
+            'matcher_params': {'SequentialMatching.overlap': '10'},
+            'mapper_params': {},
+            'no_regression_floor': {
+                'matcher_params': {
+                    'SequentialMatching.overlap': '44',
+                    'SequentialMatching.quadratic_overlap': '1',
+                },
+            },
+        }
+
+        updated, changed = orbit_policy.apply_no_regression_floor(colmap_cfg)
+
+        self.assertTrue(changed)
+        self.assertEqual(updated['matcher_params']['SequentialMatching.overlap'], '44')
+        self.assertEqual(updated['matcher_params']['SequentialMatching.quadratic_overlap'], '1')
 
     def test_feature_wrapper_dispatches_helpers(self):
         helper_bundle = {'marker': 'feature'}
@@ -113,7 +170,10 @@ class PipelineStageSmokeTests(unittest.TestCase):
     def test_run_colmap_pipeline_sequences_stage_wrappers(self):
         call_order = []
         config = {'quality_mode': 'balanced', 'feature_method': 'sift', 'sfm_engine': 'colmap'}
-        paths = {'images_path': '/tmp/images'}
+        paths = {'images_path': '/tmp/images', 'project_path': Path('/tmp/project')}
+        time_estimator = mock.Mock()
+        time_estimator.classify_resource_profile.return_value = {'resource_profile': 'light'}
+        time_estimator.choose_resource_lane.return_value = {'resource_lane': 'foreground'}
 
         def record(name):
             def _inner(*args, **kwargs):
@@ -160,7 +220,7 @@ class PipelineStageSmokeTests(unittest.TestCase):
             'run_opensplat_training',
             side_effect=record('training'),
         ):
-            runner.run_colmap_pipeline('project', paths, config, 0.0, {'estimate': 10}, object())
+            runner.run_colmap_pipeline('project', paths, config, 0.0, {'estimate': 10}, time_estimator)
 
         self.assertEqual(
             call_order,

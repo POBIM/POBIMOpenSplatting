@@ -35,6 +35,7 @@ from ..core.projects import (
     update_state,
 )
 from ..pipeline.config_builders import build_upload_adaptive_policy_comparisons
+from ..pipeline.image_preprocessing import normalize_colmap_sharpness_boost
 from ..pipeline.runner import (
     build_upload_policy_preview,
     finalize_project,
@@ -154,10 +155,45 @@ def _safe_live_render_stem(image_name: str) -> str:
     )
 
 
-def _latest_training_live_render(project_id: str, image_name: str) -> dict | None:
+def _training_live_render_payload(
+    project_id: str,
+    image_name: str,
+    render_path: Path,
+    *,
+    total_iterations: int = 0,
+) -> dict:
+    stat = render_path.stat()
+    iteration = None
+    match = re.search(r"_(\d+)\.jpg$", render_path.name)
+    if match:
+        iteration = int(match.group(1))
+
+    payload = {
+        "filename": render_path.name,
+        "render_url": f"/api/project/{project_id}/training_live_preview/{render_path.name}?v={stat.st_mtime_ns}",
+        "iteration": iteration,
+        "version": stat.st_mtime_ns,
+        "updated_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+    }
+    if total_iterations > 0:
+        payload["total_iterations"] = total_iterations
+        if isinstance(iteration, int):
+            payload["progress_percent"] = max(
+                0,
+                min(100, int((min(iteration, total_iterations) / total_iterations) * 100)),
+            )
+    return payload
+
+
+def _training_live_render_history(
+    project_id: str,
+    image_name: str,
+    *,
+    total_iterations: int = 0,
+) -> list[dict]:
     render_dir, _ = _get_training_live_preview_paths(project_id)
     if not image_name or not render_dir.exists():
-        return None
+        return []
 
     prefix = f"live_{_safe_live_render_stem(image_name)}_"
     candidates = sorted(
@@ -166,26 +202,89 @@ def _latest_training_live_render(project_id: str, image_name: str) -> dict | Non
             for child in render_dir.glob(f"{prefix}*.jpg")
             if child.is_file()
         ],
-        key=lambda child: (child.stat().st_mtime_ns, child.name),
-        reverse=True,
+        key=lambda child: (
+            _training_live_render_payload(
+                project_id,
+                image_name,
+                child,
+                total_iterations=total_iterations,
+            ).get("iteration")
+            or 0,
+            child.stat().st_mtime_ns,
+            child.name,
+        ),
     )
-    if not candidates:
+    return [
+        _training_live_render_payload(
+            project_id,
+            image_name,
+            candidate,
+            total_iterations=total_iterations,
+        )
+        for candidate in candidates
+    ]
+
+
+def _latest_training_live_render(
+    project_id: str,
+    image_name: str,
+    *,
+    total_iterations: int = 0,
+) -> dict | None:
+    history = _training_live_render_history(
+        project_id,
+        image_name,
+        total_iterations=total_iterations,
+    )
+    if not history:
+        return None
+    return history[-1]
+
+
+def _latest_training_live_render_any(project_id: str) -> dict | None:
+    render_dir, _ = _get_training_live_preview_paths(project_id)
+    if not render_dir.exists():
         return None
 
-    latest = candidates[0]
-    stat = latest.stat()
-    iteration = None
-    match = re.search(r"_(\d+)\.jpg$", latest.name)
-    if match:
-        iteration = int(match.group(1))
+    project_path = app_config.UPLOAD_FOLDER / project_id
+    stem_to_image_name: dict[str, str] = {}
+    for folder in ("images", "training_images"):
+        image_dir = project_path / folder
+        if not image_dir.exists():
+            continue
+        for image_path in image_dir.iterdir():
+            if image_path.is_file():
+                stem_to_image_name.setdefault(
+                    _safe_live_render_stem(image_path.name),
+                    image_path.name,
+                )
 
-    return {
-        "filename": latest.name,
-        "render_url": f"/api/project/{project_id}/training_live_preview/{latest.name}?v={stat.st_mtime_ns}",
-        "iteration": iteration,
-        "version": stat.st_mtime_ns,
-        "updated_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
-    }
+    for latest in sorted(
+        [child for child in render_dir.glob("live_*.jpg") if child.is_file()],
+        key=lambda child: (child.stat().st_mtime_ns, child.name),
+        reverse=True,
+    ):
+        match = re.match(r"live_(.+)_(\d+)\.jpg$", latest.name)
+        if not match:
+            continue
+        image_name = stem_to_image_name.get(match.group(1))
+        if not image_name:
+            continue
+        stat = latest.stat()
+        payload = {
+            "project_id": project_id,
+            "image_name": image_name,
+            "filename": latest.name,
+            "render_url": f"/api/project/{project_id}/training_live_preview/{latest.name}?v={stat.st_mtime_ns}",
+            "reference_url": _project_image_reference_url(project_id, image_name),
+            "iteration": int(match.group(2)),
+            "version": stat.st_mtime_ns,
+            "updated_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+        }
+        payload["history"] = _training_live_render_history(project_id, image_name)
+        return payload
+
+    return None
 
 
 def _write_training_live_control(
@@ -211,6 +310,97 @@ def _write_training_live_control(
     temp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     os.replace(temp_path, control_path)
     return payload
+
+
+def _resolve_opensplat_binary() -> Path:
+    opensplat_binary = app_config.OPENSPLAT_BINARY_PATH
+    if opensplat_binary.is_dir():
+        potential_binary = opensplat_binary / "opensplat"
+        if potential_binary.exists():
+            opensplat_binary = potential_binary
+    if not opensplat_binary.exists():
+        raise FileNotFoundError(f"OpenSplat binary not found at {opensplat_binary}")
+    return opensplat_binary
+
+
+def _training_stage_snapshot(project_data: dict) -> tuple[dict | None, dict]:
+    progress_states = project_data.get("progress_states") or []
+    training_stage = next(
+        (
+            state
+            for state in progress_states
+            if state.get("key") == "gaussian_splatting"
+        ),
+        None,
+    )
+    training_details = (project_data.get("stage_details") or {}).get(
+        "gaussian_splatting", {}
+    )
+    return training_stage, training_details
+
+
+def _training_total_iterations(training_details: dict) -> int:
+    for key in ("total_items", "current_item"):
+        value = training_details.get(key)
+        if isinstance(value, int) and value > 0:
+            return value
+    return 0
+
+
+def _training_live_preview_interval_percent(config: dict | None) -> int:
+    try:
+        value = int((config or {}).get("training_live_preview_interval_percent"))
+    except (TypeError, ValueError):
+        return 2
+    return value if value in {1, 2, 5} else 2
+
+
+def _render_final_training_live_preview(
+    project_id: str,
+    *,
+    total_iterations: int,
+) -> None:
+    preview_path = _latest_project_ply(project_id)
+    if preview_path is None:
+        raise FileNotFoundError("No final training preview available for this project")
+
+    project_path = app_config.UPLOAD_FOLDER / project_id
+    if not project_path.exists():
+        raise FileNotFoundError("Project input folder not found")
+
+    render_dir, control_path = _get_training_live_preview_paths(project_id)
+    opensplat_binary = _resolve_opensplat_binary()
+    opensplat_working_dir = (
+        opensplat_binary.parent if opensplat_binary.is_file() else opensplat_binary
+    )
+    cmd = [
+        str(opensplat_binary),
+        str(project_path.absolute()),
+        "--render-only",
+        "--resume",
+        str(preview_path.absolute()),
+        "-n",
+        str(max(1, total_iterations)),
+        "--output",
+        str(preview_path.absolute()),
+        "--live-render-dir",
+        str(render_dir.absolute()),
+        "--live-render-control",
+        str(control_path.absolute()),
+    ]
+
+    result = subprocess.run(
+        cmd,
+        cwd=str(opensplat_working_dir),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=180,
+        check=False,
+    )
+    if result.returncode != 0:
+        message = (result.stderr or result.stdout or "OpenSplat render failed").strip()
+        raise RuntimeError(message)
 
 
 def _latest_project_ply(project_id: str) -> Path | None:
@@ -977,8 +1167,12 @@ def upload_policy_preview():
         "colmap_resolution": payload.get("colmap_resolution", "2K"),
         "training_resolution": payload.get("training_resolution", "4K"),
         "use_separate_training_images": parse_bool(payload.get("use_separate_training_images"), False),
+        "colmap_sharpness_boost": normalize_colmap_sharpness_boost(
+            payload.get("colmap_sharpness_boost")
+        ),
         "crop_size": parse_int(payload.get("crop_size"), 0),
         "mixed_precision": parse_bool(payload.get("mixed_precision"), False),
+        "training_live_preview_interval_percent": _training_live_preview_interval_percent(payload),
         "adaptive_pair_scheduling": parse_bool(
             payload.get("adaptive_pair_scheduling"), True
         ),
@@ -1166,11 +1360,15 @@ def upload_files():
             "use_separate_training_images", "false"
         ).lower()
         == "true",
+        "colmap_sharpness_boost": normalize_colmap_sharpness_boost(
+            request.form.get("colmap_sharpness_boost")
+        ),
         # 8K Optimization - Patch-based training (works with all quality modes)
         "crop_size": int(request.form.get("crop_size", 0)),
         # Mixed Precision (FP16) training for reduced VRAM usage
         "mixed_precision": request.form.get("mixed_precision", "false").lower()
         == "true",
+        "training_live_preview_interval_percent": _training_live_preview_interval_percent(request.form),
         "adaptive_pair_scheduling": request.form.get(
             "adaptive_pair_scheduling", "true"
         ).lower()
@@ -1887,17 +2085,25 @@ def retry_project(project_id):
                 "colmap_resolution",
                 "training_resolution",
                 "use_separate_training_images",
+                "colmap_sharpness_boost",
                 "smart_frame_selection",
                 "adaptive_frame_budget",
                 "oversample_factor",
                 "replacement_search_radius",
                 "ffmpeg_cpu_workers",
                 "adaptive_pair_scheduling",
+                "training_live_preview_interval_percent",
             ]:
                 if param_key in new_params and new_params[param_key] is not None:
-                    config[param_key] = new_params[param_key]
+                    config[param_key] = (
+                        _training_live_preview_interval_percent(new_params)
+                        if param_key == "training_live_preview_interval_percent"
+                        else normalize_colmap_sharpness_boost(new_params.get(param_key))
+                        if param_key == "colmap_sharpness_boost"
+                        else new_params[param_key]
+                    )
                     append_log_line(
-                        project_id, f"  • {param_key}: {new_params[param_key]}"
+                        project_id, f"  • {param_key}: {config[param_key]}"
                     )
 
             # Update quality mode if provided
@@ -2276,24 +2482,14 @@ def get_training_preview(project_id):
 
     try:
         project_data = project_store.processing_status.get(project_id, {})
-        progress_states = project_data.get("progress_states") or []
-        training_stage = next(
-            (
-                state
-                for state in progress_states
-                if state.get("key") == "gaussian_splatting"
-            ),
-            None,
-        )
+        training_stage, training_details = _training_stage_snapshot(project_data)
+        project_config = project_data.get("config") or {}
         latest_ply = _latest_project_ply(project_id)
         progress_percent = (
             int(training_stage.get("progress") or 0) if training_stage else 0
         )
         iteration = None
         total_iterations = None
-        training_details = (project_data.get("stage_details") or {}).get(
-            "gaussian_splatting", {}
-        )
         current_iterations = training_details.get("current_item")
         total_items = training_details.get("total_items")
         if isinstance(current_iterations, int):
@@ -2308,9 +2504,21 @@ def get_training_preview(project_id):
             "iteration": iteration or 0,
             "total_iterations": total_iterations or 0,
             "progress_percent": progress_percent,
-            "update_interval_percent": 2,
+            "update_interval_percent": _training_live_preview_interval_percent(project_config),
             "is_final": bool(latest_ply and project_data.get("status") == "completed"),
         }
+
+        latest_live_render = _latest_training_live_render_any(project_id)
+        if latest_live_render:
+            latest_live_render.setdefault("total_iterations", total_iterations or 0)
+            latest_live_render.setdefault("progress_percent", progress_percent)
+            if latest_live_render.get("image_name"):
+                latest_live_render["history"] = _training_live_render_history(
+                    project_id,
+                    latest_live_render["image_name"],
+                    total_iterations=total_iterations or 0,
+                )
+            response["live_preview"] = latest_live_render
 
         if latest_ply is not None:
             stat = latest_ply.stat()
@@ -2394,7 +2602,48 @@ def select_training_live_preview(project_id):
         image_name=image_name,
     )
     reference_url = _project_image_reference_url(project_id, image_name)
-    latest_render = _latest_training_live_render(project_id, image_name) or {}
+    project_data = project_store.processing_status.get(project_id, {})
+    training_stage, training_details = _training_stage_snapshot(project_data)
+    total_iterations = _training_total_iterations(training_details)
+    training_running = bool(training_stage and training_stage.get("status") == "running")
+    render_history = _training_live_render_history(
+        project_id,
+        image_name,
+        total_iterations=total_iterations,
+    )
+    latest_render = render_history[-1] if render_history else {}
+
+    if (
+        not training_running
+        and project_data.get("status") == "completed"
+        and _latest_project_ply(project_id) is not None
+        and (
+            not latest_render
+            or (
+                total_iterations > 0
+                and latest_render.get("iteration") != total_iterations
+            )
+        )
+    ):
+        try:
+            _render_final_training_live_preview(
+                project_id,
+                total_iterations=total_iterations,
+            )
+            render_history = _training_live_render_history(
+                project_id,
+                image_name,
+                total_iterations=total_iterations,
+            )
+            latest_render = render_history[-1] if render_history else latest_render
+        except Exception as exc:
+            logger.exception("Failed to render final live preview selection")
+            if not latest_render:
+                return jsonify({"error": f"Failed to render selected final view: {exc}"}), 500
+            append_log_line(
+                project_id,
+                f"[live_render warning] Failed to refresh final view for {image_name}: {exc}",
+            )
 
     return jsonify(
         {
@@ -2405,6 +2654,7 @@ def select_training_live_preview(project_id):
             "version": control["version"],
             "updated_at": control["updated_at"],
             **latest_render,
+            "history": render_history,
         }
     )
 

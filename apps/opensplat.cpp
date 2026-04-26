@@ -127,6 +127,7 @@ int main(int argc, char *argv[]){
         ("live-render-dir", "Directory where live training comparison renders should be written", cxxopts::value<std::string>()->default_value(""))
         ("live-render-control", "Path to JSON control file for selecting the live render camera", cxxopts::value<std::string>()->default_value(""))
         ("live-render-every-percent", "Render live training comparison every N percent of progress", cxxopts::value<int>()->default_value("2"))
+        ("render-only", "Load --resume PLY, render the selected live preview camera, and exit")
         ("keep-crs", "Retain the project input's coordinate reference system")
         ("cpu", "Force CPU execution")
         ("has-visualization", "Enable the Pangolin visualizer when visualization support is built")
@@ -189,6 +190,7 @@ int main(int argc, char *argv[]){
     const std::string liveRenderControlPath = result["live-render-control"].as<std::string>();
     const int liveRenderEveryPercent = std::max(1, result["live-render-every-percent"].as<int>());
     if (!liveRenderDir.empty() && !fs::exists(liveRenderDir)) fs::create_directories(liveRenderDir);
+    const bool renderOnly = result.count("render-only") > 0;
     const bool keepCrs = result.count("keep-crs") > 0;
     const bool hasVisualization = result.count("has-visualization") > 0;
     const float downScaleFactor = (std::max)(result["downscale-factor"].as<float>(), 1.0f);
@@ -286,8 +288,45 @@ int main(int argc, char *argv[]){
         int imageSize = -1;
         size_t step = 1;
 
+        int loadedIteration = -1;
         if (resume != ""){
-            step = model.loadPly(resume) + 1;
+            loadedIteration = model.loadPly(resume);
+            step = loadedIteration + 1;
+        }
+
+        if (renderOnly) {
+            if (resume.empty()) {
+                throw std::runtime_error("--render-only requires --resume to point at a trained PLY");
+            }
+            if (liveRenderDir.empty()) {
+                throw std::runtime_error("--render-only requires --live-render-dir");
+            }
+
+            LiveRenderControl control;
+            if (!liveRenderControlPath.empty()) {
+                control = readLiveRenderControl(liveRenderControlPath);
+                if (!control.enabled) {
+                    throw std::runtime_error("Live render control is disabled or unreadable");
+                }
+            } else {
+                control.enabled = true;
+            }
+
+            int liveCamIndex = findLiveRenderCameraIndex(cams, control);
+            if (liveCamIndex < 0) {
+                throw std::runtime_error("No registered camera is available for render-only preview");
+            }
+
+            int renderStep = loadedIteration > 0 ? loadedIteration : std::max(1, numIters);
+            writeLiveRender(
+                    model,
+                    cams[liveCamIndex],
+                    liveCamIndex,
+                    static_cast<size_t>(renderStep),
+                    std::max(numIters, renderStep),
+                    fs::path(liveRenderDir),
+                    control);
+            return EXIT_SUCCESS;
         }
 
         long long lastLiveRenderControlVersion = -1;

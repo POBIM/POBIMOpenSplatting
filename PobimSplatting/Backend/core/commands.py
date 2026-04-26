@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import threading
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
@@ -19,6 +20,8 @@ def run_command_with_logs(
     cwd: Optional[Path] = None,
     line_handler: Optional[Callable[[str], None]] = None,
     raw_line_filter: Optional[Callable[[str], bool | str | None]] = None,
+    progress_monitor: Optional[Callable[[], None]] = None,
+    progress_interval: float = 15.0,
 ) -> None:
     """Execute a shell command while streaming logs into the project log."""
     pretty_cmd = " ".join(str(part) for part in cmd)
@@ -51,6 +54,21 @@ def run_command_with_logs(
 
     # Register the process for potential cancellation
     register_process(project_id, process)
+    monitor_stop = threading.Event()
+    monitor_thread = None
+
+    if progress_monitor is not None:
+        def _monitor_loop():
+            while not monitor_stop.wait(progress_interval):
+                if process.poll() is not None:
+                    return
+                try:
+                    progress_monitor()
+                except Exception as monitor_error:  # pragma: no cover - defensive log only
+                    append_log_line(project_id, f"[progress_monitor error] {monitor_error}")
+
+        monitor_thread = threading.Thread(target=_monitor_loop, daemon=True)
+        monitor_thread.start()
 
     assert process.stdout is not None
 
@@ -78,5 +96,8 @@ def run_command_with_logs(
         if returncode != 0:
             raise subprocess.CalledProcessError(returncode, list(cmd))
     finally:
+        monitor_stop.set()
+        if monitor_thread is not None:
+            monitor_thread.join(timeout=1.0)
         # Always unregister the process when done
         unregister_process(project_id)

@@ -356,24 +356,25 @@ def apply_no_regression_floor(colmap_cfg, project_id=None, reason=None):
         changes.append(f'profile={floor_profile}')
 
     floor_matcher = dict(floor.get('matcher_params') or {})
-    try:
-        current_overlap = int(matcher_params.get('SequentialMatching.overlap', '0'))
-    except (TypeError, ValueError):
-        current_overlap = 0
-    try:
-        floor_overlap = int(floor_matcher.get('SequentialMatching.overlap', '0'))
-    except (TypeError, ValueError):
-        floor_overlap = 0
-    if floor_overlap > current_overlap:
-        matcher_params['SequentialMatching.overlap'] = str(floor_overlap)
-        changes.append(f'overlap={current_overlap}->{floor_overlap}')
+    if colmap_cfg.get('matcher_type') == 'sequential':
+        try:
+            current_overlap = int(matcher_params.get('SequentialMatching.overlap', '0'))
+        except (TypeError, ValueError):
+            current_overlap = 0
+        try:
+            floor_overlap = int(floor_matcher.get('SequentialMatching.overlap', '0'))
+        except (TypeError, ValueError):
+            floor_overlap = 0
+        if floor_overlap > current_overlap:
+            matcher_params['SequentialMatching.overlap'] = str(floor_overlap)
+            changes.append(f'overlap={current_overlap}->{floor_overlap}')
 
-    for key in ('SequentialMatching.quadratic_overlap', 'SequentialMatching.loop_detection'):
-        current_value = str(matcher_params.get(key, '0'))
-        floor_value = str(floor_matcher.get(key, '0'))
-        if floor_value == '1' and current_value != '1':
-            matcher_params[key] = '1'
-            changes.append(f'{key}=1')
+        for key in ('SequentialMatching.quadratic_overlap', 'SequentialMatching.loop_detection'):
+            current_value = str(matcher_params.get(key, '0'))
+            floor_value = str(floor_matcher.get(key, '0'))
+            if floor_value == '1' and current_value != '1':
+                matcher_params[key] = '1'
+                changes.append(f'{key}=1')
 
     floor_mapper = dict(floor.get('mapper_params') or {})
     if (

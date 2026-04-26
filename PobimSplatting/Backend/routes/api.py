@@ -19,6 +19,7 @@ from pathlib import Path
 from flask import Blueprint, jsonify, request, send_file
 
 from ..core import config as app_config
+from ..core.commands import build_native_runtime_env
 from ..core import projects as project_store
 from ..core.files import (
     allowed_file,
@@ -392,6 +393,7 @@ def _render_final_training_live_preview(
     result = subprocess.run(
         cmd,
         cwd=str(opensplat_working_dir),
+        env=build_native_runtime_env(),
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

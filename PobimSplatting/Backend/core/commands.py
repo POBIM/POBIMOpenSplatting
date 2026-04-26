@@ -13,6 +13,66 @@ from typing import Callable, Iterable, Optional
 from .projects import append_log_line, register_process, unregister_process
 
 
+def _prepend_env_paths(env: dict[str, str], key: str, paths: Iterable[Path]) -> None:
+    existing = [part for part in env.get(key, "").split(":") if part]
+    prefix: list[str] = []
+    seen: set[str] = set(existing)
+
+    for path in paths:
+        try:
+            if not path.exists():
+                continue
+            resolved = str(path.resolve())
+        except OSError:
+            continue
+        if resolved not in seen:
+            prefix.append(resolved)
+            seen.add(resolved)
+
+    if prefix or existing:
+        env[key] = ":".join(prefix + existing)
+
+
+def build_native_runtime_env(base_env: Optional[dict[str, str]] = None) -> dict[str, str]:
+    """Return an environment that can launch repo-native CUDA binaries."""
+    env = dict(base_env or os.environ)
+    repo_root = Path(__file__).resolve().parents[3]
+
+    _prepend_env_paths(
+        env,
+        "LD_LIBRARY_PATH",
+        (
+            repo_root / "libtorch-cuda130" / "lib",
+            Path("/usr/local/cuda-13.0/lib64"),
+            Path("/usr/local/cuda-13.0/targets/x86_64-linux/lib"),
+            repo_root / "libtorch-cuda126" / "lib",
+            Path("/usr/local/cuda-12.6/lib64"),
+            Path("/usr/local/cuda-12.6/targets/x86_64-linux/lib"),
+            repo_root / "libtorch-cuda121" / "lib",
+            repo_root / "libtorch-cuda118" / "lib",
+            repo_root / "libtorch-cpu" / "lib",
+            Path(__file__).parent.parent / "libtorch" / "lib",
+        ),
+    )
+    _prepend_env_paths(
+        env,
+        "PATH",
+        (
+            Path("/usr/local/cuda-13.0/bin"),
+            Path("/usr/local/cuda-12.6/bin"),
+        ),
+    )
+
+    if "CUDA_HOME" not in env and Path("/usr/local/cuda-13.0/bin/nvcc").exists():
+        env["CUDA_HOME"] = "/usr/local/cuda-13.0"
+
+    env["QT_QPA_PLATFORM"] = "offscreen"
+    env["DISPLAY"] = ""
+    env["LIBGL_ALWAYS_SOFTWARE"] = "1"
+    env["MESA_GL_VERSION_OVERRIDE"] = "3.3"
+    return env
+
+
 def run_command_with_logs(
     project_id: str,
     cmd: Iterable[str],
@@ -30,17 +90,7 @@ def run_command_with_logs(
     else:
         append_log_line(project_id, f"$ {pretty_cmd}")
 
-    env = os.environ.copy()
-    libtorch_path = Path(__file__).parent.parent / "libtorch" / "lib"
-    if "LD_LIBRARY_PATH" in env:
-        env["LD_LIBRARY_PATH"] = f"{libtorch_path}:{env['LD_LIBRARY_PATH']}"
-    else:
-        env["LD_LIBRARY_PATH"] = str(libtorch_path)
-
-    env["QT_QPA_PLATFORM"] = "offscreen"
-    env["DISPLAY"] = ""
-    env["LIBGL_ALWAYS_SOFTWARE"] = "1"
-    env["MESA_GL_VERSION_OVERRIDE"] = "3.3"
+    env = build_native_runtime_env()
 
     process = subprocess.Popen(
         list(cmd),

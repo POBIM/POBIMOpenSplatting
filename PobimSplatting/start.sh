@@ -450,6 +450,30 @@ start_backend() {
     # Ensure pycolmap (pulled in via lightglue) can load libonnxruntime.so.1
     # shipped alongside the locally-built COLMAP.
     local backend_ld_library_path="$LD_LIBRARY_PATH"
+    local native_runtime_dirs=(
+        "$REPO_ROOT/libtorch-cuda130/lib"
+        "/usr/local/cuda-13.0/lib64"
+        "/usr/local/cuda-13.0/targets/x86_64-linux/lib"
+        "$REPO_ROOT/libtorch-cuda126/lib"
+        "/usr/local/cuda-12.6/lib64"
+        "/usr/local/cuda-12.6/targets/x86_64-linux/lib"
+        "$REPO_ROOT/libtorch-cuda121/lib"
+        "$REPO_ROOT/libtorch-cuda118/lib"
+        "$REPO_ROOT/libtorch-cpu/lib"
+    )
+    for _native_dir in "${native_runtime_dirs[@]}"; do
+        if [ -d "$_native_dir" ] && [[ ":$backend_ld_library_path:" != *":$_native_dir:"* ]]; then
+            if [ -n "$backend_ld_library_path" ]; then
+                backend_ld_library_path="$_native_dir:$backend_ld_library_path"
+            else
+                backend_ld_library_path="$_native_dir"
+            fi
+        fi
+    done
+
+    if [ -d "/usr/local/cuda-13.0/bin" ]; then
+        backend_path="/usr/local/cuda-13.0/bin:$backend_path"
+    fi
     local onnx_candidates=(
         "$REPO_ROOT/colmap-build/install/lib"
         "$REPO_ROOT/colmap-build/_deps/onnxruntime-build/lib"
@@ -569,7 +593,10 @@ main_menu() {
     echo "8) Force clear default ports"
     echo "9) Exit"
         echo ""
-        read -p "Select option: " choice
+        if ! read -p "Select option: " choice; then
+            echo -e "${YELLOW}No input available. Exiting menu.${NC}"
+            exit 0
+        fi
 
         case $choice in
             1)
@@ -614,7 +641,10 @@ main_menu() {
                 ;;
         esac
         echo ""
-        read -p "Press Enter to continue..."
+        if ! read -p "Press Enter to continue..."; then
+            echo -e "${YELLOW}No input available. Exiting menu.${NC}"
+            exit 0
+        fi
         clear
     done
 }
@@ -639,6 +669,12 @@ if [ "$1" == "start" ]; then
     done
 elif [ "$1" == "stop" ]; then
     stop_servers
+elif [ "$1" == "restart" ]; then
+    stop_servers
+    sleep 2
+    start_backend
+    start_frontend
+    echo -e "${GREEN}✓ All servers restarted!${NC}"
 elif [ "$1" == "status" ]; then
     check_system_status
 elif [ "$1" == "clear-ports" ]; then

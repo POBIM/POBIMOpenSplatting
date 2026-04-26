@@ -48,11 +48,14 @@ BACKEND_PORT=5000
 CUDA_VERSION=""
 LIBTORCH_DIR=""
 NUM_CORES=$(nproc)
+DEFAULT_CUDA_HOME="${DEFAULT_CUDA_HOME:-/usr/local/cuda-13.0}"
+DEFAULT_CUDA_ARCHS="${DEFAULT_CUDA_ARCHS:-75;80;86;89}"
+LOCAL_CUDA_ARCH="${LOCAL_CUDA_ARCH:-89}"
 
 # Global CUDA Configuration (detected once, used everywhere)
 CUDA_HOME=""
 CUDA_ENABLED="OFF"
-GPU_ARCHS="70;75;80;86;89"  # Default architectures
+GPU_ARCHS="$DEFAULT_CUDA_ARCHS"  # CUDA 13-safe default architectures
 GPU_COMPUTE_CAP=""
 APT_LOCK_WAIT_TIMEOUT=600
 COLMAP_CERES_VERSION="master"
@@ -381,8 +384,10 @@ detect_cuda_environment() {
     
     # Search for CUDA installation
     CUDA_PATHS=(
-        "/usr/local/cuda"
+        "$DEFAULT_CUDA_HOME"
+        "/usr/local/cuda-13.0"
         "/usr/local/cuda-12.6"
+        "/usr/local/cuda"
         "/usr/local/cuda-12.5"
         "/usr/local/cuda-12.4"
         "/usr/local/cuda-12.3"
@@ -404,6 +409,10 @@ detect_cuda_environment() {
         # Get CUDA version
         CUDA_VERSION=$($CUDA_HOME/bin/nvcc --version 2>/dev/null | grep "release" | awk '{print $5}' | cut -d',' -f1 || echo "unknown")
         print_info "CUDA version: $CUDA_VERSION"
+
+        if [[ "$CUDA_VERSION" == "13."* ]]; then
+            GPU_ARCHS="$DEFAULT_CUDA_ARCHS"
+        fi
         
         # Setup environment
         export PATH="$CUDA_HOME/bin:$PATH"
@@ -507,7 +516,10 @@ check_system_requirements() {
         fi
 
         # Check for specific CUDA versions
-        if [ -d "/usr/local/cuda-12.6" ]; then
+        if [ -d "/usr/local/cuda-13.0" ]; then
+            CUDA_VERSION="13.0"
+            print_success "CUDA 13.0 detected"
+        elif [ -d "/usr/local/cuda-12.6" ]; then
             CUDA_VERSION="12.6"
             print_success "CUDA 12.6 detected"
         elif [ -d "/usr/local/cuda-12.1" ]; then
@@ -564,11 +576,13 @@ check_system_requirements() {
 
 install_cuda_toolkit() {
     print_header "Installing CUDA Toolkit"
-    
-    # Check if nvcc is already available
-    if check_command nvcc; then
-        NVCC_VERSION=$(nvcc --version 2>/dev/null | grep "release" | awk '{print $5}' | cut -d',' -f1 || echo "unknown")
-        print_success "CUDA Toolkit already installed: $NVCC_VERSION"
+
+    # CUDA 13.0 is the default toolkit for this project. Keep older installs as fallbacks.
+    if [ -x "$DEFAULT_CUDA_HOME/bin/nvcc" ]; then
+        NVCC_VERSION=$("$DEFAULT_CUDA_HOME/bin/nvcc" --version 2>/dev/null | grep "release" | awk '{print $5}' | cut -d',' -f1 || echo "unknown")
+        print_success "CUDA Toolkit already installed at $DEFAULT_CUDA_HOME: $NVCC_VERSION"
+        CUDA_HOME="$DEFAULT_CUDA_HOME"
+        CUDA_VERSION="$NVCC_VERSION"
         return 0
     fi
     
@@ -584,15 +598,24 @@ install_cuda_toolkit() {
     DRIVER_CUDA=$(nvidia-smi | grep "CUDA Version" | awk '{print $9}' | cut -d'.' -f1,2)
     if [ -z "$DRIVER_CUDA" ]; then
         print_warning "Cannot detect CUDA version from driver"
-        DRIVER_CUDA="12.6"
+        DRIVER_CUDA="13.0"
     fi
     
     print_info "NVIDIA Driver supports CUDA up to: $DRIVER_CUDA"
-    print_info "Will install CUDA Toolkit 12.6 (compatible with driver)"
+    print_info "Will install CUDA Toolkit 13.0 side-by-side under $DEFAULT_CUDA_HOME"
     echo ""
     
-    if ! prompt_yes_no "Install CUDA Toolkit 12.6?" "y"; then
+    if ! prompt_yes_no "Install CUDA Toolkit 13.0?" "y"; then
         print_warning "Skipping CUDA Toolkit installation"
+        return 0
+    fi
+
+    if [ -x "$PROJECT_ROOT/scripts/setup-cuda130-wsl.sh" ]; then
+        print_info "Using toolkit-only CUDA 13.0 WSL installer helper"
+        "$PROJECT_ROOT/scripts/setup-cuda130-wsl.sh"
+        CUDA_HOME="$DEFAULT_CUDA_HOME"
+        CUDA_VERSION=$("$CUDA_HOME/bin/nvcc" --version 2>/dev/null | grep "release" | awk '{print $5}' | cut -d',' -f1 || echo "13.0")
+        print_success "CUDA Toolkit $CUDA_VERSION is ready at $CUDA_HOME"
         return 0
     fi
     
@@ -622,21 +645,21 @@ install_cuda_toolkit() {
         print_info "Updating package lists..."
         run_apt_get update -qq
         
-        print_info "Installing CUDA Toolkit 12.6 (this will take several minutes)..."
-        print_warning "Download size: ~3GB, Install size: ~6.7GB"
+        print_info "Installing CUDA Toolkit 13.0 from NVIDIA apt packages (this will take several minutes)..."
+        print_warning "On WSL, prefer scripts/setup-cuda130-wsl.sh because it is toolkit-only and avoids Linux driver packages."
         echo ""
         
-        run_apt_get install -y cuda-toolkit-12-6
+        run_apt_get install -y cuda-toolkit-13-0
         
         if [ $? -ne 0 ]; then
             print_error "Failed to install CUDA Toolkit"
             return 1
         fi
         
-        print_success "CUDA Toolkit 12.6 installed successfully"
+        print_success "CUDA Toolkit 13.0 installed successfully"
         
         # Setup environment variables
-        CUDA_PATH="/usr/local/cuda-12.6"
+        CUDA_PATH="$DEFAULT_CUDA_HOME"
         
         print_info "Setting up environment variables..."
         
@@ -649,8 +672,8 @@ install_cuda_toolkit() {
             cat >> "$HOME/.bashrc" << 'EOF'
 
 # CUDA Toolkit
-export PATH=/usr/local/cuda-12.6/bin:$PATH
-export LD_LIBRARY_PATH=/usr/local/cuda-12.6/lib64:$LD_LIBRARY_PATH
+export PATH=/usr/local/cuda-13.0/bin:$PATH
+export LD_LIBRARY_PATH=/usr/local/cuda-13.0/lib64:$LD_LIBRARY_PATH
 EOF
             print_success "CUDA environment variables added to ~/.bashrc"
         fi
@@ -766,7 +789,7 @@ install_system_dependencies() {
         ninja-build
     )
 
-    if [ "$CUDA_ENABLED" = "ON" ]; then
+    if [ "$CUDA_ENABLED" = "ON" ] && colmap_cudss_enabled_for_cuda "$CUDA_HOME"; then
         PACKAGES+=(
             libcudss0-cuda-12
             libcudss0-dev-cuda-12
@@ -903,6 +926,11 @@ setup_libtorch() {
         LIBTORCH_VARIANT="cpu"
         LIBTORCH_DIR="$PROJECT_ROOT/libtorch-cpu"
         LIBTORCH_URL="https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.1.0%2Bcpu.zip"
+    elif [[ "$CUDA_VERSION" == "13."* ]]; then
+        LIBTORCH_VARIANT="cuda130"
+        LIBTORCH_DIR="$PROJECT_ROOT/libtorch-cuda130"
+        LIBTORCH_URL="https://download.pytorch.org/libtorch/cu130/libtorch-shared-with-deps-2.10.0%2Bcu130.zip"
+        print_info "Using LibTorch cu130 for CUDA $CUDA_VERSION"
     elif [[ "$CUDA_VERSION" == "12.6"* ]] || [[ "$CUDA_VERSION" == "12."* ]]; then
         LIBTORCH_VARIANT="cuda126"
         LIBTORCH_DIR="$PROJECT_ROOT/libtorch-cuda126"
@@ -1024,11 +1052,13 @@ build_colmap_internal() {
 
         ceres_cmake_dir="$(colmap_ceres_cmake_dir "$PROJECT_ROOT" || true)"
         ceres_lib_dir="$(colmap_ceres_lib_dir "$PROJECT_ROOT" || true)"
-        cudss_cmake_dir="$(colmap_prepare_cudss_cmake_shim "$PROJECT_ROOT" || true)"
-        if [ -z "$cudss_cmake_dir" ]; then
-            cudss_cmake_dir="$(colmap_detect_cudss_cmake_dir || true)"
+        if colmap_cudss_enabled_for_cuda "$CUDA_HOME"; then
+            cudss_cmake_dir="$(colmap_prepare_cudss_cmake_shim "$PROJECT_ROOT" || true)"
+            if [ -z "$cudss_cmake_dir" ]; then
+                cudss_cmake_dir="$(colmap_detect_cudss_cmake_dir || true)"
+            fi
+            cudss_lib_dir="$(colmap_detect_cudss_lib_dir || true)"
         fi
-        cudss_lib_dir="$(colmap_detect_cudss_lib_dir || true)"
         colmap_cmake_prefix_path="$CERES_INSTALL_DIR"
         if [ -n "$cudss_cmake_dir" ]; then
             colmap_cmake_prefix_path="$colmap_cmake_prefix_path;$(cd "$cudss_cmake_dir/../.." && pwd)"
@@ -1065,6 +1095,7 @@ build_colmap_internal() {
             "-DCUDA_TOOLKIT_ROOT_DIR=$CUDA_HOME"
             "-DCeres_DIR=$ceres_cmake_dir"
             "-Dcudss_DIR=$cudss_cmake_dir"
+            "-DCMAKE_DISABLE_FIND_PACKAGE_cudss=$([ -n "$cudss_cmake_dir" ] && echo OFF || echo ON)"
             "-DCMAKE_BUILD_RPATH=$ceres_lib_dir;$CUDA_HOME/lib64${cudss_lib_dir:+;$cudss_lib_dir}"
             "-DCMAKE_INSTALL_RPATH=$ceres_lib_dir;$CUDA_HOME/lib64${cudss_lib_dir:+;$cudss_lib_dir}"
         )
@@ -1580,6 +1611,7 @@ build_opensplat() {
             -DCMAKE_PREFIX_PATH="$LIBTORCH_DIR" \
             -DCMAKE_CUDA_COMPILER="$CUDA_HOME/bin/nvcc" \
             -DCMAKE_CUDA_ARCHITECTURES="$GPU_ARCHS" \
+            -DOPENSPLAT_USE_FAST_MATH=ON \
             -DOPENSPLAT_BUILD_SIMPLE_TRAINER=ON
     else
         print_warning "Building CPU-only OpenSplat"
@@ -1875,6 +1907,7 @@ echo ""
 
 # Setup environment
 LIBTORCH_DIRS=(
+    "$PROJECT_ROOT/libtorch-cuda130"
     "$PROJECT_ROOT/libtorch-cuda126"
     "$PROJECT_ROOT/libtorch-cuda121"
     "$PROJECT_ROOT/libtorch-cuda118"
@@ -1889,8 +1922,11 @@ for dir in "${LIBTORCH_DIRS[@]}"; do
     fi
 done
 
-# Set CUDA paths if available
-if [ -d "/usr/local/cuda" ]; then
+# Set CUDA paths if available. CUDA 13 is preferred; /usr/local/cuda may remain on 12.6 as fallback.
+if [ -d "/usr/local/cuda-13.0" ]; then
+    export PATH="/usr/local/cuda-13.0/bin:$PATH"
+    export LD_LIBRARY_PATH="/usr/local/cuda-13.0/lib64:$LD_LIBRARY_PATH"
+elif [ -d "/usr/local/cuda" ]; then
     export PATH="/usr/local/cuda/bin:$PATH"
     export LD_LIBRARY_PATH="/usr/local/cuda/lib64:$LD_LIBRARY_PATH"
 fi
@@ -1996,6 +2032,8 @@ print_summary() {
     
     if [ -n "$CUDA_VERSION" ]; then
         echo "  • CUDA: Version $CUDA_VERSION"
+        echo "    Path: $CUDA_HOME"
+        echo "    Architectures: $GPU_ARCHS"
     fi
     
     echo "  • Frontend: $FRONTEND_DIR"
@@ -2157,11 +2195,11 @@ main() {
     check_system_requirements
     
     # Step 2: Install CUDA Toolkit if needed
-    if check_command nvidia-smi && ! check_command nvcc; then
-        print_info "NVIDIA GPU detected but CUDA Toolkit not installed"
+    if check_command nvidia-smi && [ ! -x "$DEFAULT_CUDA_HOME/bin/nvcc" ]; then
+        print_info "NVIDIA GPU detected but CUDA 13.0 Toolkit not installed at $DEFAULT_CUDA_HOME"
         install_cuda_toolkit
-    elif check_command nvcc; then
-        print_success "CUDA Toolkit already available"
+    elif [ -x "$DEFAULT_CUDA_HOME/bin/nvcc" ]; then
+        print_success "CUDA 13.0 Toolkit already available at $DEFAULT_CUDA_HOME"
     fi
     
     # Step 3: Detect CUDA environment (once for all builds)

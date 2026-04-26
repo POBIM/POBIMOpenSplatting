@@ -57,6 +57,8 @@ if sudo -n true 2>/dev/null; then
     sudo sh "$INSTALLER_NAME" --toolkit --silent --override --no-drm
 elif [ -n "${CUDA_SUDO_PASSWORD:-}" ]; then
     printf '%s\n' "$CUDA_SUDO_PASSWORD" | sudo -S sh "$INSTALLER_NAME" --toolkit --silent --override --no-drm
+elif [ -t 0 ]; then
+    sudo sh "$INSTALLER_NAME" --toolkit --silent --override --no-drm
 else
     echo "Error: sudo requires a password, but this session has no TTY."
     echo "Re-run with CUDA_SUDO_PASSWORD set, or run the installer manually in a terminal."

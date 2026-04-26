@@ -26,6 +26,7 @@ Start with the repo root [README.md](../README.md) for the project overview. Use
 | Install on a new machine | [INSTALLATION.md](INSTALLATION.md) |
 | Read the Thai installation guide | [INSTALLATION_TH.md](INSTALLATION_TH.md) |
 | Understand the installation scripts themselves | [INSTALLATION_SYSTEM.md](INSTALLATION_SYSTEM.md) |
+| Run CUDA 13.0 on WSL2 with CUDA 12.6 fallback | [CUDA13_WSL2_RUNBOOK_TH.md](CUDA13_WSL2_RUNBOOK_TH.md) |
 | Work only on the frontend | [../PobimSplatting/Frontend/README.md](../PobimSplatting/Frontend/README.md) |
 
 ## Current Product Framing
@@ -74,6 +75,7 @@ The real product is a pipeline platform made of:
 - [INSTALLATION.md](INSTALLATION.md): English installation guide
 - [INSTALLATION_TH.md](INSTALLATION_TH.md): Thai installation guide
 - [INSTALLATION_SYSTEM.md](INSTALLATION_SYSTEM.md): explanation of installer mechanics
+- [CUDA13_WSL2_RUNBOOK_TH.md](CUDA13_WSL2_RUNBOOK_TH.md): CUDA 13.0 side-by-side setup, build flow, smoke tests, and fallback notes
 
 ### Specialized guides
 
@@ -110,6 +112,8 @@ These are the main focused helpers under `scripts/`:
 - `monitor.sh`
 - `simple_gpu_test.sh`
 - `compile-opensplat-cuda126.sh`
+- `compile-opensplat-cuda130.sh`
+- `setup-cuda130-wsl.sh`
 - `report_ordered_video_evidence.py`
 
 ## Health And Debug Entry Points

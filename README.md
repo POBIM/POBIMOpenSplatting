@@ -115,6 +115,8 @@ The `scripts/` directory is for targeted maintenance and advanced flows:
 - `scripts/package_prebuilt_runtime.sh`: stage a reusable runtime bundle
 - `scripts/simple_gpu_test.sh`: quick GPU sanity check
 - `scripts/monitor.sh`: runtime monitoring helper
+- `scripts/setup-cuda130-wsl.sh`: install CUDA 13.0 toolkit-only side-by-side on WSL2
+- `scripts/compile-opensplat-cuda130.sh`: rebuild OpenSplat against CUDA 13.0 and LibTorch cu130
 - `scripts/compile-opensplat-cuda126.sh`: focused native training-binary rebuild
 
 ## Documentation

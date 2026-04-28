@@ -30,6 +30,7 @@ from .config_builders import (
     get_colmap_config_for_pipeline,
     get_colmap_executable,
     get_opensplat_config,
+    get_opensplat_runtime_recommendation,
     should_prefer_incremental_sfm,
 )
 from .auto_tuning import (
@@ -267,6 +268,7 @@ def _sparse_stage_helpers():
 def _training_stage_helpers():
     return {
         'get_opensplat_config': get_opensplat_config,
+        'get_opensplat_runtime_recommendation': get_opensplat_runtime_recommendation,
     }
 
 

@@ -1385,22 +1385,20 @@ def upload_files():
         "resource_override_source": "automatic",
     }
 
+    for field_name, caster in (
+        ("iterations", int),
+        ("densify_grad_threshold", float),
+        ("refine_every", int),
+        ("warmup_length", int),
+        ("ssim_weight", float),
+    ):
+        raw_value = request.form.get(field_name)
+        if raw_value not in {None, ""}:
+            config[field_name] = caster(raw_value)
+
     # Add custom parameters if in custom mode
     if quality_mode == "custom":
         # OpenSplat Training Parameters
-        if request.form.get("iterations"):
-            config["iterations"] = int(request.form.get("iterations"))
-        if request.form.get("densify_grad_threshold"):
-            config["densify_grad_threshold"] = float(
-                request.form.get("densify_grad_threshold")
-            )
-        if request.form.get("refine_every"):
-            config["refine_every"] = int(request.form.get("refine_every"))
-        if request.form.get("warmup_length"):
-            config["warmup_length"] = int(request.form.get("warmup_length"))
-        if request.form.get("ssim_weight"):
-            config["ssim_weight"] = float(request.form.get("ssim_weight"))
-
         # OpenSplat Learning Rates
         if request.form.get("learning_rate"):
             config["learning_rate"] = float(request.form.get("learning_rate"))
@@ -1463,11 +1461,6 @@ def upload_files():
             )
         if request.form.get("max_reg_trials"):
             config["max_reg_trials"] = int(request.form.get("max_reg_trials"))
-    else:
-        # For non-custom modes, use default iterations from quality mode
-        if request.form.get("iterations"):
-            config["iterations"] = int(request.form.get("iterations"))
-
     now_iso = datetime.now().isoformat()
     metadata = {
         "name": request.form.get("project_name") or f"PobimSplats {project_id[:8]}",

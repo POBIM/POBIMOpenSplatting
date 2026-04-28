@@ -461,15 +461,24 @@ start_backend() {
         "$REPO_ROOT/libtorch-cuda118/lib"
         "$REPO_ROOT/libtorch-cpu/lib"
     )
+    local backend_native_prefix=""
     for _native_dir in "${native_runtime_dirs[@]}"; do
-        if [ -d "$_native_dir" ] && [[ ":$backend_ld_library_path:" != *":$_native_dir:"* ]]; then
-            if [ -n "$backend_ld_library_path" ]; then
-                backend_ld_library_path="$_native_dir:$backend_ld_library_path"
+        if [ -d "$_native_dir" ] && [[ ":$backend_native_prefix:" != *":$_native_dir:"* ]]; then
+            if [ -n "$backend_native_prefix" ]; then
+                backend_native_prefix="$backend_native_prefix:$_native_dir"
             else
-                backend_ld_library_path="$_native_dir"
+                backend_native_prefix="$_native_dir"
             fi
         fi
+        backend_ld_library_path="$(printf '%s' "$backend_ld_library_path" | awk -v p="$_native_dir" 'BEGIN { RS=":"; ORS="" } $0 != "" && $0 != p { if (out) out=out ":" $0; else out=$0 } END { printf "%s", out }')"
     done
+    if [ -n "$backend_native_prefix" ]; then
+        if [ -n "$backend_ld_library_path" ]; then
+            backend_ld_library_path="$backend_native_prefix:$backend_ld_library_path"
+        else
+            backend_ld_library_path="$backend_native_prefix"
+        fi
+    fi
 
     if [ -d "/usr/local/cuda-13.0/bin" ]; then
         backend_path="/usr/local/cuda-13.0/bin:$backend_path"

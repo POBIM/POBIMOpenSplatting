@@ -167,6 +167,7 @@ export default function UploadPage() {
       const uploadConfig = {
         ...config,
         matcher_type: config.matcher_type === 'auto' ? undefined : config.matcher_type,
+        ...resolvedUploadTrainingParams,
         ...(config.quality_mode === 'custom' && {
           // OpenSplat Training
           iterations: customParams.iterations,
@@ -591,6 +592,7 @@ export default function UploadPage() {
       detail: reason,
     }));
   const resolvedEstimatedNumImages = policyPreview?.estimated_num_images;
+  const resolvedTrainingRecommendation = policyPreview?.training_recommendation;
   const policyToneKey = policyPreview?.expected_policy?.toneKey ?? resolvedInputProfile;
   const adaptiveComparisons = policyPreview?.adaptive_comparisons ?? [];
   const autoTuningSummary = policyPreview?.auto_tuning_summary;
@@ -671,6 +673,24 @@ export default function UploadPage() {
     };
     return info[mode as keyof typeof info] || info.balanced;
   };
+
+  const resolvedUploadTrainingParams = config.quality_mode === 'custom'
+    ? {
+        iterations: customParams.iterations,
+        densify_grad_threshold: customParams.densify_grad_threshold,
+        refine_every: customParams.refine_every,
+        warmup_length: customParams.warmup_length,
+        ssim_weight: customParams.ssim_weight,
+      }
+    : resolvedTrainingRecommendation
+      ? {
+          iterations: resolvedTrainingRecommendation.iterations,
+          densify_grad_threshold: resolvedTrainingRecommendation.densify_grad_threshold ?? undefined,
+          refine_every: resolvedTrainingRecommendation.refine_every ?? undefined,
+          warmup_length: resolvedTrainingRecommendation.warmup_length ?? undefined,
+          ssim_weight: resolvedTrainingRecommendation.ssim_weight ?? undefined,
+        }
+      : {};
 
   return (
     <div className="brutal-shell">
@@ -803,10 +823,21 @@ export default function UploadPage() {
                     <span
                       className="mt-1.5 inline-flex cursor-help border border-[color:var(--ink)] px-2 py-1 text-[11px] font-bold uppercase tracking-wide"
                       style={{ background: 'var(--warning-bg)', color: 'var(--warning-text)' }}
-                      title="Hard mode: coverage-first COLMAP pass with 5000 training iterations. Retry later with Professional or more iterations if needed."
+                      title={resolvedTrainingRecommendation?.summary
+                        ? `Hard mode with adaptive upload-time training budget. ${resolvedTrainingRecommendation.summary}.`
+                        : 'Hard mode: coverage-first COLMAP pass with adaptive upload-time training budget.'}
                     >
                       coverage-first
                     </span>
+                  )}
+                  {config.quality_mode !== 'custom' && files.length > 0 && (
+                    <p className="mt-1.5 text-xs font-medium text-[color:var(--text-secondary)]">
+                      {resolvedTrainingRecommendation?.summary
+                        ? `Adaptive training: ${resolvedTrainingRecommendation.summary}`
+                        : policyPreviewLoading
+                          ? 'Adaptive training budget is being resolved from the upload preview.'
+                          : `Adaptive training will start from the ${getQualityInfo(config.quality_mode).desc.toLowerCase()} baseline.`}
+                    </p>
                   )}
                 </div>
                 <div>

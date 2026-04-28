@@ -16,7 +16,7 @@ from .projects import append_log_line, register_process, unregister_process
 def _prepend_env_paths(env: dict[str, str], key: str, paths: Iterable[Path]) -> None:
     existing = [part for part in env.get(key, "").split(":") if part]
     prefix: list[str] = []
-    seen: set[str] = set(existing)
+    managed: set[str] = set()
 
     for path in paths:
         try:
@@ -25,9 +25,18 @@ def _prepend_env_paths(env: dict[str, str], key: str, paths: Iterable[Path]) -> 
             resolved = str(path.resolve())
         except OSError:
             continue
-        if resolved not in seen:
+        if resolved not in managed:
             prefix.append(resolved)
-            seen.add(resolved)
+            managed.add(resolved)
+
+    # Normalize repo-managed runtime paths even when the parent shell already
+    # provided them. A stale LibTorch earlier in LD_LIBRARY_PATH can override
+    # the binary's RUNPATH and fail at symbol lookup time.
+    existing = [
+        part
+        for part in existing
+        if str(Path(part).resolve()) not in managed
+    ]
 
     if prefix or existing:
         env[key] = ":".join(prefix + existing)

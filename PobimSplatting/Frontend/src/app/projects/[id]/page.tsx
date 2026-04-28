@@ -1268,6 +1268,23 @@ export default function ProjectDetailPage() {
     ? (getStageLabelForEngine(currentStage.key, project?.config?.sfm_engine, project?.config?.feature_method)
       || PIPELINE_STAGES.find(s => s.key === currentStage.key)?.label)
     : 'Initializing';
+  const trainingBudgetSummary = framework?.training_budget_summary;
+  const resolvedTrainingIterations = typeof project?.config?.iterations === 'number'
+    ? project.config.iterations
+    : undefined;
+  const resolvedTrainingImageBudget = trainingBudgetSummary?.effective_image_budget
+    ?? resourceCoordination?.capture_budget_summary?.num_images
+    ?? videoDiagnostics?.saved_frames
+    ?? (project.input_type === 'images' ? fileCount : undefined);
+  const resolvedTrainingVisits = resolvedTrainingIterations && resolvedTrainingImageBudget
+    ? Math.round((resolvedTrainingIterations / Math.max(resolvedTrainingImageBudget, 1)) * 10) / 10
+    : null;
+  const hasResolvedTrainingPlan = Boolean(
+    resolvedTrainingIterations
+    || resolvedTrainingImageBudget
+    || trainingBudgetSummary?.training_resolution
+    || trainingBudgetSummary?.colmap_resolution
+  );
   const projectInfoTiles = [
     { label: 'Input', value: project.input_type || 'unknown' },
     { label: 'Files', value: fileCount.toLocaleString() },
@@ -1324,108 +1341,177 @@ export default function ProjectDetailPage() {
           <section className="brutal-section-tight">
             <div className="brutal-container space-y-3">
               {(project.status === 'processing' || canRetryProject || project.status === 'completed') && (
-                <div className="grid gap-3 xl:grid-cols-[1.35fr_0.65fr]">
-                  <div className={project.status === 'processing' ? 'brutal-card-dark p-3 md:p-4' : 'brutal-card p-3 md:p-4'}>
-                    <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-                      <div>
-                        <p className={`mb-2 text-[11px] font-bold uppercase tracking-[0.18em] ${project.status === 'processing' ? 'text-[var(--text-on-ink-muted)]' : 'text-[var(--text-secondary)]'}`}>
-                          Status + Progress
-                        </p>
-                        <div className="flex flex-wrap items-end gap-3">
-                          <span className={`text-3xl font-black uppercase leading-none tracking-tight ${project.status === 'processing' ? 'text-[var(--text-on-ink)]' : 'text-[var(--ink)]'}`}>
-                            {overallProgress}%
-                          </span>
-                          <span className={getStatusBadgeClass(project.status)}>{project.status}</span>
+                <div className="space-y-3">
+                  <div className="grid gap-3 xl:grid-cols-[1.35fr_0.65fr]">
+                    <div className={project.status === 'processing' ? 'brutal-card-dark p-3 md:p-4' : 'brutal-card p-3 md:p-4'}>
+                      <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                        <div>
+                          <p className={`mb-2 text-[11px] font-bold uppercase tracking-[0.18em] ${project.status === 'processing' ? 'text-[var(--text-on-ink-muted)]' : 'text-[var(--text-secondary)]'}`}>
+                            Status + Progress
+                          </p>
+                          <div className="flex flex-wrap items-end gap-3">
+                            <span className={`text-3xl font-black uppercase leading-none tracking-tight ${project.status === 'processing' ? 'text-[var(--text-on-ink)]' : 'text-[var(--ink)]'}`}>
+                              {overallProgress}%
+                            </span>
+                            <span className={getStatusBadgeClass(project.status)}>{project.status}</span>
+                          </div>
+                        </div>
+
+                        {project.status === 'processing' && (
+                          <button type="button" onClick={handleCancelProcessing} className="brutal-btn brutal-btn-danger brutal-btn-xs"><XCircle className="h-4 w-4" />
+                          ยกเลิก
+                                                  </button>
+                        )}
+                      </div>
+
+                      <div className={`mb-3 border-[var(--border-w)] ${project.status === 'processing' ? 'border-[var(--paper)] bg-[var(--paper)]' : 'border-[var(--ink)] bg-[var(--paper-muted)]'} p-1`}>
+                        <div
+                          className={`h-3 transition-all duration-500 ${project.status === 'processing' ? 'bg-[var(--ink-600)]' : 'bg-[var(--ink)]'}`}
+                          style={{ width: `${overallProgress}%` }}
+                        />
+                      </div>
+
+                      <div className={`grid gap-2 text-xs font-medium md:grid-cols-4 ${project.status === 'processing' ? 'text-[var(--text-on-ink-muted)]' : 'text-[var(--text-secondary)]'}`}>
+                        <div>
+                          <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em]">Active Stage</p>
+                          <p className={project.status === 'processing' ? 'text-[var(--text-on-ink)]' : 'text-[var(--ink)]'}>{activeStageLabel}</p>
+                        </div>
+                        <div>
+                          <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em]">Elapsed</p>
+                          <p className={project.status === 'processing' ? 'text-[var(--text-on-ink)]' : 'text-[var(--ink)]'}>{timeStats.elapsedTime}</p>
+                        </div>
+                        <div>
+                          <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em]">Remaining</p>
+                          <p className={project.status === 'processing' ? 'text-[var(--text-on-ink)]' : 'text-[var(--ink)]'}>{timeStats.remainingTime}</p>
+                        </div>
+                        <div>
+                          <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em]">ETA</p>
+                          <p className={project.status === 'processing' ? 'text-[var(--text-on-ink)]' : 'text-[var(--ink)]'}>{timeStats.eta}</p>
                         </div>
                       </div>
 
-                      {project.status === 'processing' && (
-                        <button type="button" onClick={handleCancelProcessing} className="brutal-btn brutal-btn-danger brutal-btn-xs"><XCircle className="h-4 w-4" />
-                        ยกเลิก
-                                                </button>
+                      {currentStage?.key === 'sparse_reconstruction' &&
+                        (isGlobalSfmEngine(project?.config?.sfm_engine) || project?.config?.sfm_engine === 'fastmap') &&
+                        stageDetails['sparse_reconstruction']?.text && (
+                        <div className={`mt-3 border-t pt-3 text-xs ${project.status === 'processing' ? 'border-[var(--ink-700)] text-[var(--text-on-ink-muted)]' : 'border-[var(--paper-muted-2)] text-[var(--text-secondary)]'}`}>
+                          {stageDetails['sparse_reconstruction'].text}
+                        </div>
                       )}
                     </div>
 
-                    <div className={`mb-3 border-[var(--border-w)] ${project.status === 'processing' ? 'border-[var(--paper)] bg-[var(--paper)]' : 'border-[var(--ink)] bg-[var(--paper-muted)]'} p-1`}>
-                      <div
-                        className={`h-3 transition-all duration-500 ${project.status === 'processing' ? 'bg-[var(--ink-600)]' : 'bg-[var(--ink)]'}`}
-                        style={{ width: `${overallProgress}%` }}
-                      />
-                    </div>
-
-                    <div className={`grid gap-2 text-xs font-medium md:grid-cols-4 ${project.status === 'processing' ? 'text-[var(--text-on-ink-muted)]' : 'text-[var(--text-secondary)]'}`}>
-                      <div>
-                        <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em]">Active Stage</p>
-                        <p className={project.status === 'processing' ? 'text-[var(--text-on-ink)]' : 'text-[var(--ink)]'}>{activeStageLabel}</p>
+                    <div className="brutal-card p-3 md:p-4">
+                      <div className="mb-3 flex items-center justify-between gap-2">
+                        <div>
+                          <p className="brutal-label mb-1">Action Dock</p>
+                          <h2 className="brutal-h3">Project Controls</h2>
+                        </div>
+                        {project.status === 'processing' && <span className="brutal-badge brutal-badge-info">Live</span>}
                       </div>
-                      <div>
-                        <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em]">Elapsed</p>
-                        <p className={project.status === 'processing' ? 'text-[var(--text-on-ink)]' : 'text-[var(--ink)]'}>{timeStats.elapsedTime}</p>
-                      </div>
-                      <div>
-                        <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em]">Remaining</p>
-                        <p className={project.status === 'processing' ? 'text-[var(--text-on-ink)]' : 'text-[var(--ink)]'}>{timeStats.remainingTime}</p>
-                      </div>
-                      <div>
-                        <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em]">ETA</p>
-                        <p className={project.status === 'processing' ? 'text-[var(--text-on-ink)]' : 'text-[var(--ink)]'}>{timeStats.eta}</p>
-                      </div>
-                    </div>
-
-                    {currentStage?.key === 'sparse_reconstruction' &&
-                      (isGlobalSfmEngine(project?.config?.sfm_engine) || project?.config?.sfm_engine === 'fastmap') &&
-                      stageDetails['sparse_reconstruction']?.text && (
-                      <div className={`mt-3 border-t pt-3 text-xs ${project.status === 'processing' ? 'border-[var(--ink-700)] text-[var(--text-on-ink-muted)]' : 'border-[var(--paper-muted-2)] text-[var(--text-secondary)]'}`}>
-                        {stageDetails['sparse_reconstruction'].text}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="brutal-card p-3 md:p-4">
-                    <div className="mb-3 flex items-center justify-between gap-2">
-                      <div>
-                        <p className="brutal-label mb-1">Action Dock</p>
-                        <h2 className="brutal-h3">Project Controls</h2>
-                      </div>
-                      {project.status === 'processing' && <span className="brutal-badge brutal-badge-info">Live</span>}
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {project.status === 'completed' && (
-                        <>
-                          <button type="button" onClick={() => router.push(`/viewer?project=${projectId}`)} className="brutal-btn brutal-btn-primary"><Eye className="h-4 w-4" />
-                          View 3D
-                                                    </button>
-                          <button type="button" onClick={() => router.push(`/camera-poses/${projectId}`)}
-                          className="brutal-btn"><Eye className="h-4 w-4" />
-                          {getSfmEngineCompactLabel(project?.config?.sfm_engine)}</button>
-                          <button type="button" onClick={handleDownload} className="brutal-btn"><Download className="h-4 w-4" />
-                          Download
-                                                    </button>
-                          <button type="button" onClick={openRetryModal} className="brutal-btn brutal-btn-xs"><RefreshCw className="h-4 w-4" />
+                      <div className="flex flex-wrap gap-2">
+                        {project.status === 'completed' && (
+                          <>
+                            <button type="button" onClick={() => router.push(`/viewer?project=${projectId}`)} className="brutal-btn brutal-btn-primary"><Eye className="h-4 w-4" />
+                            View 3D
+                                                      </button>
+                            <button type="button" onClick={() => router.push(`/camera-poses/${projectId}`)}
+                            className="brutal-btn"><Eye className="h-4 w-4" />
+                            {getSfmEngineCompactLabel(project?.config?.sfm_engine)}</button>
+                            <button type="button" onClick={handleDownload} className="brutal-btn"><Download className="h-4 w-4" />
+                            Download
+                                                      </button>
+                            <button type="button" onClick={openRetryModal} className="brutal-btn brutal-btn-xs"><RefreshCw className="h-4 w-4" />
+                            Retry
+                                                      </button>
+                          </>
+                        )}
+                        {canRetryProject && (
+                          <button type="button" onClick={openRetryModal} className="brutal-btn brutal-btn-primary"><RefreshCw className="h-4 w-4" />
                           Retry
-                                                    </button>
-                        </>
-                      )}
-                      {canRetryProject && (
-                        <button type="button" onClick={openRetryModal} className="brutal-btn brutal-btn-primary"><RefreshCw className="h-4 w-4" />
-                        Retry
-                                                </button>
-                      )}
+                                                  </button>
+                        )}
+                        {canInspectSparseModel && (
+                          <button type="button" onClick={() => router.push(`/camera-poses/${projectId}`)} className="brutal-btn brutal-btn-xs"><Eye className="h-4 w-4" />
+                          Inspect Sparse
+                                                  </button>
+                        )}
+                        <button type="button" onClick={handleDelete} className="brutal-btn brutal-btn-danger brutal-btn-xs"><Trash2 className="h-4 w-4" />
+                        Delete
+                                              </button>
+                      </div>
                       {canInspectSparseModel && (
-                        <button type="button" onClick={() => router.push(`/camera-poses/${projectId}`)} className="brutal-btn brutal-btn-xs"><Eye className="h-4 w-4" />
-                        Inspect Sparse
-                                                </button>
+                        <p className="mt-3 text-xs text-[var(--text-secondary)]">
+                          Open Camera Poses to inspect {getSfmEngineCompactLabel(project?.config?.sfm_engine)} sparse reconstruction.
+                        </p>
                       )}
-                      <button type="button" onClick={handleDelete} className="brutal-btn brutal-btn-danger brutal-btn-xs"><Trash2 className="h-4 w-4" />
-                      Delete
-                                            </button>
                     </div>
-                    {canInspectSparseModel && (
-                      <p className="mt-3 text-xs text-[var(--text-secondary)]">
-                        Open Camera Poses to inspect {getSfmEngineCompactLabel(project?.config?.sfm_engine)} sparse reconstruction.
-                      </p>
-                    )}
                   </div>
+
+                  {hasResolvedTrainingPlan && (
+                    <div className="brutal-card-muted p-3 md:p-4">
+                      <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                        <div>
+                          <p className="brutal-label mb-1">Resolved Training Plan</p>
+                          <h2 className="brutal-h3">Upload-Time Budget</h2>
+                          <p className="mt-1 text-xs text-[var(--text-secondary)]">
+                            This project started with the adaptive training budget resolved at upload time and persisted into the run config.
+                          </p>
+                        </div>
+                        {resolvedTrainingVisits !== null && (
+                          <span className="brutal-badge brutal-badge-info">
+                            {resolvedTrainingVisits.toLocaleString(undefined, { maximumFractionDigits: 1 })} visits/image
+                          </span>
+                        )}
+                      </div>
+                      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
+                        <div className="brutal-card p-4">
+                          <p className="brutal-label mb-2">Iterations</p>
+                          <p className="text-lg font-black uppercase tracking-tight text-[var(--ink)]">
+                            {resolvedTrainingIterations ? resolvedTrainingIterations.toLocaleString() : '--'}
+                          </p>
+                        </div>
+                        <div className="brutal-card-muted p-4">
+                          <p className="brutal-label mb-2">Image Budget</p>
+                          <p className="text-lg font-black uppercase tracking-tight text-[var(--ink)]">
+                            {resolvedTrainingImageBudget ? resolvedTrainingImageBudget.toLocaleString() : '--'}
+                          </p>
+                        </div>
+                        <div className="brutal-card p-4">
+                          <p className="brutal-label mb-2">Refine Every</p>
+                          <p className="text-lg font-black uppercase tracking-tight text-[var(--ink)]">
+                            {project?.config?.refine_every ? `${project.config.refine_every}` : '--'}
+                          </p>
+                        </div>
+                        <div className="brutal-card-muted p-4">
+                          <p className="brutal-label mb-2">Warmup</p>
+                          <p className="text-lg font-black uppercase tracking-tight text-[var(--ink)]">
+                            {project?.config?.warmup_length ? `${project.config.warmup_length}` : '--'}
+                          </p>
+                        </div>
+                        <div className="brutal-card p-4">
+                          <p className="brutal-label mb-2">SSIM Weight</p>
+                          <p className="text-lg font-black uppercase tracking-tight text-[var(--ink)]">
+                            {typeof project?.config?.ssim_weight === 'number' ? formatMetric(project.config.ssim_weight, 2) : '--'}
+                          </p>
+                        </div>
+                        <div className="brutal-card-muted p-4">
+                          <p className="brutal-label mb-2">Densify Grad</p>
+                          <p className="text-lg font-black uppercase tracking-tight text-[var(--ink)]">
+                            {typeof project?.config?.densify_grad_threshold === 'number' ? formatMetric(project.config.densify_grad_threshold, 5) : '--'}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="mt-3 border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-card)] p-4 text-sm text-[var(--text-secondary)]">
+                        Quality {project?.config?.quality_mode || project?.quality_mode || '--'}
+                        {' • '}
+                        {trainingBudgetSummary?.colmap_resolution ?? project?.config?.colmap_resolution ?? '--'} COLMAP
+                        {' -> '}
+                        {trainingBudgetSummary?.training_resolution ?? project?.config?.training_resolution ?? '--'} training
+                        {' • '}
+                        live preview every {project?.config?.training_live_preview_interval_percent ?? '--'}%
+                        {trainingBudgetSummary?.uses_repaired_capture ? ` • repaired capture (${trainingBudgetSummary.repair_step_count ?? 0} step)` : ' • clean capture'}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 

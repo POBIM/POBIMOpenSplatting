@@ -98,6 +98,19 @@ def _choose_live_sparse_snapshot_frequency(num_images: int) -> int:
     return 1
 
 
+def _prune_live_sparse_snapshots(snapshot_root: Path, keep: int = 1) -> None:
+    if keep < 1 or not snapshot_root.exists():
+        return
+
+    candidates = sorted(
+        [child for child in snapshot_root.iterdir() if child.is_dir()],
+        key=lambda child: (child.stat().st_mtime_ns, child.name),
+        reverse=True,
+    )
+    for stale_snapshot in candidates[keep:]:
+        shutil.rmtree(stale_snapshot, ignore_errors=True)
+
+
 def _log_colmap_ba_plan(project_id, ba_plan):
     if not ba_plan:
         return
@@ -446,22 +459,25 @@ def run_sparse_reconstruction_stage(
         snapshot_path = paths.get("sparse_snapshots_path")
         if snapshot_path:
             snapshot_frequency = _choose_live_sparse_snapshot_frequency(num_images)
-            snapshot_path = Path(snapshot_path)
-            shutil.rmtree(snapshot_path, ignore_errors=True)
-            snapshot_path.mkdir(parents=True, exist_ok=True)
-            cmd.extend(
-                [
-                    "--Mapper.snapshot_path",
-                    str(snapshot_path),
-                    "--Mapper.snapshot_frames_freq",
-                    str(snapshot_frequency),
-                ]
-            )
-            append_log_line(
-                project_id,
-                "📸 Live sparse snapshots enabled per registered image "
-                f"({snapshot_frequency} registered image per update)",
-            )
+            if snapshot_frequency > 0:
+                snapshot_path = Path(snapshot_path)
+                shutil.rmtree(snapshot_path, ignore_errors=True)
+                snapshot_path.mkdir(parents=True, exist_ok=True)
+                cmd.extend(
+                    [
+                        "--Mapper.snapshot_path",
+                        str(snapshot_path),
+                        "--Mapper.snapshot_frames_freq",
+                        str(snapshot_frequency),
+                    ]
+                )
+                append_log_line(
+                    project_id,
+                    "📸 Live sparse snapshots enabled per registered image "
+                    f"({snapshot_frequency} registered image per update, retaining latest only)",
+                )
+            else:
+                append_log_line(project_id, "ℹ️ Live sparse snapshots disabled")
         for param, value in colmap_cfg.get("mapper_params", {}).items():
             cmd.extend([f"--{param}", str(value)])
         mapper_params = colmap_cfg.get("mapper_params", {})
@@ -859,6 +875,8 @@ def run_sparse_reconstruction_stage(
         if not use_global_sfm and "creating snapshot" in line_lower:
             registered = max(int(sparse_tracker.get("registered", 0)), 0)
             snapshot_percent = int((registered / max(num_images, 1)) * 100)
+            if snapshot_path and isinstance(snapshot_path, Path):
+                _prune_live_sparse_snapshots(snapshot_path, keep=1)
             append_log_line(
                 project_id,
                 f"[COLMAP] Live sparse snapshot exported "

@@ -201,12 +201,13 @@ def run_opensplat_training(
         )
 
         quality_mode = config.get("quality_mode", "balanced")
-        custom_params = config if quality_mode == "custom" else None
-        opensplat_config = helpers["get_opensplat_config"](
-            quality_mode, num_images, custom_params
+        training_recommendation = helpers["get_opensplat_runtime_recommendation"](
+            quality_mode,
+            num_images,
+            config,
         )
 
-        enhanced_iterations = opensplat_config["iterations"]
+        enhanced_iterations = training_recommendation["iterations"]
         live_render_percent_step = _training_live_render_percent_step(config)
         if quality_mode == "custom":
             append_log_line(
@@ -243,6 +244,11 @@ def run_opensplat_training(
             f"lane={training_budget_summary.get('resource_lane', '--')} | "
             f"repair_steps={training_budget_summary.get('repair_step_count', 0)} | "
             f"separate_training={'yes' if training_budget_summary.get('use_separate_training_images') else 'no'}",
+        )
+        append_log_line(
+            project_id,
+            "🧮 Upload-resolved training plan: "
+            f"{training_recommendation.get('summary')}",
         )
 
         opensplat_binary = app_config.OPENSPLAT_BINARY_PATH
@@ -381,50 +387,23 @@ def run_opensplat_training(
                 project_id, "⚠️ Training images path not configured, using COLMAP images"
             )
 
-        if quality_mode in ["high", "ultra", "hard", "custom", "balanced"]:
-            densify_threshold = opensplat_config.get("densify_grad_threshold")
-            refine_every = 75
-            warmup = 750
-            ssim = 0.25
-
-            if quality_mode == "custom":
-                custom_densify = config.get("densify_grad_threshold")
-                custom_refine = config.get("refine_every")
-                custom_warmup = config.get("warmup_length")
-                custom_ssim = config.get("ssim_weight")
-                if custom_densify is not None:
-                    densify_threshold = custom_densify
-                if custom_refine is not None:
-                    refine_every = custom_refine
-                if custom_warmup is not None:
-                    warmup = custom_warmup
-                if custom_ssim is not None:
-                    ssim = custom_ssim
-                append_log_line(
-                    project_id,
-                    f"🔧 Custom OpenSplat params: densify={densify_threshold}, refine={refine_every}, warmup={warmup}, ssim={ssim}",
-                )
-            elif quality_mode == "ultra":
-                refine_every = 50
-                warmup = 1000
-                ssim = 0.3
-            elif quality_mode == "hard":
-                refine_every = 60
-                warmup = 900
-                ssim = 0.28
+        if training_recommendation.get("refine_every") is not None:
+            densify_threshold = training_recommendation.get("densify_grad_threshold")
+            refine_every = training_recommendation.get("refine_every")
+            warmup = training_recommendation.get("warmup_length")
+            ssim = training_recommendation.get("ssim_weight")
+            reset_alpha_every = training_recommendation.get("reset_alpha_every")
 
             if densify_threshold is not None:
                 cmd.extend(["--densify-grad-thresh", str(densify_threshold)])
             cmd.extend(["--refine-every", str(refine_every)])
             cmd.extend(["--warmup-length", str(warmup)])
             cmd.extend(["--ssim-weight", str(ssim)])
-            if quality_mode == "ultra":
-                cmd.extend(["--reset-alpha-every", "20"])
-            elif quality_mode == "hard":
-                cmd.extend(["--reset-alpha-every", "24"])
+            if reset_alpha_every is not None:
+                cmd.extend(["--reset-alpha-every", str(reset_alpha_every)])
             append_log_line(
                 project_id,
-                f"⚡ Enhanced parameters: densify_threshold={densify_threshold}, refine_every={refine_every}",
+                f"⚡ Enhanced parameters: densify_threshold={densify_threshold}, refine_every={refine_every}, warmup={warmup}, ssim={ssim}",
             )
 
         if config.get("mixed_precision", False):

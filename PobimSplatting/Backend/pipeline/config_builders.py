@@ -139,6 +139,11 @@ def build_upload_policy_preview(config, media_summary):
     )
     estimated_num_images = estimate_preview_image_count(preview_config, media_summary)
     preview_config["estimated_num_images"] = estimated_num_images
+    training_recommendation = get_opensplat_runtime_recommendation(
+        preview_config.get("quality_mode", "balanced"),
+        max(estimated_num_images, 1),
+        preview_config,
+    )
 
     image_names = media_summary.get("image_names") or []
     capture_pattern = analyze_capture_pattern_from_names(image_names, preview_config)
@@ -596,6 +601,7 @@ def build_upload_policy_preview(config, media_summary):
         "heuristic_source": "backend",
         "input_profile": input_profile,
         "estimated_num_images": estimated_num_images,
+        "training_recommendation": training_recommendation,
         "capture_pattern": capture_pattern,
         "expected_policy": expected_policy,
         "confidence": confidence,
@@ -1408,6 +1414,9 @@ def get_opensplat_config(quality_mode="balanced", num_images=100, custom_params=
     quality_scales = {
         "fast": {
             "iterations": 500,
+            "target_visits_per_image": 5,
+            "min_iterations": 300,
+            "max_iterations": 4000,
             "densify_from": 100,
             "densify_until": 300,
             "densify_grad_threshold": 0.0002,
@@ -1416,6 +1425,9 @@ def get_opensplat_config(quality_mode="balanced", num_images=100, custom_params=
         },
         "balanced": {
             "iterations": 7000,
+            "target_visits_per_image": 70,
+            "min_iterations": 3500,
+            "max_iterations": 42000,
             "densify_from": 1000,
             "densify_until": 3500,
             "densify_grad_threshold": 0.00015,
@@ -1424,6 +1436,9 @@ def get_opensplat_config(quality_mode="balanced", num_images=100, custom_params=
         },
         "hard": {
             "iterations": 5000,
+            "target_visits_per_image": 50,
+            "min_iterations": 2500,
+            "max_iterations": 30000,
             "densify_from": 900,
             "densify_until": 3200,
             "densify_grad_threshold": 0.00012,
@@ -1432,6 +1447,9 @@ def get_opensplat_config(quality_mode="balanced", num_images=100, custom_params=
         },
         "high": {
             "iterations": 7000,
+            "target_visits_per_image": 70,
+            "min_iterations": 3500,
+            "max_iterations": 42000,
             "densify_from": 1000,
             "densify_until": 3500,
             "densify_grad_threshold": 0.00015,
@@ -1440,6 +1458,9 @@ def get_opensplat_config(quality_mode="balanced", num_images=100, custom_params=
         },
         "ultra": {
             "iterations": 15000,
+            "target_visits_per_image": 150,
+            "min_iterations": 7500,
+            "max_iterations": 90000,
             "densify_from": 2000,
             "densify_until": 7500,
             "densify_grad_threshold": 0.0001,
@@ -1448,6 +1469,9 @@ def get_opensplat_config(quality_mode="balanced", num_images=100, custom_params=
         },
         "professional": {
             "iterations": 30000,
+            "target_visits_per_image": 300,
+            "min_iterations": 15000,
+            "max_iterations": 180000,
             "densify_from": 3000,
             "densify_until": 15000,
             "densify_grad_threshold": 0.00008,
@@ -1456,6 +1480,9 @@ def get_opensplat_config(quality_mode="balanced", num_images=100, custom_params=
         },
         "ultra_professional": {
             "iterations": 60000,
+            "target_visits_per_image": 600,
+            "min_iterations": 30000,
+            "max_iterations": 360000,
             "densify_from": 4000,
             "densify_until": 30000,
             "densify_grad_threshold": 0.00005,
@@ -1464,6 +1491,9 @@ def get_opensplat_config(quality_mode="balanced", num_images=100, custom_params=
         },
         "custom": {
             "iterations": 7000,
+            "target_visits_per_image": 70,
+            "min_iterations": 1000,
+            "max_iterations": 200000,
             "densify_from": 1000,
             "densify_until": 3500,
             "densify_grad_threshold": 0.00015,
@@ -1474,11 +1504,22 @@ def get_opensplat_config(quality_mode="balanced", num_images=100, custom_params=
 
     base_config = dict(quality_scales.get(quality_mode, quality_scales["balanced"]))
 
-    if num_images > 500:
-        base_config["iterations"] = int(base_config["iterations"] * 1.2)
-        base_config["densify_until"] = int(base_config["densify_until"] * 1.2)
-    elif num_images < 50:
-        base_config["iterations"] = max(1000, int(base_config["iterations"] * 0.8))
+    image_count = max(int(num_images), 1)
+    default_iterations = max(int(base_config.get("iterations", 1000)), 1)
+    target_visits = max(int(base_config.get("target_visits_per_image", 70)), 1)
+    min_iterations = max(int(base_config.get("min_iterations", 1000)), 1)
+    max_iterations = max(int(base_config.get("max_iterations", min_iterations)), min_iterations)
+    recommended_iterations = image_count * target_visits
+    base_config["iterations"] = max(
+        min_iterations,
+        min(max_iterations, recommended_iterations),
+    )
+
+    densify_ratio = base_config["densify_until"] / float(default_iterations)
+    base_config["densify_until"] = min(
+        base_config["iterations"] - 1,
+        max(base_config["densify_from"] + 1, int(round(base_config["iterations"] * densify_ratio))),
+    )
 
     if quality_mode in ["high", "ultra", "hard", "balanced"]:
         base_config.update(
@@ -1496,7 +1537,7 @@ def get_opensplat_config(quality_mode="balanced", num_images=100, custom_params=
             }
         )
 
-    if custom_params and quality_mode == "custom":
+    if custom_params:
         if "iterations" in custom_params and custom_params["iterations"] is not None:
             base_config["iterations"] = int(custom_params["iterations"])
         if (
@@ -1548,6 +1589,75 @@ def get_opensplat_config(quality_mode="balanced", num_images=100, custom_params=
             base_config["percent_dense"] = float(custom_params["percent_dense"])
 
     return base_config
+
+
+def get_opensplat_runtime_recommendation(
+    quality_mode="balanced", num_images=100, custom_params=None
+):
+    """Resolve the runtime OpenSplat knobs that the training stage actually uses."""
+
+    opensplat_config = get_opensplat_config(quality_mode, num_images, custom_params)
+    recommendation = {
+        "quality_mode": quality_mode,
+        "estimated_num_images": int(max(num_images, 1)),
+        "iterations": int(opensplat_config["iterations"]),
+        "target_visits_per_image": int(opensplat_config.get("target_visits_per_image", 0) or 0),
+        "densify_grad_threshold": opensplat_config.get("densify_grad_threshold"),
+        "refine_every": None,
+        "warmup_length": None,
+        "ssim_weight": None,
+        "reset_alpha_every": None,
+    }
+
+    if quality_mode in ["high", "ultra", "hard", "custom", "balanced"]:
+        refine_every = 75
+        warmup_length = 750
+        ssim_weight = 0.25
+        reset_alpha_every = None
+
+        if quality_mode == "ultra":
+            refine_every = 50
+            warmup_length = 1000
+            ssim_weight = 0.3
+            reset_alpha_every = 20
+        elif quality_mode == "hard":
+            refine_every = 60
+            warmup_length = 900
+            ssim_weight = 0.28
+            reset_alpha_every = 24
+
+        if custom_params:
+            custom_densify = custom_params.get("densify_grad_threshold")
+            custom_refine = custom_params.get("refine_every")
+            custom_warmup = custom_params.get("warmup_length")
+            custom_ssim = custom_params.get("ssim_weight")
+            if custom_densify is not None:
+                recommendation["densify_grad_threshold"] = float(custom_densify)
+            if custom_refine is not None:
+                refine_every = int(custom_refine)
+            if custom_warmup is not None:
+                warmup_length = int(custom_warmup)
+            if custom_ssim is not None:
+                ssim_weight = float(custom_ssim)
+
+        recommendation.update(
+            {
+                "refine_every": int(refine_every),
+                "warmup_length": int(warmup_length),
+                "ssim_weight": float(ssim_weight),
+                "reset_alpha_every": reset_alpha_every,
+            }
+        )
+
+    iterations = max(int(recommendation["iterations"]), 1)
+    recommendation["estimated_views_per_image"] = round(
+        iterations / max(int(num_images), 1), 1
+    )
+    recommendation["summary"] = (
+        f"{iterations} iterations for about {max(int(num_images), 1)} images "
+        f"(~{recommendation['estimated_views_per_image']} visits/image, target {recommendation['target_visits_per_image']})"
+    )
+    return recommendation
 
 
 def get_colmap_config_for_pipeline(paths, config, project_id=None):

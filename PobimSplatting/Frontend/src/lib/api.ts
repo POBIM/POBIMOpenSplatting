@@ -142,6 +142,7 @@ export interface ReconstructionFramework {
   training_budget_summary?: {
     resource_profile_class?: string;
     resource_lane?: string;
+    resource_lane_state?: string;
     training_resolution?: string;
     colmap_resolution?: string;
     use_separate_training_images?: boolean;
@@ -149,6 +150,8 @@ export interface ReconstructionFramework {
     adaptive_pair_scheduling?: boolean;
     repair_step_count?: number;
     uses_repaired_capture?: boolean;
+    effective_image_budget?: number;
+    effective_oversample_factor?: number;
   };
   recovery_loop_summary?: {
     schema_version?: string;
@@ -496,6 +499,10 @@ export interface UploadConfig {
   project_description?: string;
   quality_mode?: string;
   iterations?: number;
+  densify_grad_threshold?: number;
+  refine_every?: number;
+  warmup_length?: number;
+  ssim_weight?: number;
   camera_model?: string;
   sfm_backend?: 'cli' | 'pycolmap' | string;
   matcher_type?: 'auto' | 'sequential' | 'exhaustive' | 'vocab_tree' | string;
@@ -557,6 +564,19 @@ export interface UploadPolicyAdaptiveComparison {
   gate?: string | null;
 }
 
+export interface UploadTrainingRecommendation {
+  quality_mode: string;
+  estimated_num_images: number;
+  iterations: number;
+  densify_grad_threshold?: number | null;
+  refine_every?: number | null;
+  warmup_length?: number | null;
+  ssim_weight?: number | null;
+  reset_alpha_every?: number | null;
+  estimated_views_per_image?: number;
+  summary?: string;
+}
+
 export interface UploadPolicyPreview {
   resource_contract?: {
     schema_version?: string;
@@ -570,6 +590,7 @@ export interface UploadPolicyPreview {
   heuristic_source: 'backend' | string;
   input_profile: 'images' | 'video' | 'mixed' | 'unknown' | string;
   estimated_num_images: number;
+  training_recommendation?: UploadTrainingRecommendation;
   capture_pattern?: {
     ordered_frame_ratio?: number;
     frame_like_images?: number;
@@ -721,16 +742,14 @@ export const api = {
     if (config.use_separate_training_images !== undefined) formData.append('use_separate_training_images', config.use_separate_training_images.toString());
     if (config.colmap_sharpness_boost !== undefined) formData.append('colmap_sharpness_boost', config.colmap_sharpness_boost.toString());
     if (config.adaptive_pair_scheduling !== undefined) formData.append('adaptive_pair_scheduling', config.adaptive_pair_scheduling.toString());
+    if (config.iterations !== undefined) formData.append('iterations', config.iterations.toString());
+    if (config.densify_grad_threshold !== undefined) formData.append('densify_grad_threshold', config.densify_grad_threshold.toString());
+    if (config.refine_every !== undefined) formData.append('refine_every', config.refine_every.toString());
+    if (config.warmup_length !== undefined) formData.append('warmup_length', config.warmup_length.toString());
+    if (config.ssim_weight !== undefined) formData.append('ssim_weight', config.ssim_weight.toString());
 
     // Custom parameters - send each parameter individually
     if (config.quality_mode === 'custom') {
-      // OpenSplat Training Parameters
-      if (config.iterations !== undefined) formData.append('iterations', config.iterations.toString());
-      if (config.densify_grad_threshold !== undefined) formData.append('densify_grad_threshold', config.densify_grad_threshold.toString());
-      if (config.refine_every !== undefined) formData.append('refine_every', config.refine_every.toString());
-      if (config.warmup_length !== undefined) formData.append('warmup_length', config.warmup_length.toString());
-      if (config.ssim_weight !== undefined) formData.append('ssim_weight', config.ssim_weight.toString());
-
       // OpenSplat Learning Rates
       if (config.learning_rate !== undefined) formData.append('learning_rate', config.learning_rate.toString());
       if (config.position_lr_init !== undefined) formData.append('position_lr_init', config.position_lr_init.toString());
@@ -762,9 +781,6 @@ export const api = {
       if (config.abs_pose_min_num_inliers !== undefined) formData.append('abs_pose_min_num_inliers', config.abs_pose_min_num_inliers.toString());
       if (config.abs_pose_min_inlier_ratio !== undefined) formData.append('abs_pose_min_inlier_ratio', config.abs_pose_min_inlier_ratio.toString());
       if (config.max_reg_trials !== undefined) formData.append('max_reg_trials', config.max_reg_trials.toString());
-    } else {
-      // For non-custom modes, still send iterations if provided
-      if (config.iterations !== undefined) formData.append('iterations', config.iterations.toString());
     }
 
     const response = await apiClient.post('/api/upload', formData, {

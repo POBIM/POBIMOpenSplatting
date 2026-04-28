@@ -2,8 +2,9 @@
 
 import { useState, useCallback, useEffect, type ReactNode } from 'react';
 import { Upload, FileVideo, Image, AlertCircle, Settings, Info, Zap, Sliders, Wrench } from 'lucide-react';
+import VideoTimelinePlanner from '@/components/VideoTimelinePlanner';
 import { Accordion } from '@/components/ui';
-import { api, UploadPolicyPreview } from '@/lib/api';
+import { api, type UploadConfig, type UploadPolicyPreview, type VideoCaptureMode, type VideoTimelinePlan } from '@/lib/api';
 import { getMatcherLabelWithMode, getSfmEngineCompactLabel } from '@/lib/sfm-display';
 import { useRouter } from 'next/navigation';
 
@@ -12,6 +13,24 @@ type SfmBackendMode = 'cli' | 'pycolmap';
 
 const DEFAULT_CPU_CHUNK_WORKERS = 8;
 const CPU_CHUNK_WORKER_SUGGESTIONS = [2, 4, 8, 12, 14];
+
+const VIDEO_CAPTURE_MODE_COPY: Record<VideoCaptureMode, { label: string; summary: string; badge: string }> = {
+  normal: {
+    label: 'Normal Video',
+    summary: 'ใช้ sampling แบบวิดีโอปกติและ policy เดิมของระบบสำหรับ ordered capture',
+    badge: 'normal',
+  },
+  simulated_360_positions: {
+    label: 'Simulated 360 Positions',
+    summary: 'กำหนดช่วงเวลาเป็นตำแหน่งย่อย แล้วเฉลี่ยภาพต่อช่วงเพื่อ export เป็นกลุ่มสถานีแบบ flat naming',
+    badge: 'simulated 360',
+  },
+  raw_360_mock: {
+    label: '360 Raw Mock',
+    summary: 'แสดง placeholder UI สำหรับ raw 360 pipeline โดยยังไม่เปิด flow backend จริงในรอบนี้',
+    badge: 'mock',
+  },
+};
 
 function TooltipLabel({ children, tip }: { children: ReactNode; tip: string }) {
   return (
@@ -33,6 +52,9 @@ export default function UploadPage() {
   const [error, setError] = useState<string | null>(null);
   const [policyPreview, setPolicyPreview] = useState<UploadPolicyPreview | null>(null);
   const [policyPreviewLoading, setPolicyPreviewLoading] = useState(false);
+  const [videoCaptureMode, setVideoCaptureMode] = useState<VideoCaptureMode | null>(null);
+  const [timelinePlan, setTimelinePlan] = useState<VideoTimelinePlan | undefined>(undefined);
+  const [showVideoModeDialog, setShowVideoModeDialog] = useState(false);
   const [config, setConfig] = useState({
     project_name: '',
     quality_mode: 'hard',
@@ -149,7 +171,10 @@ export default function UploadPage() {
     }
   }, [handleFileSelect]);
 
-  const handleUpload = async () => {
+  const performUpload = async (
+    selectedVideoCaptureMode: VideoCaptureMode | null = videoCaptureMode,
+    selectedTimelinePlan: VideoTimelinePlan | undefined = timelinePlan,
+  ) => {
     if (files.length === 0) return;
 
     setUploading(true);
@@ -167,6 +192,8 @@ export default function UploadPage() {
       const uploadConfig = {
         ...config,
         matcher_type: config.matcher_type === 'auto' ? undefined : config.matcher_type,
+        ...(selectedVideoCaptureMode ? { video_capture_mode: selectedVideoCaptureMode } : {}),
+        ...(selectedTimelinePlan ? { video_timeline_plan: selectedTimelinePlan } : {}),
         ...resolvedUploadTrainingParams,
         ...(config.quality_mode === 'custom' && {
           // OpenSplat Training
@@ -199,7 +226,7 @@ export default function UploadPage() {
         })
       };
 
-      const result = await api.upload(files, uploadConfig, (loaded, total) => {
+      const result = await api.upload(files, uploadConfig as UploadConfig, (loaded, total) => {
         // Update progress percentage
         const progress = Math.round((loaded / total) * 100);
         setUploadProgress(progress);
@@ -237,6 +264,29 @@ export default function UploadPage() {
     }
   };
 
+  const handleUpload = async () => {
+    if (files.length === 0) return;
+
+    if (hasVideo && !videoCaptureMode) {
+      setShowVideoModeDialog(true);
+      return;
+    }
+
+    if (videoCaptureMode === 'simulated_360_positions') {
+      if (videoFiles.length !== 1) {
+        setError('Simulated 360 mode currently supports exactly one video file.');
+        return;
+      }
+
+      if (!timelinePlan || timelinePlan.segments.length === 0) {
+        setError('Add at least one timeline segment before uploading in simulated 360 mode.');
+        return;
+      }
+    }
+
+    await performUpload();
+  };
+
   const formatFileSize = (bytes: number): string => {
     if (bytes === 0) return '0 B';
     const k = 1024;
@@ -254,10 +304,25 @@ export default function UploadPage() {
     setFiles(files.filter((_, i) => i !== index));
   };
 
+  const videoFiles = files.filter(file => file.type.startsWith('video/'));
+  const primaryVideoFile = videoFiles[0] ?? null;
   const hasVideo = files.some(file => file.type.startsWith('video/'));
   const hasImages = files.some(file => file.type.startsWith('image/'));
   const totalSize = files.reduce((sum, file) => sum + file.size, 0);
   const inputProfile = hasVideo && hasImages ? 'mixed' : hasVideo ? 'video' : hasImages ? 'images' : 'unknown';
+
+  useEffect(() => {
+    if (!hasVideo) {
+      setVideoCaptureMode(null);
+      setTimelinePlan(undefined);
+      return;
+    }
+
+    if (timelinePlan && primaryVideoFile && timelinePlan.source_file_name !== primaryVideoFile.name) {
+      setTimelinePlan(undefined);
+    }
+  }, [hasVideo, primaryVideoFile, timelinePlan]);
+
   useEffect(() => {
     if ((inputProfile === 'video' || inputProfile === 'mixed') && config.sfm_engine === 'glomap') {
       setConfig(prev => (
@@ -277,7 +342,9 @@ export default function UploadPage() {
       : `${config.max_frames * config.oversample_factor} candidates before pruning`;
   const largeImageSet = inputProfile === 'images' && files.length >= 300;
   const matcherRecommendation = hasVideo
-    ? 'Auto is recommended for video and orbit captures. Sequential matching usually fits ordered frames best, Global SfM is the safer fallback for harder cases, and Exhaustive is only worth forcing when you want maximum pair coverage.'
+    ? videoCaptureMode === 'simulated_360_positions'
+      ? 'Auto is recommended for simulated 360 station capture. The backend should prefer Exhaustive while the exported image count stays under budget, then fall back for larger sets.'
+      : 'Auto is recommended for video and orbit captures. Sequential matching usually fits ordered frames best, Global SfM is the safer fallback for harder cases, and Exhaustive is only worth forcing when you want maximum pair coverage.'
     : hasImages && !hasVideo
       ? largeImageSet
         ? 'Auto is recommended for most photo sets. The backend can choose Exhaustive for smaller unordered groups, Vocabulary Tree as an experimental option for larger unordered collections, and Sequential only when the capture order is meaningful.'
@@ -313,6 +380,32 @@ export default function UploadPage() {
     },
   ] as const;
   const expectedPolicy = (() => {
+    if (videoCaptureMode === 'simulated_360_positions') {
+      return {
+        title: 'Station-Sampled 360 Policy',
+        tone: 'border-orange-200 bg-orange-50 text-orange-900',
+        badgeTone: 'border-orange-200 bg-orange-100 text-orange-900',
+        profileBadge: 'simulated 360',
+        matcherBadge: config.matcher_type === 'auto' ? 'auto -> exhaustive first' : getMatcherLabelWithMode(config.matcher_type),
+        engineBadge: `${getSfmEngineCompactLabel(config.sfm_engine)} preferred`,
+        summary: 'User-authored timeline segments are treated as station-based capture. Prefer exhaustive matching for smaller exports, then switch to a heavier fallback policy when the plan becomes large.',
+        icon: Upload,
+      };
+    }
+
+    if (videoCaptureMode === 'raw_360_mock') {
+      return {
+        title: '360 Raw Mock Policy',
+        tone: 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-900',
+        badgeTone: 'border-fuchsia-200 bg-fuchsia-100 text-fuchsia-900',
+        profileBadge: '360 raw mock',
+        matcherBadge: config.matcher_type === 'auto' ? 'mock only' : getMatcherLabelWithMode(config.matcher_type),
+        engineBadge: `${getSfmEngineCompactLabel(config.sfm_engine)} preferred`,
+        summary: 'This mode currently exposes UI scaffolding only. Uploads still use the normal backend path until the raw 360 extractor is implemented.',
+        icon: FileVideo,
+      };
+    }
+
     if (inputProfile === 'video') {
       return {
         title: 'Orbit-Safe Video Policy',
@@ -508,6 +601,27 @@ export default function UploadPage() {
       });
     }
 
+    if (videoCaptureMode === 'simulated_360_positions') {
+      rules.push({
+        level: 'info',
+        text: 'Simulated 360 mode exports a station-based image set from your timeline plan instead of relying on ordered frame names.',
+      });
+
+      rules.push({
+        level: timelinePlan && timelinePlan.total_sample_count > 240 ? 'warning' : 'info',
+        text: timelinePlan && timelinePlan.total_sample_count > 240
+          ? `Timeline plan currently exports ${timelinePlan.total_sample_count} images. Expect exhaustive matching to become expensive and trigger a fallback policy.`
+          : `Timeline plan currently exports ${timelinePlan?.total_sample_count ?? 0} images. Smaller simulated 360 exports are better candidates for exhaustive matching.`,
+      });
+    }
+
+    if (videoCaptureMode === 'raw_360_mock') {
+      rules.push({
+        level: 'warning',
+        text: '360 Raw is still a mockup. The mode is visible in the UI, but the backend path is not specialized yet.',
+      });
+    }
+
     if (inputProfile === 'images' && config.matcher_type === 'sequential') {
       rules.push({
         level: 'warning',
@@ -591,7 +705,9 @@ export default function UploadPage() {
       delta: 0,
       detail: reason,
     }));
-  const resolvedEstimatedNumImages = policyPreview?.estimated_num_images;
+  const resolvedEstimatedNumImages = videoCaptureMode === 'simulated_360_positions' && timelinePlan
+    ? timelinePlan.total_sample_count
+    : policyPreview?.estimated_num_images;
   const resolvedTrainingRecommendation = policyPreview?.training_recommendation;
   const policyToneKey = policyPreview?.expected_policy?.toneKey ?? resolvedInputProfile;
   const adaptiveComparisons = policyPreview?.adaptive_comparisons ?? [];
@@ -623,6 +739,10 @@ export default function UploadPage() {
       : policyToneKey === 'images'
         ? Image
         : Info;
+  const selectedCaptureModeMeta = videoCaptureMode ? VIDEO_CAPTURE_MODE_COPY[videoCaptureMode] : null;
+  const simulated360Ready = videoCaptureMode === 'simulated_360_positions'
+    && videoFiles.length === 1
+    && Boolean(timelinePlan?.segments.length);
 
   useEffect(() => {
     if (config.sfm_engine !== 'glomap' && config.sfm_backend !== 'cli') {
@@ -638,7 +758,9 @@ export default function UploadPage() {
         const preview = await api.previewUploadPolicy(files, {
           ...config,
           matcher_type: config.matcher_type === 'auto' ? undefined : config.matcher_type,
-        });
+          video_capture_mode: videoCaptureMode ?? undefined,
+          video_timeline_plan: timelinePlan,
+        } as UploadConfig);
         if (!cancelled) {
           setPolicyPreview(preview);
         }
@@ -658,7 +780,7 @@ export default function UploadPage() {
       cancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [files, config]);
+  }, [files, config, timelinePlan, videoCaptureMode]);
 
   const getQualityInfo = (mode: string) => {
     const info = {
@@ -857,6 +979,66 @@ export default function UploadPage() {
                 </div>
               </div>
 
+              {hasVideo && (
+                <div className="border border-[color:var(--ink)] bg-[var(--paper-card)] p-3 shadow-[var(--shadow-sm)]">
+                  <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                    <div>
+                      <p className="brutal-label">Capture Assistant</p>
+                      <h3 className="brutal-h3 mt-1">Video Capture Mode</h3>
+                      <p className="mt-1 text-sm text-[color:var(--text-secondary)]">
+                        เลือกโหมด capture ก่อนเริ่มอัปโหลด เพื่อให้ helper UI และ backend policy ใช้ flow ที่เหมาะกับวิดีโอชุดนี้
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 text-xs font-bold uppercase tracking-[0.12em]">
+                      {selectedCaptureModeMeta ? (
+                        <span className="border border-[color:var(--ink)] bg-[var(--paper-muted)] px-2 py-1">
+                          {selectedCaptureModeMeta.badge}
+                        </span>
+                      ) : (
+                        <span className="border border-dashed border-[color:var(--ink)] bg-white px-2 py-1 text-[color:var(--text-secondary)]">
+                          mode not chosen
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setShowVideoModeDialog(true)}
+                        className="brutal-btn"
+                      >
+                        {selectedCaptureModeMeta ? 'Change Mode' : 'Choose Mode'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {selectedCaptureModeMeta && (
+                    <div className="mt-3 border border-[color:var(--ink)] bg-white px-3 py-2 text-sm text-[var(--ink)]">
+                      <span className="font-black">{selectedCaptureModeMeta.label}:</span> {selectedCaptureModeMeta.summary}
+                    </div>
+                  )}
+
+                  {videoCaptureMode === 'simulated_360_positions' && (
+                    <div className="mt-3 space-y-3">
+                      {videoFiles.length !== 1 ? (
+                        <div className="border border-[color:var(--ink)] bg-[var(--warning-bg)] px-4 py-3 text-sm font-medium text-[var(--warning-text)]">
+                          Simulated 360 v1 รองรับวิดีโอทีละ 1 ไฟล์เท่านั้น ตอนนี้พบ {videoFiles.length} ไฟล์วิดีโอ
+                        </div>
+                      ) : (
+                        <VideoTimelinePlanner
+                          file={primaryVideoFile}
+                          value={timelinePlan}
+                          onChange={setTimelinePlan}
+                        />
+                      )}
+                    </div>
+                  )}
+
+                  {videoCaptureMode === 'raw_360_mock' && (
+                    <div className="mt-3 border border-[color:var(--ink)] bg-[var(--paper-muted)] px-4 py-3 text-sm text-[color:var(--text-secondary)]">
+                      360 Raw ยังเป็น mockup ในรอบนี้ จึงแสดงได้เฉพาะ state และ policy hint ฝั่ง UI ก่อน ส่วน pipeline backend จะถูกต่อในรอบถัดไป
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className={`border p-2.5 shadow-[var(--shadow-sm)] ${resolvedExpectedPolicy.tone}`} style={{ borderColor: 'var(--ink)' }}>
                 <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                   <div>
@@ -881,6 +1063,9 @@ export default function UploadPage() {
                       <span className="border border-[color:var(--ink)] bg-white/70 px-2 py-1" title="SfM engine">E: {resolvedExpectedPolicy.engineBadge}</span>
                       {resolvedEstimatedNumImages ? (
                         <span className="border border-[color:var(--ink)] bg-white/70 px-2 py-1" title="Estimated frames/images">~{resolvedEstimatedNumImages}</span>
+                      ) : null}
+                      {videoCaptureMode === 'simulated_360_positions' && timelinePlan ? (
+                        <span className="border border-[color:var(--ink)] bg-white/70 px-2 py-1" title="Timeline positions">stations {timelinePlan.segments.length}</span>
                       ) : null}
                     </div>
                   </div>
@@ -972,6 +1157,16 @@ export default function UploadPage() {
                       {hasVideo && (
                         <span className="border border-[color:var(--ink)] bg-white px-2 py-1">
                           adaptive pair scheduling: {config.adaptive_pair_scheduling ? 'on' : 'off'}
+                        </span>
+                      )}
+                      {videoCaptureMode && (
+                        <span className="border border-[color:var(--ink)] bg-white px-2 py-1">
+                          capture mode: {VIDEO_CAPTURE_MODE_COPY[videoCaptureMode].badge}
+                        </span>
+                      )}
+                      {videoCaptureMode === 'simulated_360_positions' && timelinePlan && (
+                        <span className="border border-[color:var(--ink)] bg-white px-2 py-1">
+                          planner: {timelinePlan.segments.length} positions / {timelinePlan.total_sample_count} images
                         </span>
                       )}
                   </div>
@@ -2215,7 +2410,7 @@ export default function UploadPage() {
                   className="brutal-btn brutal-btn-primary"
                 >
                   <Settings className="h-5 w-5 mr-2" />
-                  Start
+                  {videoCaptureMode === 'simulated_360_positions' && !simulated360Ready ? 'Review Timeline' : 'Start'}
                 </button>
               </div>
             )}
@@ -2235,6 +2430,76 @@ export default function UploadPage() {
             <span className="brutal-badge" title="Backend reconstructs and trains the 3D model">2 Process</span>
             <span className="brutal-badge" title="Open the completed 3D splat viewer">3 View</span>
           </div>
+
+          {showVideoModeDialog && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(10,26,63,0.88)] p-4">
+              <div className="w-full max-w-4xl border border-[color:var(--ink)] bg-[var(--paper-card)] p-4 shadow-[var(--shadow-lg)]">
+                <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                  <div>
+                    <p className="brutal-label">Choose Video Mode</p>
+                    <h2 className="brutal-h3 mt-1">Video Capture Routing</h2>
+                    <p className="mt-1 text-sm text-[color:var(--text-secondary)]">
+                      เลือก mode ก่อนเริ่มอัปโหลด เพื่อให้ helper UI, timeline planner และ matcher policy ใช้ flow ที่ตรงกับลักษณะการถ่าย
+                    </p>
+                  </div>
+                  <button type="button" onClick={() => setShowVideoModeDialog(false)} className="brutal-btn">Close</button>
+                </div>
+
+                <div className="mt-4 grid gap-3 lg:grid-cols-3">
+                  {(['normal', 'simulated_360_positions', 'raw_360_mock'] as VideoCaptureMode[]).map((mode) => {
+                    const option = VIDEO_CAPTURE_MODE_COPY[mode];
+                    const selected = videoCaptureMode === mode;
+                    const disabled = mode === 'simulated_360_positions' && videoFiles.length !== 1;
+
+                    return (
+                      <div key={mode} className={`border border-[color:var(--ink)] p-4 shadow-[var(--shadow-sm)] ${selected ? 'bg-[var(--paper-muted)]' : 'bg-white'}`}>
+                        <div className="flex items-center justify-between gap-2">
+                          <h3 className="text-base font-black text-[var(--ink)]">{option.label}</h3>
+                          <span className="border border-[color:var(--ink)] bg-[var(--paper-card)] px-2 py-1 text-[11px] font-bold uppercase tracking-[0.12em]">{option.badge}</span>
+                        </div>
+                        <p className="mt-3 text-sm text-[color:var(--text-secondary)]">{option.summary}</p>
+                        {mode === 'simulated_360_positions' && (
+                          <div className="mt-3 border border-[color:var(--ink)] bg-[var(--paper-muted)] px-3 py-2 text-xs text-[color:var(--text-secondary)]">
+                            {videoFiles.length === 1
+                              ? 'ใช้ timeline planner เพื่อ mark แต่ละตำแหน่งและกำหนดจำนวนภาพที่จะเฉลี่ยออกจากช่วงนั้น'
+                              : 'v1 รองรับวิดีโอทีละ 1 ไฟล์เท่านั้น'}
+                          </div>
+                        )}
+                        {mode === 'raw_360_mock' && (
+                          <div className="mt-3 border border-[color:var(--ink)] bg-[var(--paper-muted)] px-3 py-2 text-xs text-[color:var(--text-secondary)]">
+                            backend ยังไม่แยก flow ให้ mode นี้ในรอบนี้ จึงใช้สำหรับ mockup และ helper UI เท่านั้น
+                          </div>
+                        )}
+                        <button
+                          type="button"
+                          disabled={disabled}
+                          onClick={() => {
+                            setError(null);
+                            setVideoCaptureMode(mode);
+                            setShowVideoModeDialog(false);
+
+                            if (mode === 'normal' || mode === 'raw_360_mock') {
+                              void performUpload(mode, undefined);
+                              return;
+                            }
+
+                            if (timelinePlan?.segments.length) {
+                              void performUpload(mode, timelinePlan);
+                            }
+                          }}
+                          className="brutal-btn brutal-btn-primary mt-4 w-full justify-center disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {mode === 'simulated_360_positions'
+                            ? timelinePlan?.segments.length ? 'Use Mode And Upload' : 'Use Mode And Open Planner'
+                            : 'Use Mode And Upload'}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </section>
     </div>

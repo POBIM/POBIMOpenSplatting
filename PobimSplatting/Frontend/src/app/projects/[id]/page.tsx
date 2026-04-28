@@ -1945,6 +1945,27 @@ export default function ProjectDetailPage() {
                       <span className="brutal-badge brutal-badge-warning">window ±{effectiveSearchWindow ?? '--'}</span>
                     </div>
 
+                    {(videoDiagnostics.video_capture_mode || videoDiagnostics.video_timeline_summary) && (
+                      <div className="mb-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                        <div className="border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-card)] p-4">
+                          <p className="brutal-label mb-2">Capture Mode</p>
+                          <p className="text-sm font-black uppercase tracking-tight text-[var(--ink)]">{videoDiagnostics.video_capture_mode || project?.video_capture_mode || '--'}</p>
+                        </div>
+                        <div className="border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-card)] p-4">
+                          <p className="brutal-label mb-2">Positions</p>
+                          <p className="text-sm font-black uppercase tracking-tight text-[var(--ink)]">{videoDiagnostics.video_timeline_summary?.segment_count ?? project?.video_timeline_summary?.segment_count ?? '--'}</p>
+                        </div>
+                        <div className="border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-card)] p-4">
+                          <p className="brutal-label mb-2">Planned Images</p>
+                          <p className="text-sm font-black uppercase tracking-tight text-[var(--ink)]">{videoDiagnostics.video_timeline_summary?.total_sample_count ?? project?.video_timeline_summary?.total_sample_count ?? '--'}</p>
+                        </div>
+                        <div className="border-[var(--border-w)] border-[var(--ink)] bg-[var(--paper-card)] p-4">
+                          <p className="brutal-label mb-2">Filename Pattern</p>
+                          <p className="text-sm font-black uppercase tracking-tight text-[var(--ink)]">{videoDiagnostics.video_timeline_summary?.filename_pattern ?? project?.video_timeline_summary?.filename_pattern ?? '--'}</p>
+                        </div>
+                      </div>
+                    )}
+
                     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                       {[
                         ['Candidates', videoDiagnostics.candidate_count ?? '--'],

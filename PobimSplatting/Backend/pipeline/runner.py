@@ -418,6 +418,8 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
                         'mode': config.get('extraction_mode', 'frames'),
                         'preview_count': config.get('preview_count', 10),
                         'use_gpu': config.get('use_gpu_extraction', True),
+                        'video_capture_mode': config.get('video_capture_mode'),
+                        'video_timeline_plan': config.get('video_timeline_plan'),
                         'smart_frame_selection': config.get('smart_frame_selection', True),
                         'oversample_factor': config.get('oversample_factor', 10),
                         'replacement_search_radius': config.get('replacement_search_radius', 4),
@@ -569,6 +571,14 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
                                 })
                                 diagnostics['strategy'] = extraction_stats.get('strategy')
                                 diagnostics['mode'] = extraction_stats.get('mode')
+                                diagnostics['video_capture_mode'] = extraction_stats.get(
+                                    'video_capture_mode',
+                                    diagnostics.get('video_capture_mode'),
+                                )
+                                diagnostics['video_timeline_summary'] = extraction_stats.get(
+                                    'video_timeline_summary',
+                                    diagnostics.get('video_timeline_summary'),
+                                )
                                 diagnostics['search_radius'] = extraction_stats.get('search_radius')
                                 diagnostics['oversample_factor'] = extraction_stats.get('oversample_factor')
                                 diagnostics['requested_oversample_factor'] = extraction_stats.get(
@@ -594,6 +604,10 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
                                 diagnostics['rejected_candidates'] = diagnostics.get('rejected_candidates', 0) + extraction_stats.get('rejected_candidates', 0)
                                 diagnostics.setdefault('videos', []).append(extraction_stats)
                                 project_entry.setdefault('config', {})['replacement_search_radius'] = extraction_stats.get('search_radius')
+                                if extraction_stats.get('video_capture_mode'):
+                                    project_entry['video_capture_mode'] = extraction_stats.get('video_capture_mode')
+                                if extraction_stats.get('video_timeline_summary') is not None:
+                                    project_entry['video_timeline_summary'] = extraction_stats.get('video_timeline_summary')
                                 project_entry['video_extraction_diagnostics'] = diagnostics
                                 save_projects_db()
                         append_log_line(

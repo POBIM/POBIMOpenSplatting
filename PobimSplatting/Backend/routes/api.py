@@ -61,12 +61,90 @@ TRAINING_LIVE_RENDER_DIRNAME = "live_training_preview"
 TRAINING_LIVE_CONTROL_FILENAME = "live_training_preview_control.json"
 _CAMERA_POSE_MANIFEST_CACHE: dict[tuple[str, int], dict] = {}
 _CAMERA_POSE_MANIFEST_CACHE_MAX = 16
+_VIDEO_CAPTURE_MODES = {"normal", "simulated_360_positions", "raw_360_mock"}
 
 
 def _calculate_progress_percent(current: int, total: int) -> int:
     if total <= 0:
         return 0
     return max(0, min(100, int((min(current, total) / total) * 100)))
+
+
+def _normalize_video_capture_mode(value):
+    if value in {None, ""}:
+        return None
+    normalized = str(value).strip()
+    return normalized if normalized in _VIDEO_CAPTURE_MODES else None
+
+
+def _parse_video_timeline_plan(raw_value):
+    if raw_value in {None, ""}:
+        return None
+
+    if isinstance(raw_value, str):
+        try:
+            payload = json.loads(raw_value)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid video timeline plan JSON: {exc.msg}") from exc
+    elif isinstance(raw_value, dict):
+        payload = dict(raw_value)
+    else:
+        raise ValueError("Invalid video timeline plan payload")
+
+    segments = list(payload.get("segments") or [])
+    normalized_segments = []
+    total_sample_count = 0
+
+    for index, segment in enumerate(segments, start=1):
+        try:
+            start_time = float(segment.get("start_time"))
+            end_time = float(segment.get("end_time"))
+            sample_count = int(segment.get("sample_count"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Invalid timeline segment at index {index}") from exc
+
+        if end_time <= start_time:
+            raise ValueError(f"Timeline segment {index} must have end_time > start_time")
+        if sample_count <= 0:
+            raise ValueError(f"Timeline segment {index} must have sample_count > 0")
+
+        total_sample_count += sample_count
+        normalized_segments.append(
+            {
+                "id": str(segment.get("id") or f"segment-{index}"),
+                "label": str(segment.get("label") or f"Position {index}"),
+                "start_time": round(start_time, 4),
+                "end_time": round(end_time, 4),
+                "sample_count": sample_count,
+                "position_index": int(segment.get("position_index") or index),
+            }
+        )
+
+    duration = payload.get("duration")
+    try:
+        duration_value = float(duration) if duration not in {None, ""} else None
+    except (TypeError, ValueError):
+        duration_value = None
+
+    return {
+        "version": 1,
+        "source_file_name": payload.get("source_file_name"),
+        "duration": duration_value,
+        "total_sample_count": total_sample_count,
+        "segments": normalized_segments,
+    }
+
+
+def _summarize_video_timeline_plan(plan):
+    if not plan:
+        return None
+    segments = list(plan.get("segments") or [])
+    return {
+        "segment_count": len(segments),
+        "total_sample_count": int(plan.get("total_sample_count") or 0),
+        "duration_seconds": plan.get("duration"),
+        "filename_pattern": "pos001_0001.jpg",
+    }
 
 
 def _count_project_images(project_id: str) -> int:
@@ -1144,6 +1222,14 @@ def upload_policy_preview():
         return bool(value)
 
     default_sfm_engine = "colmap" if input_type in {"video", "mixed"} else "glomap"
+    video_capture_mode = _normalize_video_capture_mode(payload.get("video_capture_mode"))
+    if payload.get("video_capture_mode") not in {None, ""} and video_capture_mode is None:
+        return jsonify({"error": "Invalid video capture mode"}), 400
+
+    try:
+        video_timeline_plan = _parse_video_timeline_plan(payload.get("video_timeline_plan"))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
     config = {
         "camera_model": payload.get("camera_model", "SIMPLE_RADIAL"),
@@ -1181,6 +1267,8 @@ def upload_policy_preview():
         "force_cpu_sparse_reconstruction": parse_bool(
             payload.get("force_cpu_sparse_reconstruction"), True
         ),
+        "video_capture_mode": video_capture_mode,
+        "video_timeline_plan": video_timeline_plan,
         "input_type": input_type,
         "resource_override_source": "automatic",
     }
@@ -1243,6 +1331,12 @@ def upload_policy_preview():
             "video_count": video_count,
         },
     )
+    if video_capture_mode == "simulated_360_positions" and video_timeline_plan:
+        preview["estimated_num_images"] = int(video_timeline_plan.get("total_sample_count") or 0)
+        preview["capture_pattern"] = {
+            **dict(preview.get("capture_pattern") or {}),
+            "looks_like_video_orbit": False,
+        }
     if input_type in {"video", "mixed"}:
         preview["adaptive_comparisons"] = build_upload_adaptive_policy_comparisons(
             config,
@@ -1314,6 +1408,14 @@ def upload_files():
 
     # Get processing configuration
     quality_mode = request.form.get("quality_mode", "balanced")
+    video_capture_mode = _normalize_video_capture_mode(request.form.get("video_capture_mode"))
+    if request.form.get("video_capture_mode") not in {None, ""} and video_capture_mode is None:
+        return jsonify({"error": "Invalid video capture mode"}), 400
+
+    try:
+        video_timeline_plan = _parse_video_timeline_plan(request.form.get("video_timeline_plan"))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
     matcher_type = request.form.get("matcher_type") or None
     if matcher_type and matcher_type.strip().lower() == "auto":
@@ -1329,6 +1431,8 @@ def upload_files():
         "sfm_backend": request.form.get("sfm_backend", "cli"),
         "fast_sfm": request.form.get("fast_sfm", "false").lower() == "true",
         "feature_method": request.form.get("feature_method", "sift"),
+        "video_capture_mode": video_capture_mode,
+        "video_timeline_plan": video_timeline_plan,
         # Frame extraction configuration for videos
         "extraction_mode": request.form.get(
             "extraction_mode", "fps"
@@ -1384,6 +1488,15 @@ def upload_files():
         ),
         "resource_override_source": "automatic",
     }
+
+    if video_capture_mode == "simulated_360_positions":
+        if len(video_files) != 1:
+            return jsonify({"error": "Simulated 360 mode currently supports exactly one video file"}), 400
+        if not video_timeline_plan or not video_timeline_plan.get("segments"):
+            return jsonify({"error": "Simulated 360 mode requires a timeline plan with at least one segment"}), 400
+        config["use_gpu_extraction"] = False
+
+    timeline_summary = _summarize_video_timeline_plan(video_timeline_plan)
 
     for field_name, caster in (
         ("iterations", int),
@@ -1478,6 +1591,16 @@ def upload_files():
         log_file=paths["log_file"],
         input_type=input_type,
     )
+    if video_capture_mode:
+        entry["video_capture_mode"] = video_capture_mode
+    if video_timeline_plan:
+        entry["video_timeline_plan"] = video_timeline_plan
+    if timeline_summary:
+        entry["video_timeline_summary"] = timeline_summary
+        entry["video_extraction_diagnostics"] = {
+            "video_capture_mode": video_capture_mode,
+            "video_timeline_summary": timeline_summary,
+        }
 
     with project_store.status_lock:
         project_store.processing_status[project_id] = entry
@@ -1490,6 +1613,16 @@ def upload_files():
         project_id, f"Videos: {len(video_files)}, Images: {len(image_files)}"
     )
     if video_files:
+        if video_capture_mode:
+            append_log_line(project_id, f"Video capture mode: {video_capture_mode}")
+        if timeline_summary:
+            append_log_line(
+                project_id,
+                "Timeline plan: "
+                f"segments={timeline_summary['segment_count']} | "
+                f"images={timeline_summary['total_sample_count']} | "
+                f"pattern={timeline_summary['filename_pattern']}",
+            )
         append_log_line(
             project_id,
             "Adaptive policy: "

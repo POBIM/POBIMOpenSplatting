@@ -1645,15 +1645,18 @@ class VideoProcessor:
         if need_scale:
             logger.info(f"Scaling: {width}x{height} → {target_width}x{target_height}")
 
+        sampling_plan = self._build_sampling_plan(total_frames, fps, extraction_config)
+        timeline_entries = self._build_timeline_target_entries(total_frames, fps, extraction_config)
         extracted_frames = []
         saved_count = 0
         prev_frame = None
-        target_indices = self._build_target_frame_indices(total_frames, fps, extraction_config)
+        target_indices = [int(entry['target_index']) for entry in timeline_entries] if timeline_entries else self._build_target_frame_indices(total_frames, fps, extraction_config)
         search_radius = max(1, int(extraction_config.get('replacement_search_radius', 4)))
         quality_percent = extraction_config.get('quality', 100)
         selection_records = []
         replaced_targets = 0
         rejected_candidates = 0
+        frame_manifest = []
         
         # Use ThreadPoolExecutor for parallel frame saving
         max_workers = min(os.cpu_count() or 4, 8)
@@ -1671,7 +1674,8 @@ class VideoProcessor:
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             expected_total = len(target_indices)
-            for target_index in target_indices:
+            for item_index, target_index in enumerate(target_indices):
+                target_entry = timeline_entries[item_index] if item_index < len(timeline_entries) else None
                 selection = self._select_best_frame_near_target(
                     cap,
                     target_index,
@@ -1705,11 +1709,28 @@ class VideoProcessor:
                     logger.error(f"Error processing frame {saved_count}: {e}")
                     continue
 
-                frame_filename = f"frame_{saved_count:06d}.jpg"
+                frame_filename = target_entry['image_name'] if target_entry else f"frame_{saved_count:06d}.jpg"
                 frame_path = output_dir / frame_filename
 
                 future = executor.submit(save_frame_task, frame_rgb.copy(), frame_path, jpeg_quality)
                 pending_saves.append((future, frame_path, saved_count))
+
+                source_time_seconds = (selection['selected_index'] / fps) if fps > 0 else None
+                frame_manifest.append({
+                    'image_name': frame_filename,
+                    'source_video_path': str(video_path),
+                    'source_frame_index': int(selection['selected_index']),
+                    'source_time_seconds': round(float(source_time_seconds), 6) if source_time_seconds is not None else None,
+                    'accepted': bool(selection['accepted']),
+                    'sharpness': round(float(selection['metrics']['sharpness']), 4),
+                    'target_time_seconds': target_entry.get('target_time_seconds') if target_entry else None,
+                    'segment_id': target_entry.get('segment_id') if target_entry else None,
+                    'segment_label': target_entry.get('segment_label') if target_entry else None,
+                    'segment_start_time': target_entry.get('segment_start_time') if target_entry else None,
+                    'segment_end_time': target_entry.get('segment_end_time') if target_entry else None,
+                    'position_index': target_entry.get('position_index') if target_entry else None,
+                    'sample_index': target_entry.get('sample_index') if target_entry else None,
+                })
 
                 saved_count += 1
                 prev_frame = frame.copy()
@@ -1737,9 +1758,21 @@ class VideoProcessor:
         # Sort frames by filename
         extracted_frames.sort()
 
-        self.last_extraction_stats = {
+        timeline_plan = self._get_timeline_plan(extraction_config)
+        timeline_summary = None
+        if timeline_plan is not None:
+            timeline_summary = {
+                'segment_count': len(list(timeline_plan.get('segments') or [])),
+                'total_sample_count': len(timeline_entries),
+                'duration_seconds': timeline_plan.get('duration') or (float(total_frames / fps) if fps > 0 else None),
+                'filename_pattern': 'pos001_0001.jpg',
+            }
+
+        self.last_extraction_stats = self._append_sampling_plan_stats({
             'strategy': 'smart_neighbor_replacement',
-            'mode': mode,
+            'mode': 'timeline_plan' if timeline_entries else mode,
+            'video_capture_mode': extraction_config.get('video_capture_mode'),
+            'video_timeline_summary': timeline_summary,
             'requested_targets': len(target_indices),
             'saved_frames': len(extracted_frames),
             'replaced_targets': replaced_targets,
@@ -1753,11 +1786,16 @@ class VideoProcessor:
                     'sharpness': round(item['metrics']['sharpness'], 2),
                     'accepted': item['accepted'],
                     'fallback_used': item['fallback_used'],
+                    'source_time_seconds': round(float(item['selected_index'] / fps), 6) if fps > 0 else None,
                 }
                 for item in selection_records
                 if item.get('selected_index') is not None
             ],
-        }
+            'frame_manifest': frame_manifest,
+            'source_video_path': str(video_path),
+            'source_total_frames': int(total_frames),
+            'source_fps': float(fps or 0.0),
+        }, sampling_plan)
 
         logger.info(f"CPU extraction complete: {len(extracted_frames)} frames from {total_frames} total")
         return extracted_frames
@@ -1804,9 +1842,14 @@ class VideoProcessor:
         use_gpu = extraction_config.get('use_gpu', True)
         smart_selection = extraction_config.get('smart_frame_selection', False)
         self.last_extraction_stats = {}
+        timeline_plan = self._get_timeline_plan(extraction_config)
 
         if smart_selection:
             logger.info("🧠 Smart frame selection enabled; frames will be oversampled, scored, and pruned back to the requested output count")
+
+        if timeline_plan is not None:
+            logger.info("📍 Timeline-guided extraction enabled; using explicit station segments with CPU frame selection")
+            return self._extract_frames_cpu(video_path, output_dir, extraction_config, progress_callback)
 
         if use_gpu:
             gpu_info = get_gpu_decode_info()
@@ -1864,6 +1907,95 @@ class VideoProcessor:
 
         cap.release()
         return preview_frames
+
+    def _get_timeline_plan(self, extraction_config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if extraction_config.get('video_capture_mode') != 'simulated_360_positions':
+            return None
+
+        plan = extraction_config.get('video_timeline_plan')
+        if not isinstance(plan, dict):
+            return None
+
+        if not list(plan.get('segments') or []):
+            return None
+
+        return plan
+
+    def _build_timeline_target_entries(
+        self,
+        total_frames: int,
+        fps: float,
+        extraction_config: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        plan = self._get_timeline_plan(extraction_config)
+        if total_frames <= 0 or plan is None:
+            return []
+
+        duration = (total_frames / fps) if fps > 0 else float(plan.get('duration') or 0.0)
+        replacement_search_radius = max(1, int(extraction_config.get('replacement_search_radius', 4) or 4))
+        segment_tail_margin_seconds = 0.0
+        clip_tail_margin_seconds = 0.0
+        if fps > 0:
+            segment_tail_margin_seconds = max(
+                1.0 / fps,
+                float(extraction_config.get('timeline_segment_tail_margin_seconds') or 0.0),
+            )
+            default_clip_tail_margin_seconds = max(
+                segment_tail_margin_seconds,
+                float(replacement_search_radius + 1) / fps,
+            )
+            if duration > 0:
+                default_clip_tail_margin_seconds = max(
+                    default_clip_tail_margin_seconds,
+                    min(4.0, duration * 0.04),
+                )
+            clip_tail_margin_seconds = max(
+                default_clip_tail_margin_seconds,
+                float(extraction_config.get('timeline_clip_tail_margin_seconds') or 0.0),
+            )
+            clip_tail_margin_seconds += segment_tail_margin_seconds
+        entries: List[Dict[str, Any]] = []
+
+        for segment_index, segment in enumerate(list(plan.get('segments') or []), start=1):
+            start_time = float(segment.get('start_time') or 0.0)
+            end_time = float(segment.get('end_time') or start_time)
+            sample_count = max(1, int(segment.get('sample_count') or 1))
+            position_index = int(segment.get('position_index') or segment_index)
+
+            if duration > 0:
+                start_time = min(max(start_time, 0.0), duration)
+                end_time = min(max(end_time, start_time), duration)
+
+            effective_end_time = end_time
+            if fps > 0:
+                effective_end_time = max(start_time, end_time - segment_tail_margin_seconds)
+                if duration > 0:
+                    safe_clip_end = max(start_time, duration - clip_tail_margin_seconds)
+                    effective_end_time = min(effective_end_time, safe_clip_end)
+
+            sample_times = [start_time + ((effective_end_time - start_time) / 2.0)]
+            if sample_count > 1:
+                sample_times = np.linspace(start_time, effective_end_time, num=sample_count).tolist()
+
+            for sample_index, sample_time in enumerate(sample_times, start=1):
+                normalized_time = float(sample_time)
+                target_index = int(round(normalized_time * fps)) if fps > 0 else sample_index - 1
+                target_index = max(0, min(total_frames - 1, target_index))
+                entries.append(
+                    {
+                        'target_index': target_index,
+                        'target_time_seconds': round(normalized_time, 6),
+                        'segment_id': str(segment.get('id') or f'segment-{segment_index}'),
+                        'segment_label': str(segment.get('label') or f'Position {segment_index}'),
+                        'segment_start_time': round(start_time, 6),
+                        'segment_end_time': round(end_time, 6),
+                        'position_index': position_index,
+                        'sample_index': sample_index,
+                        'image_name': f"pos{position_index:03d}_{sample_index:04d}.jpg",
+                    }
+                )
+
+        return entries
 
     def _is_good_quality_frame(self, frame, prev_frame, quality_percent=100):
         """
@@ -1932,6 +2064,10 @@ class VideoProcessor:
         if total_frames <= 0:
             return []
 
+        timeline_entries = self._build_timeline_target_entries(total_frames, fps, extraction_config)
+        if timeline_entries:
+            return [int(entry['target_index']) for entry in timeline_entries]
+
         if mode == 'fps':
             target_fps = float(extraction_config.get('target_fps', 1.0) or 1.0)
             frame_interval = max(1, int(fps / target_fps)) if fps > 0 else 1
@@ -1956,6 +2092,10 @@ class VideoProcessor:
         return deduped
 
     def _get_target_output_count(self, total_frames: int, fps: float, extraction_config: Dict[str, Any]) -> int:
+        timeline_entries = self._build_timeline_target_entries(total_frames, fps, extraction_config)
+        if timeline_entries:
+            return len(timeline_entries)
+
         mode = extraction_config.get('mode', 'frames')
         if mode == 'fps':
             target_fps = float(extraction_config.get('target_fps', 1.0) or 1.0)
@@ -2242,6 +2382,24 @@ class VideoProcessor:
     ) -> Dict[str, Any]:
         mode = extraction_config.get('mode', 'frames')
         smart_selection = extraction_config.get('smart_frame_selection', False)
+        timeline_entries = self._build_timeline_target_entries(total_frames, fps, extraction_config)
+
+        if timeline_entries:
+            return {
+                'mode': 'timeline_plan',
+                'smart_selection': smart_selection,
+                'target_output_count': len(timeline_entries),
+                'candidate_count': len(timeline_entries),
+                'target_fps': None,
+                'extraction_fps': None,
+                'sampling_filter': None,
+                'oversample_factor': 1,
+                'requested_oversample_factor': self._get_oversample_factor(extraction_config) if smart_selection else 1,
+                'candidate_density_ratio': 1.0,
+                'adaptive_frame_budget': None,
+                'timeline_segment_count': len(list((self._get_timeline_plan(extraction_config) or {}).get('segments') or [])),
+            }
+
         target_output_count = self._get_target_output_count(total_frames, fps, extraction_config)
         requested_oversample_factor = self._get_oversample_factor(extraction_config) if smart_selection else 1
         adaptive_budget = self._build_adaptive_frame_budget(

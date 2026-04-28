@@ -42,6 +42,9 @@ export interface Project {
   quality_mode?: string;
   iterations?: number;
   camera_model?: string;
+  video_capture_mode?: VideoCaptureMode;
+  video_timeline_plan?: VideoTimelinePlan;
+  video_timeline_summary?: VideoTimelineSummary;
   thumbnail_url?: string;
   auto_tuning_summary?: AutoTuningSummary;
   config?: {
@@ -333,9 +336,37 @@ export interface VideoExtractionSelection {
   fallback_used: boolean;
 }
 
+export type VideoCaptureMode = 'normal' | 'simulated_360_positions' | 'raw_360_mock';
+
+export interface VideoTimelineSegment {
+  id: string;
+  label: string;
+  start_time: number;
+  end_time: number;
+  sample_count: number;
+  position_index: number;
+}
+
+export interface VideoTimelinePlan {
+  version: 1;
+  source_file_name?: string;
+  duration?: number;
+  total_sample_count: number;
+  segments: VideoTimelineSegment[];
+}
+
+export interface VideoTimelineSummary {
+  segment_count?: number;
+  total_sample_count?: number;
+  duration_seconds?: number;
+  filename_pattern?: string;
+}
+
 export interface VideoExtractionDiagnostics {
   strategy?: string;
   mode?: string;
+  video_capture_mode?: VideoCaptureMode;
+  video_timeline_summary?: VideoTimelineSummary;
   candidate_count?: number;
   requested_targets?: number;
   saved_frames?: number;
@@ -506,6 +537,8 @@ export interface UploadConfig {
   camera_model?: string;
   sfm_backend?: 'cli' | 'pycolmap' | string;
   matcher_type?: 'auto' | 'sequential' | 'exhaustive' | 'vocab_tree' | string;
+  video_capture_mode?: VideoCaptureMode;
+  video_timeline_plan?: VideoTimelinePlan;
   extraction_mode?: string;
   max_frames?: number;
   target_fps?: number;
@@ -525,6 +558,7 @@ export interface UploadConfig {
   mixed_precision?: boolean;
   adaptive_pair_scheduling?: boolean;
   custom_params?: any;
+  [key: string]: any;
 }
 
 export interface UploadPolicyPreviewSignal {
@@ -681,7 +715,7 @@ export const api = {
     return `${API_BASE_URL}/api/download/${id}`;
   },
 
-  previewUploadPolicy: async (files: File[], config: any): Promise<UploadPolicyPreview> => {
+  previewUploadPolicy: async (files: File[], config: UploadConfig): Promise<UploadPolicyPreview> => {
     const response = await apiClient.post('/api/upload/policy_preview', {
       files: files.map((file) => ({ name: file.name, type: file.type, size: file.size })),
       input_type: files.some((file) => file.type.startsWith('video/'))
@@ -697,7 +731,7 @@ export const api = {
   },
 
   // Upload
-  upload: async (files: File[], config: any, onProgress?: (loaded: number, total: number) => void) => {
+  upload: async (files: File[], config: UploadConfig, onProgress?: (loaded: number, total: number) => void) => {
     const formData = new FormData();
 
     // Add files
@@ -712,6 +746,10 @@ export const api = {
     if (config.camera_model) formData.append('camera_model', config.camera_model);
     if (config.matcher_type && config.matcher_type !== 'auto') {
       formData.append('matcher_type', config.matcher_type);
+    }
+    if (config.video_capture_mode) formData.append('video_capture_mode', config.video_capture_mode);
+    if (config.video_timeline_plan) {
+      formData.append('video_timeline_plan', JSON.stringify(config.video_timeline_plan));
     }
     if (config.sfm_engine) formData.append('sfm_engine', config.sfm_engine);
     if (config.sfm_backend) formData.append('sfm_backend', config.sfm_backend);

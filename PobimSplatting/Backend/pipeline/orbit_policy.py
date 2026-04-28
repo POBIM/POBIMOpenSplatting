@@ -103,7 +103,10 @@ def analyze_capture_pattern(paths, config=None):
     frame_like_images = name_ordering['frame_like_images']
     ordered_frame_ratio = name_ordering['ordered_frame_ratio']
     input_type = (config or {}).get('input_type')
+    capture_mode = (config or {}).get('video_capture_mode')
     looks_like_video_input = input_type in {'video', 'mixed'} or ordered_frame_ratio >= 0.8
+    if capture_mode == 'simulated_360_positions':
+        looks_like_video_input = False
 
     return {
         'image_names': image_names,
@@ -120,6 +123,7 @@ def analyze_capture_pattern_from_names(image_names=None, config=None):
     name_ordering = summarize_name_ordering(normalized_names)
     frame_like_images = name_ordering['frame_like_images']
     input_type = (config or {}).get('input_type')
+    capture_mode = (config or {}).get('video_capture_mode')
 
     if normalized_names:
         ordered_frame_ratio = name_ordering['ordered_frame_ratio']
@@ -132,6 +136,8 @@ def analyze_capture_pattern_from_names(image_names=None, config=None):
         ordered_frame_ratio = 0.0
 
     looks_like_video_input = input_type in {'video', 'mixed'} or ordered_frame_ratio >= 0.8
+    if capture_mode == 'simulated_360_positions':
+        looks_like_video_input = False
 
     return {
         'image_names': normalized_names,

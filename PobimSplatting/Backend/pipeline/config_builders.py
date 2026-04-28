@@ -151,6 +151,9 @@ def build_upload_policy_preview(config, media_summary):
         capture_pattern, preview_config, estimated_num_images
     )
     orbit_safe_mode = orbit_safe_policy is not None
+    preferred_matcher_type = normalize_matcher_type(preview_config.get("matcher_type"))
+    if preview_config.get("video_capture_mode") == "simulated_360_positions" and not preferred_matcher_type:
+        preferred_matcher_type = "exhaustive"
 
     colmap_cfg = get_colmap_config(
         max(estimated_num_images, 1),
@@ -158,9 +161,7 @@ def build_upload_policy_preview(config, media_summary):
         custom_params=preview_config
         if preview_config.get("quality_mode") == "custom"
         else preview_config,
-        preferred_matcher_type=normalize_matcher_type(
-            preview_config.get("matcher_type")
-        ),
+        preferred_matcher_type=preferred_matcher_type,
         orbit_safe_mode=orbit_safe_mode,
         orbit_safe_policy=orbit_safe_policy,
     )
@@ -1711,12 +1712,21 @@ def get_colmap_config_for_pipeline(paths, config, project_id=None):
             f"🛡️ Orbit-safe reconstruction policy enabled: {orbit_safe_reason}",
         )
 
+    preferred_matcher_type = normalize_matcher_type(config.get("matcher_type"))
+    if config.get("video_capture_mode") == "simulated_360_positions" and not preferred_matcher_type:
+        preferred_matcher_type = "exhaustive"
+        if project_id:
+            append_log_line(
+                project_id,
+                "📍 Simulated 360 capture: forcing exhaustive matching so station-sampled frames are compared across all pairs",
+            )
+
     colmap_config = get_colmap_config(
         num_images,
         project_id,
         quality_mode,
         custom_params if custom_params else None,
-        normalize_matcher_type(config.get("matcher_type")),
+        preferred_matcher_type,
         orbit_safe_mode,
         orbit_safe_policy,
     )

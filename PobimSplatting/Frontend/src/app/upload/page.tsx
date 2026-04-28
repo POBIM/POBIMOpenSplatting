@@ -86,6 +86,7 @@ export default function UploadPage() {
     crop_size: 0  // Patch-based training (0 = disabled)
   });
   const usesGlobalSfm = config.sfm_engine === 'glomap';
+  const usesSimulated360Planner = videoCaptureMode === 'simulated_360_positions';
 
   // Custom parameters - starts with High quality (7000 iter) baseline
   const [customParams, setCustomParams] = useState({
@@ -643,28 +644,28 @@ export default function UploadPage() {
       });
     }
 
-    if (hasVideo && config.extraction_mode === 'fps' && config.target_fps >= 10) {
+    if (hasVideo && !usesSimulated360Planner && config.extraction_mode === 'fps' && config.target_fps >= 10) {
       rules.push({
         level: 'warning',
         text: `Target FPS is set to ${config.target_fps}. Very dense sampling can add near-duplicate frames and reduce policy confidence.`,
       });
     }
 
-    if (hasVideo && config.extraction_mode === 'fps' && config.target_fps > 0 && config.target_fps < 1) {
+    if (hasVideo && !usesSimulated360Planner && config.extraction_mode === 'fps' && config.target_fps > 0 && config.target_fps < 1) {
       rules.push({
         level: 'warning',
         text: `Target FPS is ${config.target_fps}. Sparse sampling may weaken bridge geometry across the orbit.`,
       });
     }
 
-    if (hasVideo && (config.extraction_mode === 'frames' || config.extraction_mode === 'target_count') && config.max_frames >= 400) {
+    if (hasVideo && !usesSimulated360Planner && (config.extraction_mode === 'frames' || config.extraction_mode === 'target_count') && config.max_frames >= 400) {
       rules.push({
         level: 'warning',
         text: `Maximum frames is ${config.max_frames}. This is dense enough to create redundancy and heavier matching load.`,
       });
     }
 
-    if (hasVideo && (config.extraction_mode === 'frames' || config.extraction_mode === 'target_count') && config.max_frames < 80) {
+    if (hasVideo && !usesSimulated360Planner && (config.extraction_mode === 'frames' || config.extraction_mode === 'target_count') && config.max_frames < 80) {
       rules.push({
         level: 'warning',
         text: `Maximum frames is only ${config.max_frames}. Sparse frame coverage may make loop closure and bridge recovery harder.`,
@@ -780,7 +781,7 @@ export default function UploadPage() {
       cancelled = true;
       window.clearTimeout(timeoutId);
     };
-  }, [files, config, timelinePlan, videoCaptureMode]);
+  }, [files, config, timelinePlan, usesSimulated360Planner, videoCaptureMode]);
 
   const getQualityInfo = (mode: string) => {
     const info = {
@@ -980,6 +981,7 @@ export default function UploadPage() {
               </div>
 
               {hasVideo && (
+                <>
                 <div className="border border-[color:var(--ink)] bg-[var(--paper-card)] p-3 shadow-[var(--shadow-sm)]">
                   <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                     <div>
@@ -1016,68 +1018,27 @@ export default function UploadPage() {
                   )}
 
                   {videoCaptureMode === 'simulated_360_positions' && (
-                    <div className="mt-3 space-y-3">
-                      {videoFiles.length !== 1 ? (
-                        <div className="border border-[color:var(--ink)] bg-[var(--warning-bg)] px-4 py-3 text-sm font-medium text-[var(--warning-text)]">
-                          Simulated 360 v1 รองรับวิดีโอทีละ 1 ไฟล์เท่านั้น ตอนนี้พบ {videoFiles.length} ไฟล์วิดีโอ
-                        </div>
-                      ) : (
-                        <VideoTimelinePlanner
-                          file={primaryVideoFile}
-                          value={timelinePlan}
-                          onChange={setTimelinePlan}
-                        />
-                      )}
-                    </div>
-                  )}
-
-                  {videoCaptureMode === 'raw_360_mock' && (
-                    <div className="mt-3 border border-[color:var(--ink)] bg-[var(--paper-muted)] px-4 py-3 text-sm text-[color:var(--text-secondary)]">
-                      360 Raw ยังเป็น mockup ในรอบนี้ จึงแสดงได้เฉพาะ state และ policy hint ฝั่ง UI ก่อน ส่วน pipeline backend จะถูกต่อในรอบถัดไป
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div className={`border p-2.5 shadow-[var(--shadow-sm)] ${resolvedExpectedPolicy.tone}`} style={{ borderColor: 'var(--ink)' }}>
-                <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                  <div>
-                      <p className="brutal-label opacity-70">
-                        <TooltipLabel tip={resolvedExpectedPolicy.summary}>Policy</TooltipLabel>
-                      </p>
-                      <div className="mt-1 flex items-center gap-2">
-                        <div className={`flex h-8 w-8 items-center justify-center border shadow-[var(--shadow-sm)] ${resolvedExpectedPolicy.badgeTone}`}>
-                          <PolicyIcon className="h-4 w-4" />
-                        </div>
+                    <div className="mt-4 brutal-card-muted p-3 text-left">
+                      <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                         <div>
-                          <h3 className="brutal-h3">{resolvedExpectedPolicy.title}</h3>
-                          <p className="text-[11px] font-medium uppercase tracking-wide opacity-70">
-                            {policyPreviewLoading ? 'Refreshing backend heuristic...' : 'Resolved from backend preview heuristic'}
+                          <p className="brutal-label">Simulated 360 Timeline Planner</p>
+                          <p className="text-sm text-[color:var(--text-secondary)]">
+                            แบ่งวิดีโอเป็นตำแหน่งย่อย แล้วกำหนดต่อช่วงได้ว่าจะ export เป็นจำนวนรูปคงที่หรือ FPS ภายในช่วงนั้น
                           </p>
                         </div>
+                        <div className="text-xs font-bold uppercase tracking-[0.12em] text-[color:var(--text-secondary)]">
+                          export pattern: pos001_0001.jpg
+                        </div>
                       </div>
+                      <VideoTimelinePlanner
+                        file={primaryVideoFile}
+                        value={timelinePlan}
+                        onChange={setTimelinePlan}
+                        disabled={uploading}
+                      />
                     </div>
-                    <div className="flex flex-wrap gap-2 text-xs font-medium">
-                      <span className={`border px-2 py-1 shadow-[2px_2px_0_var(--ink)] ${resolvedExpectedPolicy.badgeTone}`}>{resolvedExpectedPolicy.profileBadge}</span>
-                      <span className="border border-[color:var(--ink)] bg-white/70 px-2 py-1" title="Feature matcher">M: {resolvedExpectedPolicy.matcherBadge}</span>
-                      <span className="border border-[color:var(--ink)] bg-white/70 px-2 py-1" title="SfM engine">E: {resolvedExpectedPolicy.engineBadge}</span>
-                      {resolvedEstimatedNumImages ? (
-                        <span className="border border-[color:var(--ink)] bg-white/70 px-2 py-1" title="Estimated frames/images">~{resolvedEstimatedNumImages}</span>
-                      ) : null}
-                      {videoCaptureMode === 'simulated_360_positions' && timelinePlan ? (
-                        <span className="border border-[color:var(--ink)] bg-white/70 px-2 py-1" title="Timeline positions">stations {timelinePlan.segments.length}</span>
-                      ) : null}
-                    </div>
-                  </div>
-                  {policyPreviewLoading && (
-                  <div className="mt-3 space-y-2 border border-[color:var(--ink)] bg-white/40 p-3 animate-pulse">
-                    <div className="h-2 w-32 bg-white/80" />
-                    <div className="h-3 w-full bg-white/70" />
-                    <div className="h-3 w-4/5 bg-white/60" />
-                  </div>
-                )}
-                <div className="mt-2 border border-[color:var(--ink)] bg-white/70 p-2.5 text-gray-900 shadow-[var(--shadow-sm)]">
-                  <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                  )}
+                  <div className="mt-3 flex items-start justify-between gap-3">
                     <div>
                       <p className="brutal-label">
                         <TooltipLabel tip={`Signals: ${resolvedConfidenceSignals.map((signal) => `${signal.label}: ${signal.detail}`).join(' | ')}`}>
@@ -1122,13 +1083,13 @@ export default function UploadPage() {
                       {usesGlobalSfm && (
                         <span className="border border-[color:var(--ink)] bg-white px-2 py-1">backend: {config.sfm_backend}</span>
                       )}
-                      {hasVideo && config.extraction_mode === 'fps' && (
+                      {hasVideo && !usesSimulated360Planner && config.extraction_mode === 'fps' && (
                         <span className="border border-[color:var(--ink)] bg-white px-2 py-1">target fps: {config.target_fps}</span>
                       )}
-                      {hasVideo && config.extraction_mode === 'target_count' && (
+                      {hasVideo && !usesSimulated360Planner && config.extraction_mode === 'target_count' && (
                         <span className="border border-[color:var(--ink)] bg-white px-2 py-1">target frames: {config.max_frames}</span>
                       )}
-                      {hasVideo && config.extraction_mode === 'frames' && (
+                      {hasVideo && !usesSimulated360Planner && config.extraction_mode === 'frames' && (
                         <span className="border border-[color:var(--ink)] bg-white px-2 py-1">max frames: {config.max_frames}</span>
                       )}
                       {hasVideo && (
@@ -1139,7 +1100,7 @@ export default function UploadPage() {
                       <span className="border border-[color:var(--ink)] bg-white px-2 py-1">
                         sharpness boost: {config.colmap_sharpness_boost > 0 ? `${config.colmap_sharpness_boost}%` : 'off'}
                       </span>
-                      {hasVideo && (
+                      {hasVideo && !usesSimulated360Planner && (
                         <span className="border border-[color:var(--ink)] bg-white px-2 py-1">
                           chunk workers: {config.ffmpeg_cpu_workers}
                         </span>
@@ -1357,7 +1318,8 @@ export default function UploadPage() {
                   </div>
                 </details>
                 </details>
-              </div>
+                </>
+              )}
 
               {/* Advanced Options Accordion */}
               <Accordion 
@@ -1773,68 +1735,76 @@ export default function UploadPage() {
                         <FileVideo className="h-5 w-5 mr-2" />
                         Video Frames
                       </h4>
-                      <div className="grid md:grid-cols-2 gap-4">
-                        <div>
-                          <p className="brutal-label mb-2">
-                            <TooltipLabel tip="Choose how the backend samples frames from video. Target FPS is the default.">
-                              Mode
-                            </TooltipLabel>
-                          </p>
-                          <select
-                            value={config.extraction_mode}
-                            onChange={(e) => setConfig({ ...config, extraction_mode: e.target.value })}
-                            className="brutal-select"
-                          >
-                            <option value="fps">Target FPS</option>
-                            <option value="target_count">Target Frame Count</option>
-                            <option value="frames">Legacy Max Frame Limit</option>
-                          </select>
+                      {usesSimulated360Planner ? (
+                        <div className="border border-[color:var(--ink)] bg-gradient-to-r from-amber-50 to-orange-50 p-3 text-sm text-gray-900">
+                          <p className="text-xs font-black uppercase tracking-[0.14em] text-gray-700">Timeline driven sampling</p>
+                          <p className="mt-1">Simulated 360 uses the planner above instead of the global frame mode. Each segment can use a fixed image count or an FPS target.</p>
+                          <p className="mt-2 text-xs text-gray-700">Sharp-frame scoring and replacement search radius below still apply, so blurred turning frames can be swapped with better nearby candidates.</p>
                         </div>
-                        <div>
-                          {config.extraction_mode === 'frames' ? (
-                            <div>
-                              <p className="brutal-label mb-2">Max Frames</p>
-                              <input
-                                type="number"
-                                value={config.max_frames}
-                                onChange={(e) => setConfig({ ...config, max_frames: Math.max(1, parseInt(e.target.value, 10) || 1) })}
-                                min="1"
-                                step="1"
-                                className="brutal-input"
-                              />
-                            </div>
-                          ) : config.extraction_mode === 'target_count' ? (
-                            <div>
-                              <p className="brutal-label mb-2">Target Frame Count</p>
-                              <input
-                                type="number"
-                                value={config.max_frames}
-                                onChange={(e) => setConfig({ ...config, max_frames: Math.max(1, parseInt(e.target.value, 10) || 1) })}
-                                min="1"
-                                step="1"
-                                className="brutal-input"
-                                placeholder="เช่น 150 / 200 / 300"
-                              />
-                            </div>
-                          ) : (
-                            <div>
-                              <p className="brutal-label mb-2">Target FPS</p>
-                              <select
-                                value={config.target_fps}
-                                onChange={(e) => setConfig({ ...config, target_fps: parseFloat(e.target.value) })}
-                                className="brutal-select"
-                              >
-                                <option value={0.5}>0.5 FPS (1 frame every 2 seconds)</option>
-                                <option value={1}>1 FPS (1 frame per second)</option>
-                                <option value={2}>2 FPS (2 frames per second)</option>
-                                <option value={5}>5 FPS (5 frames per second)</option>
-                                <option value={10}>10 FPS (High density)</option>
-                                <option value={15}>15 FPS (Maximum density)</option>
-                              </select>
-                            </div>
-                          )}
+                      ) : (
+                        <div className="grid md:grid-cols-2 gap-4">
+                          <div>
+                            <p className="brutal-label mb-2">
+                              <TooltipLabel tip="Choose how the backend samples frames from video. Target FPS is the default.">
+                                Mode
+                              </TooltipLabel>
+                            </p>
+                            <select
+                              value={config.extraction_mode}
+                              onChange={(e) => setConfig({ ...config, extraction_mode: e.target.value })}
+                              className="brutal-select"
+                            >
+                              <option value="fps">Target FPS</option>
+                              <option value="target_count">Target Frame Count</option>
+                              <option value="frames">Legacy Max Frame Limit</option>
+                            </select>
+                          </div>
+                          <div>
+                            {config.extraction_mode === 'frames' ? (
+                              <div>
+                                <p className="brutal-label mb-2">Max Frames</p>
+                                <input
+                                  type="number"
+                                  value={config.max_frames}
+                                  onChange={(e) => setConfig({ ...config, max_frames: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+                                  min="1"
+                                  step="1"
+                                  className="brutal-input"
+                                />
+                              </div>
+                            ) : config.extraction_mode === 'target_count' ? (
+                              <div>
+                                <p className="brutal-label mb-2">Target Frame Count</p>
+                                <input
+                                  type="number"
+                                  value={config.max_frames}
+                                  onChange={(e) => setConfig({ ...config, max_frames: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+                                  min="1"
+                                  step="1"
+                                  className="brutal-input"
+                                  placeholder="เช่น 150 / 200 / 300"
+                                />
+                              </div>
+                            ) : (
+                              <div>
+                                <p className="brutal-label mb-2">Target FPS</p>
+                                <select
+                                  value={config.target_fps}
+                                  onChange={(e) => setConfig({ ...config, target_fps: parseFloat(e.target.value) })}
+                                  className="brutal-select"
+                                >
+                                  <option value={0.5}>0.5 FPS (1 frame every 2 seconds)</option>
+                                  <option value={1}>1 FPS (1 frame per second)</option>
+                                  <option value={2}>2 FPS (2 frames per second)</option>
+                                  <option value={5}>5 FPS (5 frames per second)</option>
+                                  <option value={10}>10 FPS (High density)</option>
+                                  <option value={15}>15 FPS (Maximum density)</option>
+                                </select>
+                              </div>
+                            )}
+                          </div>
                         </div>
-                      </div>
+                      )}
                       <div className="mt-3 border border-[color:var(--ink)] bg-gradient-to-r from-purple-50 to-indigo-50 p-3">
                         <label className="flex items-center justify-between cursor-pointer">
                           <div className="flex items-center">
@@ -1906,6 +1876,7 @@ export default function UploadPage() {
                           <p className="mt-1 text-xs text-gray-500">Needs oversample</p>
                         )}
                       </div>
+                      {!usesSimulated360Planner && (
                       <div className="mt-3">
                         <p className="brutal-label mb-2">
                           <TooltipLabel tip={`Default is ${DEFAULT_CPU_CHUNK_WORKERS}. Higher values use more CPU and RAM.`}>
@@ -1938,6 +1909,7 @@ export default function UploadPage() {
                           ))}
                         </datalist>
                       </div>
+                      )}
                       <div className="mt-3">
                         <p className="brutal-label mb-2">
                           <TooltipLabel tip={`Candidate pool estimate: ${estimatedCandidatePool}.`}>

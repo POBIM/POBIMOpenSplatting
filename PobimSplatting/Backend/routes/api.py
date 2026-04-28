@@ -99,14 +99,32 @@ def _parse_video_timeline_plan(raw_value):
         try:
             start_time = float(segment.get("start_time"))
             end_time = float(segment.get("end_time"))
-            sample_count = int(segment.get("sample_count"))
         except (TypeError, ValueError) as exc:
             raise ValueError(f"Invalid timeline segment at index {index}") from exc
 
         if end_time <= start_time:
             raise ValueError(f"Timeline segment {index} must have end_time > start_time")
-        if sample_count <= 0:
-            raise ValueError(f"Timeline segment {index} must have sample_count > 0")
+
+        sampling_mode = str(segment.get("sampling_mode") or "count").strip().lower()
+        if sampling_mode not in {"count", "fps"}:
+            raise ValueError(f"Timeline segment {index} has an invalid sampling_mode")
+
+        target_fps = None
+        if sampling_mode == "fps":
+            try:
+                target_fps = float(segment.get("target_fps"))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"Timeline segment {index} must have target_fps > 0") from exc
+            if target_fps <= 0:
+                raise ValueError(f"Timeline segment {index} must have target_fps > 0")
+            sample_count = max(1, int(math.floor((end_time - start_time) * target_fps)) + 1)
+        else:
+            try:
+                sample_count = int(segment.get("sample_count"))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"Timeline segment {index} must have sample_count > 0") from exc
+            if sample_count <= 0:
+                raise ValueError(f"Timeline segment {index} must have sample_count > 0")
 
         total_sample_count += sample_count
         normalized_segments.append(
@@ -115,7 +133,9 @@ def _parse_video_timeline_plan(raw_value):
                 "label": str(segment.get("label") or f"Position {index}"),
                 "start_time": round(start_time, 4),
                 "end_time": round(end_time, 4),
+                "sampling_mode": sampling_mode,
                 "sample_count": sample_count,
+                "target_fps": round(target_fps, 4) if target_fps is not None else None,
                 "position_index": int(segment.get("position_index") or index),
             }
         )

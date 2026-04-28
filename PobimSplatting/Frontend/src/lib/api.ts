@@ -337,13 +337,16 @@ export interface VideoExtractionSelection {
 }
 
 export type VideoCaptureMode = 'normal' | 'simulated_360_positions' | 'raw_360_mock';
+export type VideoTimelineSamplingMode = 'count' | 'fps';
 
 export interface VideoTimelineSegment {
   id: string;
   label: string;
   start_time: number;
   end_time: number;
+  sampling_mode?: VideoTimelineSamplingMode;
   sample_count: number;
+  target_fps?: number;
   position_index: number;
 }
 

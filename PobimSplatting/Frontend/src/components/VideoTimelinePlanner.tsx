@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, Clock3, MapPinned, Plus, Trash2 } from 'lucide-react';
-import type { VideoTimelinePlan, VideoTimelineSegment } from '@/lib/api';
+import type { VideoTimelinePlan, VideoTimelineSamplingMode, VideoTimelineSegment } from '@/lib/api';
 
 type VideoTimelinePlannerProps = {
   file: File | null;
@@ -15,10 +15,13 @@ type SegmentDraft = {
   label: string;
   start_time: number;
   end_time: number;
+  sampling_mode: VideoTimelineSamplingMode;
   sample_count: number;
+  target_fps: number;
 };
 
 const DEFAULT_SAMPLE_COUNT = 12;
+const DEFAULT_SEGMENT_FPS = 2;
 
 function formatSeconds(value: number) {
   if (!Number.isFinite(value) || value <= 0) {
@@ -44,6 +47,18 @@ function makeSegmentId() {
   return `segment-${Date.now()}-${Math.round(Math.random() * 1_000_000)}`;
 }
 
+function getSegmentDuration(startTime: number, endTime: number) {
+  return Math.max(0, endTime - startTime);
+}
+
+function getResolvedSampleCount(segment: Pick<VideoTimelineSegment, 'start_time' | 'end_time' | 'sampling_mode' | 'sample_count' | 'target_fps'>) {
+  if (segment.sampling_mode === 'fps') {
+    const targetFps = Math.max(0.1, Number(segment.target_fps) || DEFAULT_SEGMENT_FPS);
+    return Math.max(1, Math.floor(getSegmentDuration(segment.start_time, segment.end_time) * targetFps) + 1);
+  }
+  return Math.max(1, Math.round(Number(segment.sample_count) || 1));
+}
+
 function makeDraft(duration: number, currentTime: number, segmentCount: number): SegmentDraft {
   const clampedCurrent = clampTime(currentTime, duration);
   const defaultStart = clampTime(Math.max(0, clampedCurrent - 2), duration);
@@ -53,16 +68,31 @@ function makeDraft(duration: number, currentTime: number, segmentCount: number):
     label: `Position ${segmentCount + 1}`,
     start_time: defaultStart,
     end_time: Math.max(defaultStart + 0.5, defaultEnd),
+    sampling_mode: 'count',
     sample_count: DEFAULT_SAMPLE_COUNT,
+    target_fps: DEFAULT_SEGMENT_FPS,
   };
 }
 
 function normalizeSegments(segments: VideoTimelineSegment[]) {
-  return segments.map((segment, index) => ({
-    ...segment,
-    position_index: index + 1,
-    label: segment.label || `Position ${index + 1}`,
-  }));
+  return segments.map((segment, index) => {
+    const samplingMode = segment.sampling_mode === 'fps' ? 'fps' : 'count';
+    const normalized: VideoTimelineSegment = {
+      ...segment,
+      position_index: index + 1,
+      label: segment.label || `Position ${index + 1}`,
+      sampling_mode: samplingMode,
+      sample_count: getResolvedSampleCount(segment),
+    };
+
+    if (samplingMode === 'fps') {
+      normalized.target_fps = Math.max(0.1, Number(segment.target_fps) || DEFAULT_SEGMENT_FPS);
+    } else {
+      delete normalized.target_fps;
+    }
+
+    return normalized;
+  });
 }
 
 function buildPlan(fileName: string, duration: number, segments: VideoTimelineSegment[]): VideoTimelinePlan {
@@ -71,7 +101,7 @@ function buildPlan(fileName: string, duration: number, segments: VideoTimelineSe
     version: 1,
     source_file_name: fileName,
     duration,
-    total_sample_count: normalizedSegments.reduce((sum, segment) => sum + segment.sample_count, 0),
+    total_sample_count: normalizedSegments.reduce((sum, segment) => sum + getResolvedSampleCount(segment), 0),
     segments: normalizedSegments,
   };
 }
@@ -123,7 +153,13 @@ export default function VideoTimelinePlanner({ file, value, onChange, disabled =
           setDuration(value.duration);
         }
         setDraft((current) => {
-          if (current.label.trim() || current.sample_count !== DEFAULT_SAMPLE_COUNT || current.start_time > 0 || current.end_time > 0) {
+          if (
+            current.label.trim()
+            || current.sample_count !== DEFAULT_SAMPLE_COUNT
+            || current.target_fps !== DEFAULT_SEGMENT_FPS
+            || current.start_time > 0
+            || current.end_time > 0
+          ) {
             return current;
           }
           return makeDraft(value.duration ?? 0, currentTime, value.segments?.length ?? 0);
@@ -157,8 +193,9 @@ export default function VideoTimelinePlanner({ file, value, onChange, disabled =
     onChange(nextPlan);
   }, [duration, file, onChange, segments]);
 
-  const totalSampleCount = segments.reduce((sum, segment) => sum + segment.sample_count, 0);
-  const canAddSegment = !disabled && file && duration > 0 && draft.end_time > draft.start_time && draft.sample_count > 0;
+  const totalSampleCount = segments.reduce((sum, segment) => sum + getResolvedSampleCount(segment), 0);
+  const draftSampleCount = getResolvedSampleCount(draft);
+  const canAddSegment = !disabled && file && duration > 0 && draft.end_time > draft.start_time && draftSampleCount > 0;
 
   const updateDraftTime = (field: 'start_time' | 'end_time', nextValue: number) => {
     const clampedValue = clampTime(nextValue, duration);
@@ -186,7 +223,9 @@ export default function VideoTimelinePlanner({ file, value, onChange, disabled =
         label: draft.label.trim() || `Position ${current.length + 1}`,
         start_time: Number(draft.start_time.toFixed(3)),
         end_time: Number(draft.end_time.toFixed(3)),
-        sample_count: Math.max(1, Math.round(draft.sample_count)),
+        sampling_mode: draft.sampling_mode,
+        sample_count: draftSampleCount,
+        target_fps: draft.sampling_mode === 'fps' ? Number(draft.target_fps.toFixed(3)) : undefined,
         position_index: current.length + 1,
       },
     ]);
@@ -213,7 +252,7 @@ export default function VideoTimelinePlanner({ file, value, onChange, disabled =
 
   const updateSegment = (
     segmentId: string,
-    field: 'label' | 'start_time' | 'end_time' | 'sample_count',
+    field: 'label' | 'start_time' | 'end_time' | 'sample_count' | 'sampling_mode' | 'target_fps',
     rawValue: string | number,
   ) => {
     setSegments((current) => current.map((segment) => {
@@ -229,6 +268,24 @@ export default function VideoTimelinePlanner({ file, value, onChange, disabled =
         return {
           ...segment,
           sample_count: Math.max(1, Number.parseInt(String(rawValue), 10) || 1),
+        };
+      }
+
+      if (field === 'sampling_mode') {
+        const nextMode = rawValue === 'fps' ? 'fps' : 'count';
+        return {
+          ...segment,
+          sampling_mode: nextMode,
+          target_fps: nextMode === 'fps'
+            ? Math.max(0.1, Number(segment.target_fps) || DEFAULT_SEGMENT_FPS)
+            : undefined,
+        };
+      }
+
+      if (field === 'target_fps') {
+        return {
+          ...segment,
+          target_fps: Math.max(0.1, Number.parseFloat(String(rawValue)) || DEFAULT_SEGMENT_FPS),
         };
       }
 
@@ -333,7 +390,7 @@ export default function VideoTimelinePlanner({ file, value, onChange, disabled =
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <p className="brutal-label">Segment Draft</p>
-                <p className="text-sm text-[color:var(--text-secondary)]">กำหนดช่วงเวลาและจำนวนรูปที่ต้องการเฉลี่ยออกจากช่วงนั้น</p>
+                <p className="text-sm text-[color:var(--text-secondary)]">กำหนดช่วงเวลาแล้วเลือกได้ว่าจะใส่เป็นจำนวนรูปหรือ FPS ต่อช่วง</p>
               </div>
               <span className="border border-[color:var(--ink)] bg-[var(--paper-muted)] px-2 py-1 text-xs font-bold uppercase tracking-[0.12em]">flat export: posNNN_XXXX.jpg</span>
             </div>
@@ -390,24 +447,61 @@ export default function VideoTimelinePlanner({ file, value, onChange, disabled =
 
               <div className="grid gap-3 md:grid-cols-2">
                 <div>
-                  <label className="brutal-label mb-1.5 inline-block">Sample Count</label>
-                  <input
-                    type="number"
-                    min={1}
-                    step={1}
-                    value={draft.sample_count}
+                  <label className="brutal-label mb-1.5 inline-block">Sampling Mode</label>
+                  <select
+                    value={draft.sampling_mode}
                     onChange={(event) => setDraft((current) => ({
                       ...current,
-                      sample_count: Math.max(1, Number.parseInt(event.target.value, 10) || 1),
+                      sampling_mode: event.target.value === 'fps' ? 'fps' : 'count',
+                      target_fps: event.target.value === 'fps'
+                        ? Math.max(0.1, current.target_fps || DEFAULT_SEGMENT_FPS)
+                        : current.target_fps,
                     }))}
-                    className="brutal-input"
+                    className="brutal-select"
                     disabled={disabled || !file}
-                  />
+                  >
+                    <option value="count">Fixed image count</option>
+                    <option value="fps">FPS within this segment</option>
+                  </select>
                 </div>
-                <div className="border border-[color:var(--ink)] bg-[var(--paper-muted)] px-3 py-2 text-sm text-[color:var(--text-secondary)]">
+                <div>
+                  <label className="brutal-label mb-1.5 inline-block">{draft.sampling_mode === 'fps' ? 'Target FPS' : 'Sample Count'}</label>
+                  {draft.sampling_mode === 'fps' ? (
+                    <input
+                      type="number"
+                      min={0.1}
+                      step={0.1}
+                      value={draft.target_fps}
+                      onChange={(event) => setDraft((current) => ({
+                        ...current,
+                        target_fps: Math.max(0.1, Number.parseFloat(event.target.value) || DEFAULT_SEGMENT_FPS),
+                      }))}
+                      className="brutal-input"
+                      disabled={disabled || !file}
+                    />
+                  ) : (
+                    <input
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={draft.sample_count}
+                      onChange={(event) => setDraft((current) => ({
+                        ...current,
+                        sample_count: Math.max(1, Number.parseInt(event.target.value, 10) || 1),
+                      }))}
+                      className="brutal-input"
+                      disabled={disabled || !file}
+                    />
+                  )}
+                </div>
+                <div className="border border-[color:var(--ink)] bg-[var(--paper-muted)] px-3 py-2 text-sm text-[color:var(--text-secondary)] md:col-span-2">
                   <p className="brutal-label mb-1">Segment Preview</p>
                   <p>{formatSeconds(draft.start_time)} - {formatSeconds(draft.end_time)}</p>
-                  <p className="mt-1 font-bold text-[var(--ink)]">{Math.max(1, draft.sample_count)} frames</p>
+                  <p className="mt-1 font-bold text-[var(--ink)]">
+                    {draft.sampling_mode === 'fps'
+                      ? `${draft.target_fps.toFixed(1)} fps -> ${draftSampleCount} images`
+                      : `${draftSampleCount} images`}
+                  </p>
                 </div>
               </div>
 
@@ -448,6 +542,7 @@ export default function VideoTimelinePlanner({ file, value, onChange, disabled =
         ) : (
           segments.map((segment, index) => {
             const segmentCode = `pos${String(index + 1).padStart(3, '0')}`;
+            const resolvedSampleCount = getResolvedSampleCount(segment);
             return (
               <div key={segment.id} className="border border-[color:var(--ink)] bg-white p-3 shadow-[var(--shadow-sm)]">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -458,7 +553,11 @@ export default function VideoTimelinePlanner({ file, value, onChange, disabled =
                     </div>
                     <div className="mt-2 flex flex-wrap gap-2 text-xs font-medium text-[color:var(--text-secondary)]">
                       <span className="border border-[color:var(--ink)] bg-[var(--paper-card)] px-2 py-1">{formatSeconds(segment.start_time)} - {formatSeconds(segment.end_time)}</span>
-                      <span className="border border-[color:var(--ink)] bg-[var(--paper-card)] px-2 py-1">{segment.sample_count} images</span>
+                      <span className="border border-[color:var(--ink)] bg-[var(--paper-card)] px-2 py-1">
+                        {segment.sampling_mode === 'fps'
+                          ? `${(segment.target_fps ?? DEFAULT_SEGMENT_FPS).toFixed(1)} fps -> ${resolvedSampleCount} images`
+                          : `${resolvedSampleCount} images`}
+                      </span>
                       <span className="border border-[color:var(--ink)] bg-[var(--paper-card)] px-2 py-1">preview: {segmentCode}_0001.jpg</span>
                     </div>
                   </div>
@@ -479,7 +578,7 @@ export default function VideoTimelinePlanner({ file, value, onChange, disabled =
                   </div>
                 </div>
 
-                <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
                   <div>
                     <label className="brutal-label mb-1.5 inline-block">Label</label>
                     <input
@@ -517,16 +616,40 @@ export default function VideoTimelinePlanner({ file, value, onChange, disabled =
                     />
                   </div>
                   <div>
-                    <label className="brutal-label mb-1.5 inline-block">Frames In This Segment</label>
-                    <input
-                      type="number"
-                      min={1}
-                      step={1}
-                      value={segment.sample_count}
-                      onChange={(event) => updateSegment(segment.id, 'sample_count', event.target.value)}
-                      className="brutal-input"
+                    <label className="brutal-label mb-1.5 inline-block">Sampling Mode</label>
+                    <select
+                      value={segment.sampling_mode === 'fps' ? 'fps' : 'count'}
+                      onChange={(event) => updateSegment(segment.id, 'sampling_mode', event.target.value)}
+                      className="brutal-select"
                       disabled={disabled}
-                    />
+                    >
+                      <option value="count">Fixed image count</option>
+                      <option value="fps">FPS within segment</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="brutal-label mb-1.5 inline-block">{segment.sampling_mode === 'fps' ? 'Target FPS' : 'Frames In This Segment'}</label>
+                    {segment.sampling_mode === 'fps' ? (
+                      <input
+                        type="number"
+                        min={0.1}
+                        step={0.1}
+                        value={segment.target_fps ?? DEFAULT_SEGMENT_FPS}
+                        onChange={(event) => updateSegment(segment.id, 'target_fps', event.target.value)}
+                        className="brutal-input"
+                        disabled={disabled}
+                      />
+                    ) : (
+                      <input
+                        type="number"
+                        min={1}
+                        step={1}
+                        value={segment.sample_count}
+                        onChange={(event) => updateSegment(segment.id, 'sample_count', event.target.value)}
+                        className="brutal-input"
+                        disabled={disabled}
+                      />
+                    )}
                   </div>
                 </div>
               </div>

@@ -21,6 +21,7 @@ import json
 import tempfile
 import shutil
 import time
+import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, Callable, List, Dict, Any
 
@@ -1647,6 +1648,24 @@ class VideoProcessor:
 
         sampling_plan = self._build_sampling_plan(total_frames, fps, extraction_config)
         timeline_entries = self._build_timeline_target_entries(total_frames, fps, extraction_config)
+        if timeline_entries and extraction_config.get('video_capture_mode') == 'simulated_360_positions':
+            cap.release()
+            return self._extract_timeline_groups_cpu(
+                video_path,
+                output_dir,
+                extraction_config,
+                progress_callback,
+                total_frames=total_frames,
+                fps=fps,
+                target_width=target_width,
+                target_height=target_height,
+                need_scale=need_scale,
+                jpeg_quality=jpeg_quality,
+                quality_percent=extraction_config.get('quality', 100),
+                search_radius=max(1, int(extraction_config.get('replacement_search_radius', 4))),
+                sampling_plan=sampling_plan,
+                timeline_entries=timeline_entries,
+            )
         extracted_frames = []
         saved_count = 0
         prev_frame = None
@@ -1798,6 +1817,184 @@ class VideoProcessor:
         }, sampling_plan)
 
         logger.info(f"CPU extraction complete: {len(extracted_frames)} frames from {total_frames} total")
+        return extracted_frames
+
+    def _extract_timeline_groups_cpu(
+        self,
+        video_path,
+        output_dir,
+        extraction_config,
+        progress_callback,
+        *,
+        total_frames: int,
+        fps: float,
+        target_width: int,
+        target_height: int,
+        need_scale: bool,
+        jpeg_quality: int,
+        quality_percent: int,
+        search_radius: int,
+        sampling_plan: Dict[str, Any],
+        timeline_entries: List[Dict[str, Any]],
+    ):
+        grouped_entries: Dict[int, List[Dict[str, Any]]] = {}
+        for entry in timeline_entries:
+            grouped_entries.setdefault(int(entry.get('position_index') or 0), []).append(entry)
+
+        requested_workers = int(extraction_config.get('ffmpeg_cpu_workers') or 0)
+        max_group_workers = requested_workers if requested_workers > 0 else (os.cpu_count() or 4)
+        group_workers = max(1, min(max_group_workers, len(grouped_entries)))
+
+        logger.info(
+            f"📍 Simulated 360 CPU extraction: processing {len(grouped_entries)} position groups with {group_workers} workers while preserving sharp-frame scoring"
+        )
+
+        def save_frame(frame_rgb, frame_path):
+            pil_image = Image.fromarray(frame_rgb)
+            pil_image.save(frame_path, 'JPEG', quality=jpeg_quality, optimize=True)
+            return str(frame_path)
+
+        def process_group(position_index: int, entries: List[Dict[str, Any]]):
+            cap = cv2.VideoCapture(str(video_path))
+            if not cap.isOpened():
+                raise RuntimeError(f"Could not open video for group {position_index}: {video_path}")
+
+            prev_frame = None
+            group_results = []
+            try:
+                for entry in entries:
+                    target_index = int(entry['target_index'])
+                    selection = self._select_best_frame_near_target(
+                        cap,
+                        target_index,
+                        total_frames,
+                        prev_frame,
+                        quality_percent,
+                        search_radius,
+                    )
+
+                    frame = selection['frame']
+                    if frame is None:
+                        logger.warning(f"Could not recover a usable frame near target index {target_index}")
+                        continue
+
+                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    if need_scale:
+                        frame_rgb = cv2.resize(
+                            frame_rgb,
+                            (target_width, target_height),
+                            interpolation=cv2.INTER_LANCZOS4,
+                        )
+
+                    frame_path = output_dir / entry['image_name']
+                    saved_path = save_frame(frame_rgb, frame_path)
+                    selected_index = int(selection['selected_index'])
+                    source_time_seconds = (selected_index / fps) if fps > 0 else None
+                    group_results.append({
+                        'saved_path': saved_path,
+                        'selection': selection,
+                        'frame_manifest': {
+                            'image_name': entry['image_name'],
+                            'source_video_path': str(video_path),
+                            'source_frame_index': selected_index,
+                            'source_time_seconds': round(float(source_time_seconds), 6) if source_time_seconds is not None else None,
+                            'accepted': bool(selection['accepted']),
+                            'sharpness': round(float(selection['metrics']['sharpness']), 4),
+                            'target_time_seconds': entry.get('target_time_seconds'),
+                            'segment_id': entry.get('segment_id'),
+                            'segment_label': entry.get('segment_label'),
+                            'segment_start_time': entry.get('segment_start_time'),
+                            'segment_end_time': entry.get('segment_end_time'),
+                            'sampling_mode': entry.get('sampling_mode'),
+                            'target_fps': entry.get('target_fps'),
+                            'position_index': entry.get('position_index'),
+                            'sample_index': entry.get('sample_index'),
+                        },
+                    })
+                    prev_frame = frame.copy()
+            finally:
+                cap.release()
+
+            return {
+                'position_index': position_index,
+                'results': group_results,
+            }
+
+        extracted_frames: List[str] = []
+        selection_records = []
+        frame_manifest = []
+        rejected_candidates = 0
+        replaced_targets = 0
+        completed_saves = 0
+        expected_total = len(timeline_entries)
+
+        with ThreadPoolExecutor(max_workers=group_workers) as executor:
+            futures = [
+                executor.submit(process_group, position_index, entries)
+                for position_index, entries in sorted(grouped_entries.items())
+            ]
+            for future in as_completed(futures):
+                group_payload = future.result()
+                for item in group_payload['results']:
+                    extracted_frames.append(item['saved_path'])
+                    selection = item['selection']
+                    selection_records.append(selection)
+                    rejected_candidates += selection['rejected_candidates']
+                    if selection['selected_index'] != selection['target_index']:
+                        replaced_targets += 1
+                    frame_manifest.append(item['frame_manifest'])
+                    completed_saves += 1
+                    if progress_callback and (completed_saves % 5 == 0 or completed_saves == expected_total):
+                        try:
+                            progress_callback(completed_saves, expected_total, item['saved_path'])
+                        except Exception as cb_err:
+                            logger.warning(f"Progress callback error: {cb_err}")
+
+        extracted_frames.sort()
+        frame_manifest.sort(key=lambda item: item['image_name'])
+        selection_records.sort(key=lambda item: item.get('target_index') or -1)
+
+        timeline_plan = self._get_timeline_plan(extraction_config) or {}
+        timeline_summary = {
+            'segment_count': len(list(timeline_plan.get('segments') or [])),
+            'total_sample_count': len(timeline_entries),
+            'duration_seconds': timeline_plan.get('duration') or (float(total_frames / fps) if fps > 0 else None),
+            'filename_pattern': 'pos001_0001.jpg',
+        }
+
+        self.last_extraction_stats = self._append_sampling_plan_stats({
+            'strategy': f'smart_neighbor_replacement_parallel_groups_{group_workers}x',
+            'mode': 'timeline_plan',
+            'video_capture_mode': extraction_config.get('video_capture_mode'),
+            'video_timeline_summary': timeline_summary,
+            'requested_targets': len(timeline_entries),
+            'saved_frames': len(extracted_frames),
+            'replaced_targets': replaced_targets,
+            'search_radius': search_radius,
+            'rejected_candidates': rejected_candidates,
+            'scoring_workers': group_workers,
+            'parallel_group_workers': group_workers,
+            'parallel_group_count': len(grouped_entries),
+            'selections': [
+                {
+                    'target_index': item['target_index'],
+                    'selected_index': item['selected_index'],
+                    'offset': item['selected_index'] - item['target_index'],
+                    'sharpness': round(item['metrics']['sharpness'], 2),
+                    'accepted': item['accepted'],
+                    'fallback_used': item['fallback_used'],
+                    'source_time_seconds': round(float(item['selected_index'] / fps), 6) if fps > 0 else None,
+                }
+                for item in selection_records
+                if item.get('selected_index') is not None
+            ],
+            'frame_manifest': frame_manifest,
+            'source_video_path': str(video_path),
+            'source_total_frames': int(total_frames),
+            'source_fps': float(fps or 0.0),
+        }, sampling_plan)
+
+        logger.info(f"CPU timeline extraction complete: {len(extracted_frames)} frames across {len(grouped_entries)} groups")
         return extracted_frames
 
     def extract_frames(self, video_path, output_dir, extraction_config=None, progress_callback=None):
@@ -1959,6 +2156,8 @@ class VideoProcessor:
         for segment_index, segment in enumerate(list(plan.get('segments') or []), start=1):
             start_time = float(segment.get('start_time') or 0.0)
             end_time = float(segment.get('end_time') or start_time)
+            sampling_mode = str(segment.get('sampling_mode') or 'count').strip().lower()
+            target_fps = float(segment.get('target_fps') or extraction_config.get('target_fps') or 1.0)
             sample_count = max(1, int(segment.get('sample_count') or 1))
             position_index = int(segment.get('position_index') or segment_index)
 
@@ -1972,6 +2171,9 @@ class VideoProcessor:
                 if duration > 0:
                     safe_clip_end = max(start_time, duration - clip_tail_margin_seconds)
                     effective_end_time = min(effective_end_time, safe_clip_end)
+
+            if sampling_mode == 'fps':
+                sample_count = max(1, int(math.floor(max(0.0, effective_end_time - start_time) * max(0.1, target_fps))) + 1)
 
             sample_times = [start_time + ((effective_end_time - start_time) / 2.0)]
             if sample_count > 1:
@@ -1989,6 +2191,8 @@ class VideoProcessor:
                         'segment_label': str(segment.get('label') or f'Position {segment_index}'),
                         'segment_start_time': round(start_time, 6),
                         'segment_end_time': round(end_time, 6),
+                        'sampling_mode': sampling_mode,
+                        'target_fps': round(float(target_fps), 6) if sampling_mode == 'fps' else None,
                         'position_index': position_index,
                         'sample_index': sample_index,
                         'image_name': f"pos{position_index:03d}_{sample_index:04d}.jpg",

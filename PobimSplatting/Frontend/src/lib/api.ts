@@ -537,6 +537,11 @@ export interface UploadConfig {
   refine_every?: number;
   warmup_length?: number;
   ssim_weight?: number;
+  reset_alpha_every?: number;
+  num_downscales?: number;
+  resolution_schedule?: number;
+  split_screen_size?: number;
+  stop_screen_size_at?: number;
   camera_model?: string;
   sfm_backend?: 'cli' | 'pycolmap' | string;
   matcher_type?: 'auto' | 'sequential' | 'exhaustive' | 'vocab_tree' | string;
@@ -610,6 +615,10 @@ export interface UploadTrainingRecommendation {
   warmup_length?: number | null;
   ssim_weight?: number | null;
   reset_alpha_every?: number | null;
+  num_downscales?: number | null;
+  resolution_schedule?: number | null;
+  split_screen_size?: number | null;
+  stop_screen_size_at?: number | null;
   estimated_views_per_image?: number;
   summary?: string;
 }
@@ -788,6 +797,11 @@ export const api = {
     if (config.refine_every !== undefined) formData.append('refine_every', config.refine_every.toString());
     if (config.warmup_length !== undefined) formData.append('warmup_length', config.warmup_length.toString());
     if (config.ssim_weight !== undefined) formData.append('ssim_weight', config.ssim_weight.toString());
+    if (config.reset_alpha_every !== undefined) formData.append('reset_alpha_every', config.reset_alpha_every.toString());
+    if (config.num_downscales !== undefined) formData.append('num_downscales', config.num_downscales.toString());
+    if (config.resolution_schedule !== undefined) formData.append('resolution_schedule', config.resolution_schedule.toString());
+    if (config.split_screen_size !== undefined) formData.append('split_screen_size', config.split_screen_size.toString());
+    if (config.stop_screen_size_at !== undefined) formData.append('stop_screen_size_at', config.stop_screen_size_at.toString());
 
     // Custom parameters - send each parameter individually
     if (config.quality_mode === 'custom') {

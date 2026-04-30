@@ -1490,6 +1490,48 @@ def get_opensplat_config(quality_mode="balanced", num_images=100, custom_params=
             "opacity_reset_interval": 1500,
             "prune_opacity": 0.0005,
         },
+        "fog_heavy": {
+            "iterations": 9000,
+            "target_visits_per_image": 115,
+            "min_iterations": 2400,
+            "max_iterations": 36000,
+            "iteration_rounding": 100,
+            "scale_training_knobs": True,
+            "densify_from": 1200,
+            "densify_until": 5200,
+            "densify_grad_threshold": 0.00055,
+            "opacity_reset_interval": 2400,
+            "prune_opacity": 0.006,
+            "refine_every": 220,
+            "warmup_length": 1200,
+            "ssim_weight": 0.06,
+            "reset_alpha_every": 24,
+            "num_downscales": 1,
+            "resolution_schedule": 1200,
+            "split_screen_size": 0.022,
+            "stop_screen_size_at": 1600,
+        },
+        "production_balanced": {
+            "iterations": 9000,
+            "target_visits_per_image": 115,
+            "min_iterations": 2400,
+            "max_iterations": 42000,
+            "iteration_rounding": 100,
+            "scale_training_knobs": True,
+            "densify_from": 1000,
+            "densify_until": 5200,
+            "densify_grad_threshold": 0.00042,
+            "opacity_reset_interval": 2400,
+            "prune_opacity": 0.004,
+            "refine_every": 180,
+            "warmup_length": 900,
+            "ssim_weight": 0.10,
+            "reset_alpha_every": 24,
+            "num_downscales": 1,
+            "resolution_schedule": 1200,
+            "split_screen_size": 0.03,
+            "stop_screen_size_at": 2000,
+        },
         "custom": {
             "iterations": 7000,
             "target_visits_per_image": 70,
@@ -1511,10 +1553,30 @@ def get_opensplat_config(quality_mode="balanced", num_images=100, custom_params=
     min_iterations = max(int(base_config.get("min_iterations", 1000)), 1)
     max_iterations = max(int(base_config.get("max_iterations", min_iterations)), min_iterations)
     recommended_iterations = image_count * target_visits
+    iteration_rounding = int(base_config.get("iteration_rounding", 1) or 1)
+    if iteration_rounding > 1:
+        recommended_iterations = int(
+            (recommended_iterations / iteration_rounding) + 0.5
+        ) * iteration_rounding
     base_config["iterations"] = max(
         min_iterations,
         min(max_iterations, recommended_iterations),
     )
+
+    if base_config.get("scale_training_knobs"):
+        scale_ratio = base_config["iterations"] / float(default_iterations)
+
+        def scale_int_knob(key, minimum=1):
+            if key not in base_config:
+                return
+            scaled_value = max(minimum, int(round(int(base_config[key]) * scale_ratio)))
+            base_config[key] = min(base_config["iterations"] - 2, scaled_value)
+
+        scale_int_knob("densify_from", 100)
+        scale_int_knob("refine_every", 25)
+        scale_int_knob("warmup_length", 100)
+        scale_int_knob("resolution_schedule", 100)
+        scale_int_knob("stop_screen_size_at", 200)
 
     densify_ratio = base_config["densify_until"] / float(default_iterations)
     base_config["densify_until"] = min(
@@ -1560,6 +1622,31 @@ def get_opensplat_config(quality_mode="balanced", num_images=100, custom_params=
             base_config["warmup_length"] = int(custom_params["warmup_length"])
         if "ssim_weight" in custom_params and custom_params["ssim_weight"] is not None:
             base_config["ssim_weight"] = float(custom_params["ssim_weight"])
+        if (
+            "reset_alpha_every" in custom_params
+            and custom_params["reset_alpha_every"] is not None
+        ):
+            base_config["reset_alpha_every"] = int(custom_params["reset_alpha_every"])
+        if (
+            "num_downscales" in custom_params
+            and custom_params["num_downscales"] is not None
+        ):
+            base_config["num_downscales"] = int(custom_params["num_downscales"])
+        if (
+            "resolution_schedule" in custom_params
+            and custom_params["resolution_schedule"] is not None
+        ):
+            base_config["resolution_schedule"] = int(custom_params["resolution_schedule"])
+        if (
+            "split_screen_size" in custom_params
+            and custom_params["split_screen_size"] is not None
+        ):
+            base_config["split_screen_size"] = float(custom_params["split_screen_size"])
+        if (
+            "stop_screen_size_at" in custom_params
+            and custom_params["stop_screen_size_at"] is not None
+        ):
+            base_config["stop_screen_size_at"] = int(custom_params["stop_screen_size_at"])
         if (
             "learning_rate" in custom_params
             and custom_params["learning_rate"] is not None
@@ -1608,9 +1695,21 @@ def get_opensplat_runtime_recommendation(
         "warmup_length": None,
         "ssim_weight": None,
         "reset_alpha_every": None,
+        "num_downscales": opensplat_config.get("num_downscales"),
+        "resolution_schedule": opensplat_config.get("resolution_schedule"),
+        "split_screen_size": opensplat_config.get("split_screen_size"),
+        "stop_screen_size_at": opensplat_config.get("stop_screen_size_at"),
     }
 
-    if quality_mode in ["high", "ultra", "hard", "custom", "balanced"]:
+    if quality_mode in [
+        "high",
+        "ultra",
+        "hard",
+        "custom",
+        "balanced",
+        "fog_heavy",
+        "production_balanced",
+    ]:
         refine_every = 75
         warmup_length = 750
         ssim_weight = 0.25
@@ -1626,12 +1725,18 @@ def get_opensplat_runtime_recommendation(
             warmup_length = 900
             ssim_weight = 0.28
             reset_alpha_every = 24
+        elif quality_mode in {"fog_heavy", "production_balanced"}:
+            refine_every = int(opensplat_config["refine_every"])
+            warmup_length = int(opensplat_config["warmup_length"])
+            ssim_weight = float(opensplat_config["ssim_weight"])
+            reset_alpha_every = int(opensplat_config["reset_alpha_every"])
 
         if custom_params:
             custom_densify = custom_params.get("densify_grad_threshold")
             custom_refine = custom_params.get("refine_every")
             custom_warmup = custom_params.get("warmup_length")
             custom_ssim = custom_params.get("ssim_weight")
+            custom_reset_alpha = custom_params.get("reset_alpha_every")
             if custom_densify is not None:
                 recommendation["densify_grad_threshold"] = float(custom_densify)
             if custom_refine is not None:
@@ -1640,6 +1745,8 @@ def get_opensplat_runtime_recommendation(
                 warmup_length = int(custom_warmup)
             if custom_ssim is not None:
                 ssim_weight = float(custom_ssim)
+            if custom_reset_alpha is not None:
+                reset_alpha_every = int(custom_reset_alpha)
 
         recommendation.update(
             {

@@ -1352,6 +1352,10 @@ def upload_policy_preview():
 
     for key in (
         "iterations",
+        "num_downscales",
+        "resolution_schedule",
+        "reset_alpha_every",
+        "stop_screen_size_at",
         "max_num_features",
         "max_num_matches",
         "sequential_overlap",
@@ -1380,6 +1384,7 @@ def upload_policy_preview():
         "refine_every",
         "warmup_length",
         "ssim_weight",
+        "split_screen_size",
         "learning_rate",
         "position_lr_init",
         "position_lr_final",
@@ -1581,6 +1586,11 @@ def upload_files():
         ("refine_every", int),
         ("warmup_length", int),
         ("ssim_weight", float),
+        ("reset_alpha_every", int),
+        ("num_downscales", int),
+        ("resolution_schedule", int),
+        ("split_screen_size", float),
+        ("stop_screen_size_at", int),
     ):
         raw_value = request.form.get(field_name)
         if raw_value not in {None, ""}:
@@ -2223,6 +2233,11 @@ def retry_project(project_id):
                 "refine_every",
                 "warmup_length",
                 "ssim_weight",
+                "reset_alpha_every",
+                "num_downscales",
+                "resolution_schedule",
+                "split_screen_size",
+                "stop_screen_size_at",
                 "learning_rate",
                 "position_lr_init",
                 "position_lr_final",

@@ -298,6 +298,54 @@ class PipelineStageSmokeTests(unittest.TestCase):
             '14',
         )
 
+    def test_opensplat_anti_fog_presets_expose_runtime_knobs(self):
+        small_fog_heavy = config_builders.get_opensplat_runtime_recommendation(
+            'fog_heavy',
+            30,
+        )
+        fog_heavy = config_builders.get_opensplat_runtime_recommendation(
+            'fog_heavy',
+            78,
+        )
+        production_balanced = config_builders.get_opensplat_runtime_recommendation(
+            'production_balanced',
+            78,
+        )
+
+        self.assertEqual(small_fog_heavy['iterations'], 3500)
+        self.assertEqual(small_fog_heavy['refine_every'], 86)
+        self.assertEqual(small_fog_heavy['warmup_length'], 467)
+        self.assertEqual(small_fog_heavy['resolution_schedule'], 467)
+        self.assertEqual(small_fog_heavy['stop_screen_size_at'], 622)
+
+        self.assertEqual(fog_heavy['iterations'], 9000)
+        self.assertEqual(fog_heavy['densify_grad_threshold'], 0.00055)
+        self.assertEqual(fog_heavy['refine_every'], 220)
+        self.assertEqual(fog_heavy['warmup_length'], 1200)
+        self.assertEqual(fog_heavy['ssim_weight'], 0.06)
+        self.assertEqual(fog_heavy['num_downscales'], 1)
+        self.assertEqual(fog_heavy['resolution_schedule'], 1200)
+        self.assertEqual(fog_heavy['split_screen_size'], 0.022)
+        self.assertEqual(fog_heavy['stop_screen_size_at'], 1600)
+
+        self.assertEqual(production_balanced['iterations'], 9000)
+        self.assertEqual(production_balanced['densify_grad_threshold'], 0.00042)
+        self.assertEqual(production_balanced['refine_every'], 180)
+        self.assertEqual(production_balanced['warmup_length'], 900)
+        self.assertEqual(production_balanced['ssim_weight'], 0.10)
+        self.assertEqual(production_balanced['split_screen_size'], 0.03)
+        self.assertEqual(production_balanced['stop_screen_size_at'], 2000)
+
+        large_production = config_builders.get_opensplat_runtime_recommendation(
+            'production_balanced',
+            150,
+        )
+        self.assertEqual(large_production['iterations'], 17300)
+        self.assertEqual(large_production['refine_every'], 346)
+        self.assertEqual(large_production['warmup_length'], 1730)
+        self.assertEqual(large_production['resolution_schedule'], 2307)
+        self.assertEqual(large_production['stop_screen_size_at'], 3844)
+
     def test_stage_sparse_logs_runtime_bundle_adjustment_mode(self):
         ba_plan = {
             'summary': 'GPU bundle adjustment via DENSE_SCHUR',

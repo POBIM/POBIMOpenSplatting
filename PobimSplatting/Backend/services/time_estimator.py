@@ -73,6 +73,8 @@ class SmartTimeEstimator:
         self.quality_factors = {
             'fast': 0.3,
             'balanced': 1.0,
+            'fog_heavy': 1.4,
+            'production_balanced': 1.5,
             'high': 2.5,
             'ultra': 4.5
         }
@@ -375,6 +377,16 @@ class SmartTimeEstimator:
                 'title': '🎯 High Quality',
                 'description': f'Excellent detail - {self.format_time_display(estimate.total_seconds)}',
                 'details': 'Enhanced COLMAP features, 7000 iterations, advanced settings'
+            },
+            'fog_heavy': {
+                'title': 'Anti-Fog Heavy',
+                'description': f'Low-splat anti-fog tuning - {self.format_time_display(estimate.total_seconds)}',
+                'details': '9000 iterations, conservative densify/refine settings for walls/floors/ceilings'
+            },
+            'production_balanced': {
+                'title': 'Production Balanced',
+                'description': f'Balanced anti-fog tuning - {self.format_time_display(estimate.total_seconds)}',
+                'details': '9000 iterations, anti-fog preset with more detail than Fog Heavy'
             },
             'ultra': {
                 'title': '✨ Ultra Quality',

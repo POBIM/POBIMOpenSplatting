@@ -374,6 +374,8 @@ def get_native_aliked_max_num_features(quality_mode, fallback_max_num_features):
         'high': 4096,
         'ultra': 6144,
         'hard': 8192,
+        'fog_heavy': 8192,
+        'production_balanced': 8192,
         'professional': 8192,
         'ultra_professional': 12288,
         'robust': 8192,

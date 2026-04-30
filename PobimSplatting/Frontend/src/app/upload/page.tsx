@@ -788,6 +788,8 @@ export default function UploadPage() {
       fast: { iterations: 500, time: '~30s-2m', desc: 'Quick preview' },
       balanced: { iterations: 7000, time: '~5-15m', desc: 'High quality (NEW default)' },
       hard: { iterations: 5000, time: '~6-18m', desc: 'Coverage-first COLMAP pass, tuned for later retry' },
+      fog_heavy: { iterations: 9000, time: 'adaptive', desc: 'Anti-fog heavy for walls, floors, and ceilings' },
+      production_balanced: { iterations: 9000, time: 'adaptive', desc: 'Balanced anti-fog production preset' },
       high: { iterations: 7000, time: '~5-15m', desc: 'High detail' },
       ultra: { iterations: 15000, time: '~10-30m', desc: 'Maximum quality' },
       professional: { iterations: 30000, time: '~20-60m', desc: 'Professional grade for 4K+ images' },
@@ -936,6 +938,8 @@ export default function UploadPage() {
                     className="brutal-select"
                   >
                     <option value="hard">Hard - {getQualityInfo('hard').time}</option>
+                    <option value="fog_heavy">Fog Heavy - {getQualityInfo('fog_heavy').time}</option>
+                    <option value="production_balanced">Production Balanced - {getQualityInfo('production_balanced').time}</option>
                     <option value="high">High - {getQualityInfo('high').time}</option>
                     <option value="ultra">Ultra - {getQualityInfo('ultra').time}</option>
                     <option value="professional">Professional - {getQualityInfo('professional').time}</option>

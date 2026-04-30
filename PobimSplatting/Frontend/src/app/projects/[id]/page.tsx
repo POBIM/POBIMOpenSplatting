@@ -1163,6 +1163,8 @@ export default function ProjectDetailPage() {
     switch (quality) {
       case 'fast': return 'brutal-badge brutal-badge-info';
       case 'balanced': return 'brutal-badge';
+      case 'fog_heavy': return 'brutal-badge brutal-badge-warning';
+      case 'production_balanced': return 'brutal-badge brutal-badge-success';
       case 'high': return 'brutal-badge brutal-badge-success';
       case 'ultra': return 'brutal-badge';
       case 'professional': return 'brutal-badge brutal-badge-warning';
@@ -2954,6 +2956,8 @@ export default function ProjectDetailPage() {
                       <option value="fast">Fast (500 iterations)</option>
                       <option value="balanced">Balanced (7000 iterations)</option>
                       <option value="hard">Hard (5000 iterations, coverage-first)</option>
+                      <option value="fog_heavy">Fog Heavy (adaptive anti-fog)</option>
+                      <option value="production_balanced">Production Balanced (adaptive anti-fog)</option>
                       <option value="high">High (7000 iterations)</option>
                       <option value="ultra">Ultra (15000 iterations)</option>
                       <option value="professional">Professional (30000 iterations)</option>
@@ -3069,6 +3073,9 @@ export default function ProjectDetailPage() {
                       <option value="">ใช้ค่าเดิม</option>
                       <option value="fast">Fast</option>
                       <option value="balanced">Balanced</option>
+                      <option value="hard">Hard (coverage-first)</option>
+                      <option value="fog_heavy">Fog Heavy (anti-fog)</option>
+                      <option value="production_balanced">Production Balanced (anti-fog)</option>
                       <option value="high">High</option>
                       <option value="ultra">Ultra</option>
                       <option value="professional">Professional</option>
@@ -3130,6 +3137,8 @@ export default function ProjectDetailPage() {
                       <option value="fast">Fast</option>
                       <option value="balanced">Balanced</option>
                       <option value="hard">Hard (coverage-first)</option>
+                      <option value="fog_heavy">Fog Heavy (anti-fog)</option>
+                      <option value="production_balanced">Production Balanced (anti-fog)</option>
                       <option value="high">High</option>
                       <option value="ultra">Ultra</option>
                       <option value="robust">Robust (สำหรับ dataset ยาก)</option>
@@ -3224,6 +3233,8 @@ export default function ProjectDetailPage() {
                       <option value="fast">Fast</option>
                       <option value="balanced">Balanced</option>
                       <option value="hard">Hard (coverage-first)</option>
+                      <option value="fog_heavy">Fog Heavy (anti-fog)</option>
+                      <option value="production_balanced">Production Balanced (anti-fog)</option>
                       <option value="high">High</option>
                       <option value="ultra">Ultra</option>
                       <option value="robust">Robust (สำหรับ dataset ยาก)</option>

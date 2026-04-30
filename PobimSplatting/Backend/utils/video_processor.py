@@ -97,6 +97,63 @@ def get_target_dimensions(resolution: str, source_width: int, source_height: int
     return new_width, new_height, preset['jpeg_quality']
 
 
+def _normalize_rotation_degrees(rotation: Any) -> int:
+    """Normalize ffprobe/OpenCV rotation metadata to one of 0, 90, 180, or 270."""
+    try:
+        value = float(rotation or 0)
+    except (TypeError, ValueError):
+        return 0
+
+    normalized = int(round(value)) % 360
+    if normalized in {0, 90, 180, 270}:
+        return normalized
+
+    # Some files report -90/90-ish floating displaymatrix values.
+    nearest = min((0, 90, 180, 270), key=lambda item: abs(item - normalized))
+    return nearest if abs(nearest - normalized) <= 2 else 0
+
+
+def _rotation_swaps_dimensions(rotation: Any) -> bool:
+    return _normalize_rotation_degrees(rotation) in {90, 270}
+
+
+def _get_stream_rotation(stream: Dict[str, Any]) -> int:
+    """Read rotation from common ffprobe fields."""
+    tags = stream.get('tags') or {}
+    if tags.get('rotate') is not None:
+        return _normalize_rotation_degrees(tags.get('rotate'))
+
+    for side_data in stream.get('side_data_list') or []:
+        if side_data.get('rotation') is not None:
+            return _normalize_rotation_degrees(side_data.get('rotation'))
+
+        displaymatrix = side_data.get('displaymatrix') or ''
+        if 'rotation of' in displaymatrix:
+            try:
+                value = displaymatrix.split('rotation of', 1)[1].split('degrees', 1)[0].strip()
+                return _normalize_rotation_degrees(value)
+            except Exception:
+                pass
+
+    return 0
+
+
+def _with_display_dimensions(video_info: Dict[str, Any]) -> Dict[str, Any]:
+    """Add display dimensions after applying video rotation metadata."""
+    info = dict(video_info or {})
+    width = int(info.get('width') or 0)
+    height = int(info.get('height') or 0)
+    rotation = _normalize_rotation_degrees(info.get('rotation', 0))
+    info['rotation'] = rotation
+    if _rotation_swaps_dimensions(rotation):
+        info['display_width'] = height
+        info['display_height'] = width
+    else:
+        info['display_width'] = width
+        info['display_height'] = height
+    return info
+
+
 def convert_legacy_quality_to_resolution(quality_percent: int) -> str:
     """Convert legacy quality percentage (50/75/100) to resolution preset."""
     return QUALITY_TO_RESOLUTION.get(quality_percent, '2K')
@@ -331,6 +388,41 @@ class VideoProcessor:
 
         return max(1, chunk_cap)
 
+    def _configure_opencv_capture_orientation(self, cap) -> None:
+        """Prefer raw OpenCV frames so orientation handling stays consistent."""
+        prop = getattr(cv2, 'CAP_PROP_ORIENTATION_AUTO', None)
+        if prop is None:
+            return
+        try:
+            cap.set(prop, 0)
+        except Exception:
+            pass
+
+    def _orient_opencv_frame(self, frame, video_info: Optional[Dict[str, Any]] = None):
+        """Apply video rotation metadata to frames read through OpenCV."""
+        if frame is None:
+            return frame
+
+        rotation = _normalize_rotation_degrees((video_info or {}).get('rotation', 0))
+        if rotation == 0:
+            return frame
+
+        display_width = int((video_info or {}).get('display_width') or 0)
+        display_height = int((video_info or {}).get('display_height') or 0)
+        frame_height, frame_width = frame.shape[:2]
+
+        # If the capture backend already returned display-oriented frames, do not rotate again.
+        if display_width and display_height and frame_width == display_width and frame_height == display_height:
+            return frame
+
+        if rotation == 90:
+            return cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+        if rotation == 180:
+            return cv2.rotate(frame, cv2.ROTATE_180)
+        if rotation == 270:
+            return cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        return frame
+
     def is_video_file(self, filename):
         """Check if file is a supported video format"""
         return Path(filename).suffix.lower() in self.supported_formats
@@ -357,6 +449,7 @@ class VideoProcessor:
                 'profile': stream.get('profile', ''),
                 'width': int(stream.get('width', 0)),
                 'height': int(stream.get('height', 0)),
+                'rotation': _get_stream_rotation(stream),
                 'duration': float(stream.get('duration', 0)),
                 'bit_rate': stream.get('bit_rate', 'unknown')
             }
@@ -449,13 +542,15 @@ class VideoProcessor:
         logger.info(f"Extracting {len(source_frames)} matching frames at {resolution} resolution")
         
         # Get video info
+        video_info = self._get_video_info_ffprobe(video_path) or {}
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
             raise ValueError(f"Could not open video file: {video_path}")
+        self._configure_opencv_capture_orientation(cap)
         
         total_video_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        width = int(video_info.get('display_width') or cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(video_info.get('display_height') or cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         
         # Get target dimensions
         target_width, target_height, jpeg_quality = get_target_dimensions(resolution, width, height)
@@ -498,6 +593,7 @@ class VideoProcessor:
                 continue
             
             try:
+                frame = self._orient_opencv_frame(frame, video_info)
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 
                 if need_scale:
@@ -538,11 +634,14 @@ class VideoProcessor:
 
         total_frames = video_info['total_frames']
         fps = video_info['fps']
-        width = video_info['width']
-        height = video_info['height']
+        width = int(video_info.get('display_width') or video_info['width'])
+        height = int(video_info.get('display_height') or video_info['height'])
         duration = video_info['duration']
 
-        logger.info(f"FFmpeg CPU extraction: {total_frames} frames, {fps:.2f} fps, {duration:.2f}s, {width}x{height}")
+        logger.info(
+            f"FFmpeg CPU extraction: {total_frames} frames, {fps:.2f} fps, {duration:.2f}s, "
+            f"{width}x{height} display ({video_info['width']}x{video_info['height']} encoded, rotation {video_info.get('rotation', 0)}°)"
+        )
 
         mode = extraction_config.get('mode', 'frames')
         quality_telemetry = self._collect_adaptive_budget_quality_telemetry(
@@ -1272,11 +1371,14 @@ class VideoProcessor:
         
         total_frames = video_info['total_frames']
         fps = video_info['fps']
-        width = video_info['width']
-        height = video_info['height']
+        width = int(video_info.get('display_width') or video_info['width'])
+        height = int(video_info.get('display_height') or video_info['height'])
         duration = video_info['duration']
         
-        logger.info(f"Video info: {total_frames} frames, {fps:.2f} fps, {duration:.2f}s, {width}x{height}")
+        logger.info(
+            f"Video info: {total_frames} frames, {fps:.2f} fps, {duration:.2f}s, "
+            f"{width}x{height} display ({video_info['width']}x{video_info['height']} encoded, rotation {video_info.get('rotation', 0)}°)"
+        )
         
         # Calculate extraction parameters
         mode = extraction_config.get('mode', 'frames')
@@ -1578,17 +1680,18 @@ class VideoProcessor:
             if total_frames == 0:
                 total_frames = int(duration * fps)
             
-            return {
+            return _with_display_dimensions({
                 'total_frames': total_frames,
                 'fps': fps,
                 'width': int(stream.get('width', 0)),
                 'height': int(stream.get('height', 0)),
+                'rotation': _get_stream_rotation(stream),
                 'duration': duration,
                 'codec_name': stream.get('codec_name', 'unknown'),
                 'pix_fmt': stream.get('pix_fmt', ''),
                 'profile': stream.get('profile', ''),
                 'bit_rate': int(stream.get('bit_rate') or format_info.get('bit_rate') or 0),
-            }
+            })
         except Exception as e:
             logger.warning(f"ffprobe failed: {e}")
             return None
@@ -1604,17 +1707,22 @@ class VideoProcessor:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
+        video_info = self._get_video_info_ffprobe(video_path) or {}
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
             raise ValueError(f"Could not open video file: {video_path}")
+        self._configure_opencv_capture_orientation(cap)
 
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         fps = cap.get(cv2.CAP_PROP_FPS)
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        width = int(video_info.get('display_width') or cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(video_info.get('display_height') or cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         duration = total_frames / fps if fps > 0 else 0
 
-        logger.info(f"CPU extraction: {total_frames} frames, {fps:.2f} fps, {duration:.2f}s, {width}x{height}")
+        logger.info(
+            f"CPU extraction: {total_frames} frames, {fps:.2f} fps, {duration:.2f}s, "
+            f"{width}x{height} display (rotation {video_info.get('rotation', 0)}°)"
+        )
 
         # Calculate frame extraction interval based on mode
         mode = extraction_config.get('mode', 'frames')
@@ -1665,6 +1773,7 @@ class VideoProcessor:
                 search_radius=max(1, int(extraction_config.get('replacement_search_radius', 4))),
                 sampling_plan=sampling_plan,
                 timeline_entries=timeline_entries,
+                video_info=video_info,
             )
         extracted_frames = []
         saved_count = 0
@@ -1702,6 +1811,7 @@ class VideoProcessor:
                     prev_frame,
                     quality_percent,
                     search_radius,
+                    video_info=video_info,
                 )
                 selection_records.append(selection)
                 rejected_candidates += selection['rejected_candidates']
@@ -1836,6 +1946,7 @@ class VideoProcessor:
         search_radius: int,
         sampling_plan: Dict[str, Any],
         timeline_entries: List[Dict[str, Any]],
+        video_info: Optional[Dict[str, Any]] = None,
     ):
         grouped_entries: Dict[int, List[Dict[str, Any]]] = {}
         for entry in timeline_entries:
@@ -1858,6 +1969,7 @@ class VideoProcessor:
             cap = cv2.VideoCapture(str(video_path))
             if not cap.isOpened():
                 raise RuntimeError(f"Could not open video for group {position_index}: {video_path}")
+            self._configure_opencv_capture_orientation(cap)
 
             prev_frame = None
             group_results = []
@@ -1871,6 +1983,7 @@ class VideoProcessor:
                         prev_frame,
                         quality_percent,
                         search_radius,
+                        video_info=video_info,
                     )
 
                     frame = selection['frame']
@@ -2073,9 +2186,11 @@ class VideoProcessor:
 
     def get_preview_frames(self, video_path, preview_count=10, quality_percent=50):
         """Extract preview frames for display"""
+        video_info = self._get_video_info_ffprobe(video_path) or {}
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
             return []
+        self._configure_opencv_capture_orientation(cap)
 
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         interval = max(1, total_frames // preview_count)
@@ -2088,6 +2203,7 @@ class VideoProcessor:
             ret, frame = cap.read()
 
             if ret:
+                frame = self._orient_opencv_frame(frame, video_info)
                 # Convert to RGB and resize for preview
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 height, width = frame_rgb.shape[:2]
@@ -2335,6 +2451,7 @@ class VideoProcessor:
         if not self._should_use_adaptive_frame_budget(extraction_config):
             return None
 
+        video_info = self._get_video_info_ffprobe(video_path) or {}
         sample_count = int(extraction_config.get('adaptive_budget_sample_count', 12) or 12)
         sample_count = max(4, min(sample_count, 24))
         if total_frames <= 0:
@@ -2344,6 +2461,7 @@ class VideoProcessor:
         if not cap.isOpened():
             logger.warning("Adaptive frame budget telemetry skipped: could not open video for preview sampling")
             return None
+        self._configure_opencv_capture_orientation(cap)
 
         quality_percent = int(extraction_config.get('quality', 100) or 100)
         sample_positions = np.linspace(0, total_frames - 1, num=min(sample_count, total_frames))
@@ -2364,6 +2482,7 @@ class VideoProcessor:
                 ret, frame = cap.read()
                 if not ret or frame is None:
                     continue
+                frame = self._orient_opencv_frame(frame, video_info)
 
                 score_info = self._score_frame_candidate(frame, prev_frame, quality_percent)
                 metrics = score_info['metrics']
@@ -2772,6 +2891,7 @@ class VideoProcessor:
         prev_frame,
         quality_percent: int,
         search_radius: int,
+        video_info: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         start = max(0, target_index - search_radius)
         end = min(total_frames - 1, target_index + search_radius)
@@ -2784,6 +2904,7 @@ class VideoProcessor:
             ret, frame = cap.read()
             if not ret:
                 continue
+            frame = self._orient_opencv_frame(frame, video_info)
 
             candidate = self._score_frame_candidate(frame, prev_frame, quality_percent)
             candidate.update({
@@ -2816,10 +2937,24 @@ class VideoProcessor:
 
     def get_video_info(self, video_path):
         """Get basic video information"""
+        ffprobe_info = self._get_video_info_ffprobe(video_path)
+        if ffprobe_info:
+            return {
+                'total_frames': int(ffprobe_info.get('total_frames') or 0),
+                'fps': float(ffprobe_info.get('fps') or 0.0),
+                'width': int(ffprobe_info.get('display_width') or ffprobe_info.get('width') or 0),
+                'height': int(ffprobe_info.get('display_height') or ffprobe_info.get('height') or 0),
+                'encoded_width': int(ffprobe_info.get('width') or 0),
+                'encoded_height': int(ffprobe_info.get('height') or 0),
+                'rotation': int(ffprobe_info.get('rotation') or 0),
+                'duration': float(ffprobe_info.get('duration') or 0.0),
+            }
+
         cap = cv2.VideoCapture(str(video_path))
 
         if not cap.isOpened():
             return None
+        self._configure_opencv_capture_orientation(cap)
 
         info = {
             'total_frames': int(cap.get(cv2.CAP_PROP_FRAME_COUNT)),
@@ -2848,6 +2983,7 @@ class VideoProcessor:
         video_path = Path(video_path)
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
+        video_info = self._get_video_info_ffprobe(video_path) or {}
 
         requests = sorted(
             [
@@ -2862,9 +2998,10 @@ class VideoProcessor:
         cap = cv2.VideoCapture(str(video_path))
         if not cap.isOpened():
             raise ValueError(f"Could not open video file: {video_path}")
+        self._configure_opencv_capture_orientation(cap)
 
-        source_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        source_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        source_width = int(video_info.get('display_width') or cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        source_height = int(video_info.get('display_height') or cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         target_width, target_height, jpeg_quality = get_target_dimensions(
             resolution,
             source_width,
@@ -2890,6 +3027,7 @@ class VideoProcessor:
                     )
                     continue
 
+                frame = self._orient_opencv_frame(frame, video_info)
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 if need_scale:
                     frame_rgb = cv2.resize(

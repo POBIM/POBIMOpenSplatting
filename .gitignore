@@ -80,6 +80,7 @@ PobimSplatting/Backend/results/
 !PobimSplatting/Backend/results/.gitkeep
 PobimSplatting/Backend/uploads/
 !PobimSplatting/Backend/uploads/.gitkeep
+PobimSplatting/Backend/experiments/
 PobimSplatting/Backend/projects_db.json
 PobimSplatting/Backend/test_exports/
 

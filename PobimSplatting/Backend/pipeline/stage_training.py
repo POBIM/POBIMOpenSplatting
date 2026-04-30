@@ -401,6 +401,15 @@ def run_opensplat_training(
             cmd.extend(["--ssim-weight", str(ssim)])
             if reset_alpha_every is not None:
                 cmd.extend(["--reset-alpha-every", str(reset_alpha_every)])
+            for key, cli_arg in (
+                ("num_downscales", "--num-downscales"),
+                ("resolution_schedule", "--resolution-schedule"),
+                ("split_screen_size", "--split-screen-size"),
+                ("stop_screen_size_at", "--stop-screen-size-at"),
+            ):
+                value = training_recommendation.get(key)
+                if value is not None:
+                    cmd.extend([cli_arg, str(value)])
             append_log_line(
                 project_id,
                 f"⚡ Enhanced parameters: densify_threshold={densify_threshold}, refine_every={refine_every}, warmup={warmup}, ssim={ssim}",

@@ -44,6 +44,14 @@ import { Breadcrumbs } from '@/components/ui';
 const CameraPoseVisualization = lazy(() => import('@/components/CameraPoseVisualization'));
 const TrainingSplatPreview = lazy(() => import('@/components/TrainingSplatPreview'));
 
+const RETRY_QUALITY_MODE_OPTIONS = [
+  { value: 'normal', label: 'Normal' },
+  { value: 'fog', label: 'Fog' },
+  { value: 'production', label: 'Production' },
+];
+const RETRY_TRAINING_VISITS_PER_IMAGE_OPTIONS = [25, 50, 75, 100, 125, 150];
+const DEFAULT_RETRY_TRAINING_VISITS_PER_IMAGE = '50';
+
 const getStageLabelForEngine = (
   stageKey: string, 
   sfmEngine: 'glomap' | 'global' | 'global_mapper' | 'colmap' | 'fastmap' = 'glomap',
@@ -297,6 +305,7 @@ export default function ProjectDetailPage() {
   const [retryParams, setRetryParams] = useState({
     // Gaussian Splatting params
     quality_mode: '',
+    target_visits_per_image: DEFAULT_RETRY_TRAINING_VISITS_PER_IMAGE,
     iterations: '',
     learning_rate: '',
     training_live_preview_interval_percent: '',
@@ -878,6 +887,9 @@ export default function ProjectDetailPage() {
       if (retryParams.quality_mode) {
         params.quality_mode = retryParams.quality_mode;
       }
+      if (retryParams.target_visits_per_image) {
+        params.target_visits_per_image = parseInt(retryParams.target_visits_per_image);
+      }
 
       // Add parameters if retrying from video_extraction stage
       if (fromStage === 'video_extraction') {
@@ -979,9 +991,6 @@ export default function ProjectDetailPage() {
 
       // Add parameters if retrying from gaussian_splatting stage
       if (fromStage === 'gaussian_splatting') {
-        if (retryParams.iterations) {
-          params.iterations = parseInt(retryParams.iterations);
-        }
         if (retryParams.learning_rate) {
           params.learning_rate = parseFloat(retryParams.learning_rate);
         }
@@ -1002,6 +1011,7 @@ export default function ProjectDetailPage() {
       // Reset params after successful retry
       setRetryParams({
         quality_mode: '',
+        target_visits_per_image: DEFAULT_RETRY_TRAINING_VISITS_PER_IMAGE,
         iterations: '',
         learning_rate: '',
         training_live_preview_interval_percent: '',
@@ -1067,8 +1077,10 @@ export default function ProjectDetailPage() {
     // Load current config values as defaults
     if (project) {
       setRetryParams({
-        quality_mode: (project as any).quality_mode || '',
-        iterations: (project as any).iterations?.toString() || '',
+        quality_mode: project?.config?.quality_mode || (project as any).quality_mode || 'production',
+        target_visits_per_image:
+          project?.config?.target_visits_per_image?.toString() || DEFAULT_RETRY_TRAINING_VISITS_PER_IMAGE,
+        iterations: '',
         learning_rate: '',
         training_live_preview_interval_percent:
           project?.config?.training_live_preview_interval_percent?.toString() || '',
@@ -1162,8 +1174,11 @@ export default function ProjectDetailPage() {
   const getQualityBadgeColor = (quality: string): string => {
     switch (quality) {
       case 'fast': return 'brutal-badge brutal-badge-info';
+      case 'normal': return 'brutal-badge';
       case 'balanced': return 'brutal-badge';
+      case 'fog': return 'brutal-badge brutal-badge-warning';
       case 'fog_heavy': return 'brutal-badge brutal-badge-warning';
+      case 'production': return 'brutal-badge brutal-badge-success';
       case 'production_balanced': return 'brutal-badge brutal-badge-success';
       case 'high': return 'brutal-badge brutal-badge-success';
       case 'ultra': return 'brutal-badge';
@@ -2710,6 +2725,47 @@ export default function ProjectDetailPage() {
               })}
             </div>
 
+            <div className="brutal-card-muted mb-6 p-4">
+              <h4 className="mb-3 flex items-center text-sm font-black uppercase tracking-[0.06em] text-[var(--ink)]">
+                <Settings className="h-4 w-4 mr-2" />
+                Training Preset
+              </h4>
+              <div className="grid gap-3 md:grid-cols-2">
+                <div>
+                  <HelpLabel tooltip="เลือกโหมดหลักของรอบ retry ก่อน แล้วค่อยกำหนดงบเทรนเฉลี่ยต่อภาพ">
+                    Mode
+                  </HelpLabel>
+                  <select
+                    value={retryParams.quality_mode}
+                    onChange={(e) => setRetryParams({...retryParams, quality_mode: e.target.value})}
+                    className="brutal-select"
+                  >
+                    {RETRY_QUALITY_MODE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <HelpLabel tooltip="จำนวนรอบเทรนเฉลี่ยต่อภาพ เช่น 50 ภาพ x 50 = 2,500 iterations">
+                    Avg / Image
+                  </HelpLabel>
+                  <select
+                    value={retryParams.target_visits_per_image}
+                    onChange={(e) => setRetryParams({...retryParams, target_visits_per_image: e.target.value})}
+                    className="brutal-select"
+                  >
+                    {RETRY_TRAINING_VISITS_PER_IMAGE_OPTIONS.map((value) => (
+                      <option key={value} value={value}>
+                        {value} / image
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </div>
+
             {/* Video Extraction Parameters Form - Show only for video_extraction stage */}
             {selectedRetryStage === 'video_extraction' && (
               <div className="status-cancelled mb-6 border-[var(--border-w)] p-4">
@@ -2884,7 +2940,7 @@ export default function ProjectDetailPage() {
                       value={retryParams.ffmpeg_cpu_workers}
                       onChange={(e) => setRetryParams({...retryParams, ffmpeg_cpu_workers: e.target.value})}
                       placeholder="ใช้ค่าเดิม"
-                      className="brutal-input"
+                      className="brutal-select"
                     />
                     <datalist id="retry-cpu-chunk-worker-suggestions">
                       {CPU_CHUNK_WORKER_SUGGESTIONS.map((workerCount) => (
@@ -2940,44 +2996,9 @@ export default function ProjectDetailPage() {
               <div className="status-processing mb-6 border-[var(--border-w)] p-4">
                 <h4 className="mb-3 flex items-center text-sm font-black uppercase tracking-[0.06em]">
                   <Settings className="h-4 w-4 mr-2" />
-                  ปรับค่าการเทรน (ทิ้งว่างเพื่อใช้ค่าเดิม)
+                  ปรับค่าการเทรน
                 </h4>
                 <div className="space-y-3">
-                  <div>
-                    <HelpLabel tooltip="เลือก preset รวมของ COLMAP/OpenSplat สำหรับรอบ retry นี้ ถ้าทิ้งว่างจะใช้ค่าจากโปรเจกต์เดิม">
-                      Quality Mode
-                    </HelpLabel>
-                    <select
-                      value={retryParams.quality_mode}
-                      onChange={(e) => setRetryParams({...retryParams, quality_mode: e.target.value})}
-                      className="brutal-select"
-                    >
-                      <option value="">ใช้ค่าเดิม</option>
-                      <option value="fast">Fast (500 iterations)</option>
-                      <option value="balanced">Balanced (7000 iterations)</option>
-                      <option value="hard">Hard (5000 iterations, coverage-first)</option>
-                      <option value="fog_heavy">Fog Heavy (adaptive anti-fog)</option>
-                      <option value="production_balanced">Production Balanced (adaptive anti-fog)</option>
-                      <option value="high">High (7000 iterations)</option>
-                      <option value="ultra">Ultra (15000 iterations)</option>
-                      <option value="professional">Professional (30000 iterations)</option>
-                      <option value="ultra_professional">Ultra Professional (60000 iterations)</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <p className="brutal-label mb-1 block">
-                      Iterations (จำนวนรอบการเทรน)
-                    </p>
-                    <input
-                      type="number"
-                      placeholder="เช่น 7000"
-                      value={retryParams.iterations}
-                      onChange={(e) => setRetryParams({...retryParams, iterations: e.target.value})}
-                      className="brutal-input"
-                    />
-                  </div>
-
                   <div>
                     <p className="brutal-label mb-1 block">
                       Learning Rate (ค่าการเรียนรู้)
@@ -3058,30 +3079,9 @@ export default function ProjectDetailPage() {
               <div className="status-completed mb-6 border-[var(--border-w)] p-4">
                 <h4 className="mb-3 flex items-center text-sm font-black uppercase tracking-[0.06em]">
                   <Settings className="h-4 w-4 mr-2" />
-                  ปรับค่า Feature Extraction (ทิ้งว่างเพื่อใช้ค่าเดิม)
+                  ปรับค่า Feature Extraction
                 </h4>
                 <div className="space-y-3">
-                  <div>
-                    <p className="brutal-label mb-1 block">
-                      Quality Mode
-                    </p>
-                    <select
-                      value={retryParams.quality_mode}
-                      onChange={(e) => setRetryParams({...retryParams, quality_mode: e.target.value})}
-                      className="brutal-select"
-                    >
-                      <option value="">ใช้ค่าเดิม</option>
-                      <option value="fast">Fast</option>
-                      <option value="balanced">Balanced</option>
-                      <option value="hard">Hard (coverage-first)</option>
-                      <option value="fog_heavy">Fog Heavy (anti-fog)</option>
-                      <option value="production_balanced">Production Balanced (anti-fog)</option>
-                      <option value="high">High</option>
-                      <option value="ultra">Ultra</option>
-                      <option value="professional">Professional</option>
-                    </select>
-                  </div>
-
                   <div>
                     <p className="brutal-label mb-1 block">
                       Max Num Features (จำนวน features สูงสุดต่อภาพ)
@@ -3121,30 +3121,9 @@ export default function ProjectDetailPage() {
               <div className="status-cancelled mb-6 border-[var(--border-w)] p-4">
                 <h4 className="mb-3 flex items-center text-sm font-black uppercase tracking-[0.06em]">
                   <Settings className="h-4 w-4 mr-2" />
-                  ปรับค่า Feature Matching (ทิ้งว่างเพื่อใช้ค่าเดิม)
+                  ปรับค่า Feature Matching
                 </h4>
                 <div className="space-y-3">
-                  <div>
-                    <p className="brutal-label mb-1 block">
-                      Quality Mode
-                    </p>
-                    <select
-                      value={retryParams.quality_mode}
-                      onChange={(e) => setRetryParams({...retryParams, quality_mode: e.target.value})}
-                      className="brutal-select"
-                    >
-                      <option value="">ใช้ค่าเดิม</option>
-                      <option value="fast">Fast</option>
-                      <option value="balanced">Balanced</option>
-                      <option value="hard">Hard (coverage-first)</option>
-                      <option value="fog_heavy">Fog Heavy (anti-fog)</option>
-                      <option value="production_balanced">Production Balanced (anti-fog)</option>
-                      <option value="high">High</option>
-                      <option value="ultra">Ultra</option>
-                      <option value="robust">Robust (สำหรับ dataset ยาก)</option>
-                    </select>
-                  </div>
-
                   <div>
                     <p className="brutal-label mb-1 block">
                       Retry Matcher
@@ -3217,30 +3196,9 @@ export default function ProjectDetailPage() {
               <div className="brutal-card-muted mb-6 p-4">
                 <h4 className="mb-3 flex items-center text-sm font-black uppercase tracking-[0.06em] text-[var(--ink)]">
                   <Settings className="h-4 w-4 mr-2" />
-                  ปรับค่า Sparse Reconstruction (ทิ้งว่างเพื่อใช้ค่าเดิม)
+                  ปรับค่า Sparse Reconstruction
                 </h4>
                 <div className="space-y-3">
-                  <div>
-                    <p className="brutal-label mb-1 block">
-                      Quality Mode
-                    </p>
-                    <select
-                      value={retryParams.quality_mode}
-                      onChange={(e) => setRetryParams({...retryParams, quality_mode: e.target.value})}
-                      className="brutal-select"
-                    >
-                      <option value="">ใช้ค่าเดิม</option>
-                      <option value="fast">Fast</option>
-                      <option value="balanced">Balanced</option>
-                      <option value="hard">Hard (coverage-first)</option>
-                      <option value="fog_heavy">Fog Heavy (anti-fog)</option>
-                      <option value="production_balanced">Production Balanced (anti-fog)</option>
-                      <option value="high">High</option>
-                      <option value="ultra">Ultra</option>
-                      <option value="robust">Robust (สำหรับ dataset ยาก)</option>
-                    </select>
-                  </div>
-
                   <div>
                     <HelpLabel tooltip="จำนวน feature matches ขั้นต่ำที่ต้องมี ก่อน mapper จะใช้คู่ภาพในการลงทะเบียน ลดค่านี้ช่วยให้ภาพยากเข้า model ได้ง่ายขึ้น แต่เสี่ยง pose ผิดมากขึ้น">
                       Min Num Matches (จำนวน matches ขั้นต่ำในการ register)

@@ -31,6 +31,7 @@ from .config_builders import (
     get_colmap_executable,
     get_opensplat_config,
     get_opensplat_runtime_recommendation,
+    normalize_quality_mode,
     should_prefer_incremental_sfm,
 )
 from .auto_tuning import (
@@ -135,7 +136,7 @@ def _build_resource_coordination_updates(
     project_entry = project_store.processing_status.get(project_id, {})
     resource_profile = time_estimator.classify_resource_profile(
         num_images=max(int(num_images or 0), 1),
-        quality_mode=config.get('quality_mode', 'balanced'),
+        quality_mode=normalize_quality_mode(config.get('quality_mode', 'production')),
         config=config,
         has_videos=has_videos,
         num_videos=num_videos,
@@ -292,7 +293,7 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
         num_total_images = len(image_files) + config.get('max_frames', 0) * len(video_files)
         time_estimate = time_estimator.estimate_processing_time(
             num_images=max(num_total_images, 50),
-            quality_mode=config.get('quality_mode', 'balanced'),
+            quality_mode=normalize_quality_mode(config.get('quality_mode', 'production')),
             has_videos=len(video_files) > 0,
             num_videos=len(video_files)
         )
@@ -331,7 +332,7 @@ def run_processing_pipeline_from_stage(project_id, paths, config, video_files, i
                 'item_name': 'Preparing...'
             })
 
-            append_log_line(project_id, f"🚀 Starting {config.get('quality_mode', 'balanced').title()} Quality Processing")
+            append_log_line(project_id, f"🚀 Starting {normalize_quality_mode(config.get('quality_mode', 'production')).title()} Quality Processing")
             append_log_line(project_id, f"📊 Dataset: {num_total_images} images, {len(video_files)} videos")
             append_log_line(project_id, f"⏱️  Estimated time: {time_estimator.format_time_display(time_estimate.total_seconds)}")
             append_log_line(project_id, f"🎯 GPU: {time_estimator.detect_gpu()}")
@@ -1134,7 +1135,7 @@ def run_colmap_pipeline(project_id, paths, config, processing_start_time, time_e
             if f.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.tiff'))
         ])
 
-        quality_mode = config.get('quality_mode', 'balanced')
+        quality_mode = normalize_quality_mode(config.get('quality_mode', 'production'))
         custom_params = None
         if quality_mode == 'custom':
             custom_params = {

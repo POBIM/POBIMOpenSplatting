@@ -95,7 +95,7 @@ def run_hloc_feature_extraction_stage(project_id, paths, config, colmap_config=N
         quality_mode = config.get('quality_mode', 'balanced')
         if quality_mode == 'fast':
             feature_conf = {**feature_conf, 'max_keypoints': 2048}
-        elif quality_mode in {'hard', 'quality'}:
+        elif quality_mode in {'hard', 'quality', 'fog', 'production', 'fog_heavy', 'production_balanced'}:
             feature_conf = {**feature_conf, 'max_keypoints': 8192}
         else:
             feature_conf = {**feature_conf, 'max_keypoints': 4096}

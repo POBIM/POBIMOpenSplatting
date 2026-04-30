@@ -200,7 +200,7 @@ def run_opensplat_training(
             },
         )
 
-        quality_mode = config.get("quality_mode", "balanced")
+        quality_mode = config.get("quality_mode", "production")
         training_recommendation = helpers["get_opensplat_runtime_recommendation"](
             quality_mode,
             num_images,

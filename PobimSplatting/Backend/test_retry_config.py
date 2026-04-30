@@ -23,7 +23,7 @@ class RetryConfigTests(unittest.TestCase):
         cleared = api._clear_stale_opensplat_retry_overrides(
             config,
             {
-                "quality_mode": "fog_heavy",
+                "quality_mode": "fog",
                 "training_live_preview_interval_percent": 1,
             },
         )
@@ -52,7 +52,7 @@ class RetryConfigTests(unittest.TestCase):
         cleared = api._clear_stale_opensplat_retry_overrides(
             config,
             {
-                "quality_mode": "fog_heavy",
+                "quality_mode": "fog",
                 "iterations": 12000,
             },
         )
@@ -60,6 +60,23 @@ class RetryConfigTests(unittest.TestCase):
         self.assertEqual(cleared, ["refine_every"])
         self.assertEqual(config["iterations"], 6000)
         self.assertNotIn("refine_every", config)
+
+    def test_target_visits_retry_clears_stale_iteration_override(self):
+        config = {
+            "quality_mode": "production",
+            "iterations": 6000,
+            "refine_every": 60,
+            "target_visits_per_image": 75,
+        }
+
+        cleared = api._clear_stale_opensplat_retry_overrides(
+            config,
+            {"target_visits_per_image": 50},
+        )
+
+        self.assertEqual(cleared, ["iterations", "refine_every"])
+        self.assertNotIn("iterations", config)
+        self.assertEqual(config["target_visits_per_image"], 75)
 
     def test_custom_quality_retry_keeps_training_overrides(self):
         config = {

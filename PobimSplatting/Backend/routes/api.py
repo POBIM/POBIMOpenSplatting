@@ -36,7 +36,11 @@ from ..core.projects import (
     update_stage_detail,
     update_state,
 )
-from ..pipeline.config_builders import build_upload_adaptive_policy_comparisons
+from ..pipeline.config_builders import (
+    build_upload_adaptive_policy_comparisons,
+    normalize_quality_mode,
+    normalize_training_visits_per_image,
+)
 from ..pipeline.image_preprocessing import normalize_colmap_sharpness_boost
 from ..pipeline.runner import (
     build_upload_policy_preview,
@@ -99,8 +103,12 @@ def _normalize_video_capture_mode(value):
 
 
 def _clear_stale_opensplat_retry_overrides(config: dict, new_params: dict) -> list[str]:
-    requested_quality = str(new_params.get("quality_mode") or "").strip().lower()
-    if not requested_quality or requested_quality == "custom":
+    requested_quality = normalize_quality_mode(new_params.get("quality_mode"))
+    requested_target_budget = new_params.get("target_visits_per_image") is not None
+    if (
+        (not new_params.get("quality_mode") and not requested_target_budget)
+        or requested_quality == "custom"
+    ):
         return []
 
     cleared_keys = []
@@ -1344,7 +1352,10 @@ def upload_policy_preview():
     config = {
         "camera_model": payload.get("camera_model", "SIMPLE_RADIAL"),
         "matcher_type": payload.get("matcher_type"),
-        "quality_mode": payload.get("quality_mode", "balanced"),
+        "quality_mode": normalize_quality_mode(payload.get("quality_mode", "production")),
+        "target_visits_per_image": normalize_training_visits_per_image(
+            payload.get("target_visits_per_image")
+        ),
         "sfm_engine": payload.get("sfm_engine", default_sfm_engine),
         "sfm_backend": payload.get("sfm_backend", "cli"),
         "fast_sfm": parse_bool(payload.get("fast_sfm"), False),
@@ -1522,7 +1533,7 @@ def upload_files():
         input_type = "images"
 
     # Get processing configuration
-    quality_mode = request.form.get("quality_mode", "balanced")
+    quality_mode = normalize_quality_mode(request.form.get("quality_mode", "production"))
     video_capture_mode = _normalize_video_capture_mode(request.form.get("video_capture_mode"))
     if request.form.get("video_capture_mode") not in {None, ""} and video_capture_mode is None:
         return jsonify({"error": "Invalid video capture mode"}), 400
@@ -1542,6 +1553,9 @@ def upload_files():
         "camera_model": request.form.get("camera_model", "SIMPLE_RADIAL"),
         "matcher_type": matcher_type,
         "quality_mode": quality_mode,
+        "target_visits_per_image": normalize_training_visits_per_image(
+            request.form.get("target_visits_per_image")
+        ),
         "sfm_engine": request.form.get("sfm_engine", default_sfm_engine),
         "sfm_backend": request.form.get("sfm_backend", "cli"),
         "fast_sfm": request.form.get("fast_sfm", "false").lower() == "true",
@@ -2256,6 +2270,12 @@ def retry_project(project_id):
         # Merge new parameters if provided (for retry with updated settings)
         new_params = data.get("params", {})
         if new_params:
+            if "quality_mode" in new_params and new_params["quality_mode"]:
+                new_params["quality_mode"] = normalize_quality_mode(new_params["quality_mode"])
+            if "target_visits_per_image" in new_params and new_params["target_visits_per_image"] is not None:
+                new_params["target_visits_per_image"] = normalize_training_visits_per_image(
+                    new_params["target_visits_per_image"]
+                )
             append_log_line(project_id, "🔧 Updating configuration with new parameters")
             config["resource_override_source"] = "manual_retry"
             cleared_training_overrides = _clear_stale_opensplat_retry_overrides(
@@ -2289,6 +2309,7 @@ def retry_project(project_id):
                 "rotation_lr",
                 "percent_dense",
                 "crop_size",
+                "target_visits_per_image",
             ]:
                 if param_key in new_params and new_params[param_key] is not None:
                     config[param_key] = new_params[param_key]

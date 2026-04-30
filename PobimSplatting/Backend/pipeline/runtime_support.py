@@ -370,11 +370,14 @@ def describe_colmap_bundle_adjustment_mode(colmap_exe, num_images, has_cuda):
 def get_native_aliked_max_num_features(quality_mode, fallback_max_num_features):
     caps = {
         'fast': 2048,
+        'normal': 4096,
         'balanced': 4096,
         'high': 4096,
         'ultra': 6144,
         'hard': 8192,
+        'fog': 8192,
         'fog_heavy': 8192,
+        'production': 8192,
         'production_balanced': 8192,
         'professional': 8192,
         'ultra_professional': 12288,

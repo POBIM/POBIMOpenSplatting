@@ -40,6 +40,7 @@ export interface Project {
   completed_at?: string;
   error_message?: string;
   quality_mode?: string;
+  target_visits_per_image?: number;
   iterations?: number;
   camera_model?: string;
   video_capture_mode?: VideoCaptureMode;
@@ -532,6 +533,7 @@ export interface UploadConfig {
   project_name?: string;
   project_description?: string;
   quality_mode?: string;
+  target_visits_per_image?: number;
   iterations?: number;
   densify_grad_threshold?: number;
   refine_every?: number;
@@ -755,6 +757,9 @@ export const api = {
     if (config.project_name) formData.append('project_name', config.project_name);
     if (config.project_description) formData.append('project_description', config.project_description);
     if (config.quality_mode) formData.append('quality_mode', config.quality_mode);
+    if (config.target_visits_per_image !== undefined) {
+      formData.append('target_visits_per_image', config.target_visits_per_image.toString());
+    }
     if (config.camera_model) formData.append('camera_model', config.camera_model);
     if (config.matcher_type && config.matcher_type !== 'auto') {
       formData.append('matcher_type', config.matcher_type);

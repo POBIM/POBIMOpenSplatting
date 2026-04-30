@@ -13,6 +13,13 @@ type SfmBackendMode = 'cli' | 'pycolmap';
 
 const DEFAULT_CPU_CHUNK_WORKERS = 8;
 const CPU_CHUNK_WORKER_SUGGESTIONS = [2, 4, 8, 12, 14];
+const QUALITY_MODE_OPTIONS = [
+  { value: 'normal', label: 'Normal', time: 'adaptive', desc: 'standard reconstruction preset' },
+  { value: 'fog', label: 'Fog', time: 'adaptive', desc: 'anti-fog preset for walls, floors, and ceilings' },
+  { value: 'production', label: 'Production', time: 'adaptive', desc: 'production anti-fog preset' },
+];
+const TRAINING_VISITS_PER_IMAGE_OPTIONS = [25, 50, 75, 100, 125, 150];
+const DEFAULT_TRAINING_VISITS_PER_IMAGE = 50;
 
 const VIDEO_CAPTURE_MODE_COPY: Record<VideoCaptureMode, { label: string; summary: string; badge: string }> = {
   normal: {
@@ -57,7 +64,8 @@ export default function UploadPage() {
   const [showVideoModeDialog, setShowVideoModeDialog] = useState(false);
   const [config, setConfig] = useState({
     project_name: '',
-    quality_mode: 'hard',
+    quality_mode: 'production',
+    target_visits_per_image: DEFAULT_TRAINING_VISITS_PER_IMAGE,
     camera_model: 'SIMPLE_RADIAL',
     matcher_type: 'auto' as MatcherMode,
     extraction_mode: 'fps',
@@ -784,19 +792,7 @@ export default function UploadPage() {
   }, [files, config, timelinePlan, usesSimulated360Planner, videoCaptureMode]);
 
   const getQualityInfo = (mode: string) => {
-    const info = {
-      fast: { iterations: 500, time: '~30s-2m', desc: 'Quick preview' },
-      balanced: { iterations: 7000, time: '~5-15m', desc: 'High quality (NEW default)' },
-      hard: { iterations: 5000, time: '~6-18m', desc: 'Coverage-first COLMAP pass, tuned for later retry' },
-      fog_heavy: { iterations: 9000, time: 'adaptive', desc: 'Anti-fog heavy for walls, floors, and ceilings' },
-      production_balanced: { iterations: 9000, time: 'adaptive', desc: 'Balanced anti-fog production preset' },
-      high: { iterations: 7000, time: '~5-15m', desc: 'High detail' },
-      ultra: { iterations: 15000, time: '~10-30m', desc: 'Maximum quality' },
-      professional: { iterations: 30000, time: '~20-60m', desc: 'Professional grade for 4K+ images' },
-      ultra_professional: { iterations: 60000, time: '~40-90m', desc: 'Ultra professional grade for highest quality' },
-      robust: { iterations: 7000, time: '~5-15m', desc: 'For difficult images' }
-    };
-    return info[mode as keyof typeof info] || info.balanced;
+    return QUALITY_MODE_OPTIONS.find((option) => option.value === mode) || QUALITY_MODE_OPTIONS[2];
   };
 
   const resolvedUploadTrainingParams = config.quality_mode === 'custom'
@@ -809,6 +805,7 @@ export default function UploadPage() {
       }
     : resolvedTrainingRecommendation
       ? {
+          target_visits_per_image: config.target_visits_per_image,
           iterations: resolvedTrainingRecommendation.iterations,
           densify_grad_threshold: resolvedTrainingRecommendation.densify_grad_threshold ?? undefined,
           refine_every: resolvedTrainingRecommendation.refine_every ?? undefined,
@@ -913,7 +910,7 @@ export default function UploadPage() {
             {/* Configuration Options */}
             <div className="space-y-3">
               {/* Project Details */}
-              <div className="grid gap-3 md:grid-cols-3">
+              <div className="grid gap-3 md:grid-cols-4">
                 <div>
                   <label htmlFor="project-name" className="brutal-label mb-1.5 inline-block">
                     <TooltipLabel tip="Optional. Leave blank to let the backend name the project.">Project</TooltipLabel>
@@ -929,7 +926,7 @@ export default function UploadPage() {
                 </div>
                 <div>
                   <label htmlFor="quality-mode" className="brutal-label mb-1.5 inline-block">
-                    <TooltipLabel tip="Controls training iterations and reconstruction policy. Hard starts with coverage-first COLMAP settings.">Quality</TooltipLabel>
+                    <TooltipLabel tip="เลือกแนว preset หลักก่อน แล้วกำหนดงบเทรนเฉลี่ยต่อภาพในช่องถัดไป">Mode</TooltipLabel>
                   </label>
                   <select
                     id="quality-mode"
@@ -937,26 +934,12 @@ export default function UploadPage() {
                     onChange={(e) => setConfig({ ...config, quality_mode: e.target.value })}
                     className="brutal-select"
                   >
-                    <option value="hard">Hard - {getQualityInfo('hard').time}</option>
-                    <option value="fog_heavy">Fog Heavy - {getQualityInfo('fog_heavy').time}</option>
-                    <option value="production_balanced">Production Balanced - {getQualityInfo('production_balanced').time}</option>
-                    <option value="high">High - {getQualityInfo('high').time}</option>
-                    <option value="ultra">Ultra - {getQualityInfo('ultra').time}</option>
-                    <option value="professional">Professional - {getQualityInfo('professional').time}</option>
-                    <option value="ultra_professional">Ultra Pro - {getQualityInfo('ultra_professional').time}</option>
-                    <option value="custom">Custom</option>
+                    {QUALITY_MODE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
                   </select>
-                  {config.quality_mode === 'hard' && (
-                    <span
-                      className="mt-1.5 inline-flex cursor-help border border-[color:var(--ink)] px-2 py-1 text-[11px] font-bold uppercase tracking-wide"
-                      style={{ background: 'var(--warning-bg)', color: 'var(--warning-text)' }}
-                      title={resolvedTrainingRecommendation?.summary
-                        ? `Hard mode with adaptive upload-time training budget. ${resolvedTrainingRecommendation.summary}.`
-                        : 'Hard mode: coverage-first COLMAP pass with adaptive upload-time training budget.'}
-                    >
-                      coverage-first
-                    </span>
-                  )}
                   {config.quality_mode !== 'custom' && files.length > 0 && (
                     <p className="mt-1.5 text-xs font-medium text-[color:var(--text-secondary)]">
                       {resolvedTrainingRecommendation?.summary
@@ -966,6 +949,26 @@ export default function UploadPage() {
                           : `Adaptive training will start from the ${getQualityInfo(config.quality_mode).desc.toLowerCase()} baseline.`}
                     </p>
                   )}
+                </div>
+                <div>
+                  <label htmlFor="training-visits-per-image" className="brutal-label mb-1.5 inline-block">
+                    <TooltipLabel tip="จำนวนรอบเทรนเฉลี่ยต่อภาพ เช่น 50 ภาพ x 50 = 2,500 iterations">Avg / Image</TooltipLabel>
+                  </label>
+                  <select
+                    id="training-visits-per-image"
+                    value={config.target_visits_per_image}
+                    onChange={(e) => setConfig({ ...config, target_visits_per_image: Number(e.target.value) })}
+                    className="brutal-select"
+                  >
+                    {TRAINING_VISITS_PER_IMAGE_OPTIONS.map((value) => (
+                      <option key={value} value={value}>
+                        {value} / image
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-1.5 text-xs font-medium text-[color:var(--text-secondary)]">
+                    Default: Production / {DEFAULT_TRAINING_VISITS_PER_IMAGE}.
+                  </p>
                 </div>
                 <div>
                   <label htmlFor="live-preview-interval" className="brutal-label mb-1.5 inline-block">
@@ -2333,6 +2336,7 @@ export default function UploadPage() {
                   <li>Minimum 10 images/frames.</li>
                   <li>Videos convert to frames automatically.</li>
                   <li>Estimated time: {getQualityInfo(config.quality_mode).time}.</li>
+                  <li>Training budget: {config.target_visits_per_image} average iterations per image.</li>
                   <li>Training preview: every {config.training_live_preview_interval_percent}%.</li>
                   <li>COLMAP sharpness boost: {config.colmap_sharpness_boost > 0 ? `${config.colmap_sharpness_boost}%` : 'off'}.</li>
                   <li>Profile: {inputProfile}.</li>

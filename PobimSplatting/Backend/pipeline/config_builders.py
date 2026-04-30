@@ -28,6 +28,35 @@ from .runtime_support import (
 from .resource_contract import build_resource_aware_contract
 
 
+TRAINING_VISITS_PER_IMAGE_OPTIONS = (25, 50, 75, 100, 125, 150)
+DEFAULT_TRAINING_VISITS_PER_IMAGE = 50
+
+
+def normalize_quality_mode(quality_mode):
+    normalized = str(quality_mode or "production").strip().lower()
+    aliases = {
+        "balanced": "normal",
+        "high": "normal",
+        "hard": "normal",
+        "fog_heavy": "fog",
+        "production_balanced": "production",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def normalize_training_visits_per_image(value, default=DEFAULT_TRAINING_VISITS_PER_IMAGE):
+    try:
+        visits = int(value)
+    except (TypeError, ValueError):
+        visits = int(default)
+    if visits in TRAINING_VISITS_PER_IMAGE_OPTIONS:
+        return visits
+    return min(
+        TRAINING_VISITS_PER_IMAGE_OPTIONS,
+        key=lambda candidate: abs(candidate - visits),
+    )
+
+
 def get_colmap_executable():
     """Get the preferred COLMAP executable for this environment."""
     for candidate in app_config.COLMAP_CANDIDATE_PATHS:
@@ -139,8 +168,14 @@ def build_upload_policy_preview(config, media_summary):
     )
     estimated_num_images = estimate_preview_image_count(preview_config, media_summary)
     preview_config["estimated_num_images"] = estimated_num_images
+    preview_config["quality_mode"] = normalize_quality_mode(
+        preview_config.get("quality_mode", "production")
+    )
+    preview_config["target_visits_per_image"] = normalize_training_visits_per_image(
+        preview_config.get("target_visits_per_image")
+    )
     training_recommendation = get_opensplat_runtime_recommendation(
-        preview_config.get("quality_mode", "balanced"),
+        preview_config.get("quality_mode", "production"),
         max(estimated_num_images, 1),
         preview_config,
     )
@@ -157,7 +192,7 @@ def build_upload_policy_preview(config, media_summary):
 
     colmap_cfg = get_colmap_config(
         max(estimated_num_images, 1),
-        quality_mode=preview_config.get("quality_mode", "balanced"),
+        quality_mode=preview_config.get("quality_mode", "production"),
         custom_params=preview_config
         if preview_config.get("quality_mode") == "custom"
         else preview_config,
@@ -703,8 +738,8 @@ def get_sequential_matcher_params(
                 if quality_mode == "professional"
                 else (
                     "28"
-                    if quality_mode == "hard"
-                    else ("25" if quality_mode in ["high", "ultra"] else "20")
+                    if quality_mode in {"hard", "fog"}
+                    else ("25" if quality_mode in ["high", "ultra", "production"] else "20")
                 )
             )
         )
@@ -718,8 +753,8 @@ def get_sequential_matcher_params(
                 if quality_mode == "professional"
                 else (
                     "22"
-                    if quality_mode == "hard"
-                    else ("18" if quality_mode in ["high", "ultra"] else "12")
+                    if quality_mode in {"hard", "fog"}
+                    else ("18" if quality_mode in ["high", "ultra", "production"] else "12")
                 )
             )
         )
@@ -733,8 +768,8 @@ def get_sequential_matcher_params(
                 if quality_mode == "professional"
                 else (
                     "18"
-                    if quality_mode == "hard"
-                    else ("15" if quality_mode in ["high", "ultra"] else "12")
+                    if quality_mode in {"hard", "fog"}
+                    else ("15" if quality_mode in ["high", "ultra", "production"] else "12")
                 )
             )
         )
@@ -748,8 +783,8 @@ def get_sequential_matcher_params(
                 if quality_mode == "professional"
                 else (
                     "10"
-                    if quality_mode == "hard"
-                    else ("8" if quality_mode in ["high", "ultra"] else "5")
+                    if quality_mode in {"hard", "fog"}
+                    else ("8" if quality_mode in ["high", "ultra", "production"] else "5")
                 )
             )
         )
@@ -858,13 +893,15 @@ def should_prefer_incremental_sfm(config, paths, num_images):
 def get_colmap_config(
     num_images,
     project_id=None,
-    quality_mode="balanced",
+    quality_mode="production",
     custom_params=None,
     preferred_matcher_type=None,
     orbit_safe_mode=False,
     orbit_safe_policy=None,
 ):
     """Configure COLMAP parameters based on image count and quality requirements."""
+
+    quality_mode = normalize_quality_mode(quality_mode)
 
     if project_id:
         append_log_line(
@@ -874,10 +911,13 @@ def get_colmap_config(
 
     quality_scales = {
         "fast": {"size": 0.6, "features": 0.5, "matches": 0.5, "octaves": -1},
+        "normal": {"size": 1.0, "features": 1.0, "matches": 2.5, "octaves": 0},
         "balanced": {"size": 1.0, "features": 1.0, "matches": 2.5, "octaves": 0},
         "high": {"size": 1.0, "features": 1.0, "matches": 3.0, "octaves": 0},
         "ultra": {"size": 1.2, "features": 1.2, "matches": 3.5, "octaves": 0},
         "hard": {"size": 1.4, "features": 1.75, "matches": 5.0, "octaves": -1},
+        "fog": {"size": 1.35, "features": 1.75, "matches": 4.5, "octaves": -1},
+        "production": {"size": 1.25, "features": 1.5, "matches": 4.0, "octaves": -1},
         "professional": {"size": 1.5, "features": 1.5, "matches": 4.0, "octaves": 0},
         "ultra_professional": {
             "size": 1.8,
@@ -976,7 +1016,7 @@ def get_colmap_config(
                 project_id,
                 "🔧 Using ROBUST mode: Exhaustive matching for maximum coverage",
             )
-    elif quality_mode == "hard":
+    elif quality_mode in {"hard", "fog", "production"}:
         if num_images <= 250:
             matcher_type = "exhaustive"
             matcher_params = {}
@@ -987,7 +1027,7 @@ def get_colmap_config(
         if project_id:
             append_log_line(
                 project_id,
-                "🔧 Using HARD mode: aggressive feature coverage with lighter first-pass training",
+                f"🔧 Using {quality_mode.upper()} mode: coverage-focused reconstruction policy",
             )
     elif quality_mode == "ultra" and num_images <= 200:
         matcher_type = "exhaustive"
@@ -1091,10 +1131,13 @@ def get_colmap_config(
 
     quality_mapper_scales = {
         "fast": {"matches": 1.0, "trials": 0.5, "models": 0.5},
+        "normal": {"matches": 0.8, "trials": 1.5, "models": 2.0},
         "balanced": {"matches": 0.8, "trials": 1.5, "models": 2.0},
         "high": {"matches": 0.8, "trials": 1.5, "models": 2.0},
         "ultra": {"matches": 0.7, "trials": 2.0, "models": 3.0},
         "hard": {"matches": 0.55, "trials": 2.2, "models": 4.0},
+        "fog": {"matches": 0.55, "trials": 2.2, "models": 4.0},
+        "production": {"matches": 0.6, "trials": 2.0, "models": 3.0},
         "professional": {"matches": 0.6, "trials": 2.5, "models": 5.0},
         "ultra_professional": {"matches": 0.5, "trials": 3.0, "models": 7.0},
         "unlimited": {"matches": 0.6, "trials": 2.5, "models": 5.0},
@@ -1120,7 +1163,7 @@ def get_colmap_config(
         max_extra_param = (
             1
             if quality_mode
-            in ["high", "ultra", "hard", "professional", "ultra_professional"]
+            in ["high", "ultra", "hard", "fog", "production", "professional", "ultra_professional"]
             else 0
         )
     elif num_images <= 1000:
@@ -1290,12 +1333,20 @@ def get_colmap_config(
                 "max_num_orientations": 5,
             }
         )
-    elif quality_mode == "hard":
+    elif quality_mode in {"hard", "fog"}:
         sift_params.update(
             {
                 "peak_threshold": 0.005,
                 "edge_threshold": 22,
                 "max_num_orientations": 4,
+            }
+        )
+    elif quality_mode == "production":
+        sift_params.update(
+            {
+                "peak_threshold": 0.008,
+                "edge_threshold": 18,
+                "max_num_orientations": 3,
             }
         )
     elif quality_mode == "professional":
@@ -1314,7 +1365,7 @@ def get_colmap_config(
                 "max_num_orientations": 3 if quality_mode == "ultra" else 2,
             }
         )
-    elif quality_mode == "balanced":
+    elif quality_mode in {"normal", "balanced"}:
         sift_params.update(
             {
                 "peak_threshold": 0.01,
@@ -1409,9 +1460,10 @@ def get_colmap_config(
     }
 
 
-def get_opensplat_config(quality_mode="balanced", num_images=100, custom_params=None):
+def get_opensplat_config(quality_mode="production", num_images=100, custom_params=None):
     """Get OpenSplat training configuration based on quality requirements and dataset size."""
 
+    quality_mode = normalize_quality_mode(quality_mode)
     quality_scales = {
         "fast": {
             "iterations": 500,
@@ -1424,11 +1476,22 @@ def get_opensplat_config(quality_mode="balanced", num_images=100, custom_params=
             "opacity_reset_interval": 3000,
             "prune_opacity": 0.005,
         },
+        "normal": {
+            "iterations": 5000,
+            "target_visits_per_image": 50,
+            "min_iterations": 100,
+            "max_iterations": 200000,
+            "densify_from": 1000,
+            "densify_until": 3500,
+            "densify_grad_threshold": 0.00015,
+            "opacity_reset_interval": 3000,
+            "prune_opacity": 0.003,
+        },
         "balanced": {
-            "iterations": 7000,
-            "target_visits_per_image": 70,
-            "min_iterations": 3500,
-            "max_iterations": 42000,
+            "iterations": 5000,
+            "target_visits_per_image": 50,
+            "min_iterations": 100,
+            "max_iterations": 200000,
             "densify_from": 1000,
             "densify_until": 3500,
             "densify_grad_threshold": 0.00015,
@@ -1491,10 +1554,31 @@ def get_opensplat_config(quality_mode="balanced", num_images=100, custom_params=
             "prune_opacity": 0.0005,
         },
         "fog_heavy": {
-            "iterations": 9000,
-            "target_visits_per_image": 115,
-            "min_iterations": 2400,
-            "max_iterations": 36000,
+            "iterations": 5000,
+            "target_visits_per_image": 50,
+            "min_iterations": 100,
+            "max_iterations": 200000,
+            "iteration_rounding": 100,
+            "scale_training_knobs": True,
+            "densify_from": 1200,
+            "densify_until": 5200,
+            "densify_grad_threshold": 0.00055,
+            "opacity_reset_interval": 2400,
+            "prune_opacity": 0.006,
+            "refine_every": 220,
+            "warmup_length": 1200,
+            "ssim_weight": 0.06,
+            "reset_alpha_every": 24,
+            "num_downscales": 1,
+            "resolution_schedule": 1200,
+            "split_screen_size": 0.022,
+            "stop_screen_size_at": 1600,
+        },
+        "fog": {
+            "iterations": 5000,
+            "target_visits_per_image": 50,
+            "min_iterations": 100,
+            "max_iterations": 200000,
             "iteration_rounding": 100,
             "scale_training_knobs": True,
             "densify_from": 1200,
@@ -1512,10 +1596,31 @@ def get_opensplat_config(quality_mode="balanced", num_images=100, custom_params=
             "stop_screen_size_at": 1600,
         },
         "production_balanced": {
-            "iterations": 9000,
-            "target_visits_per_image": 115,
-            "min_iterations": 2400,
-            "max_iterations": 42000,
+            "iterations": 5000,
+            "target_visits_per_image": 50,
+            "min_iterations": 100,
+            "max_iterations": 200000,
+            "iteration_rounding": 100,
+            "scale_training_knobs": True,
+            "densify_from": 1000,
+            "densify_until": 5200,
+            "densify_grad_threshold": 0.00042,
+            "opacity_reset_interval": 2400,
+            "prune_opacity": 0.004,
+            "refine_every": 180,
+            "warmup_length": 900,
+            "ssim_weight": 0.10,
+            "reset_alpha_every": 24,
+            "num_downscales": 1,
+            "resolution_schedule": 1200,
+            "split_screen_size": 0.03,
+            "stop_screen_size_at": 2000,
+        },
+        "production": {
+            "iterations": 5000,
+            "target_visits_per_image": 50,
+            "min_iterations": 100,
+            "max_iterations": 200000,
             "iteration_rounding": 100,
             "scale_training_knobs": True,
             "densify_from": 1000,
@@ -1545,11 +1650,15 @@ def get_opensplat_config(quality_mode="balanced", num_images=100, custom_params=
         },
     }
 
-    base_config = dict(quality_scales.get(quality_mode, quality_scales["balanced"]))
+    base_config = dict(quality_scales.get(quality_mode, quality_scales["production"]))
 
     image_count = max(int(num_images), 1)
     default_iterations = max(int(base_config.get("iterations", 1000)), 1)
-    target_visits = max(int(base_config.get("target_visits_per_image", 70)), 1)
+    target_visits = normalize_training_visits_per_image(
+        (custom_params or {}).get("target_visits_per_image"),
+        base_config.get("target_visits_per_image", DEFAULT_TRAINING_VISITS_PER_IMAGE),
+    )
+    base_config["target_visits_per_image"] = target_visits
     min_iterations = max(int(base_config.get("min_iterations", 1000)), 1)
     max_iterations = max(int(base_config.get("max_iterations", min_iterations)), min_iterations)
     recommended_iterations = image_count * target_visits
@@ -1570,7 +1679,7 @@ def get_opensplat_config(quality_mode="balanced", num_images=100, custom_params=
             if key not in base_config:
                 return
             scaled_value = max(minimum, int(round(int(base_config[key]) * scale_ratio)))
-            base_config[key] = min(base_config["iterations"] - 2, scaled_value)
+            base_config[key] = min(max(1, base_config["iterations"] - 2), scaled_value)
 
         scale_int_knob("densify_from", 100)
         scale_int_knob("refine_every", 25)
@@ -1579,12 +1688,20 @@ def get_opensplat_config(quality_mode="balanced", num_images=100, custom_params=
         scale_int_knob("stop_screen_size_at", 200)
 
     densify_ratio = base_config["densify_until"] / float(default_iterations)
-    base_config["densify_until"] = min(
-        base_config["iterations"] - 1,
-        max(base_config["densify_from"] + 1, int(round(base_config["iterations"] * densify_ratio))),
-    )
+    if base_config["iterations"] <= 2:
+        base_config["densify_from"] = 1
+        base_config["densify_until"] = 1
+    else:
+        base_config["densify_from"] = min(
+            max(1, int(base_config["densify_from"])),
+            base_config["iterations"] - 2,
+        )
+        base_config["densify_until"] = min(
+            base_config["iterations"] - 1,
+            max(base_config["densify_from"] + 1, int(round(base_config["iterations"] * densify_ratio))),
+        )
 
-    if quality_mode in ["high", "ultra", "hard", "balanced"]:
+    if quality_mode in ["high", "ultra", "hard", "normal", "balanced"]:
         base_config.update(
             {
                 "learning_rate": 0.0025,
@@ -1680,10 +1797,11 @@ def get_opensplat_config(quality_mode="balanced", num_images=100, custom_params=
 
 
 def get_opensplat_runtime_recommendation(
-    quality_mode="balanced", num_images=100, custom_params=None
+    quality_mode="production", num_images=100, custom_params=None
 ):
     """Resolve the runtime OpenSplat knobs that the training stage actually uses."""
 
+    quality_mode = normalize_quality_mode(quality_mode)
     opensplat_config = get_opensplat_config(quality_mode, num_images, custom_params)
     recommendation = {
         "quality_mode": quality_mode,
@@ -1706,9 +1824,10 @@ def get_opensplat_runtime_recommendation(
         "ultra",
         "hard",
         "custom",
+        "normal",
         "balanced",
-        "fog_heavy",
-        "production_balanced",
+        "fog",
+        "production",
     ]:
         refine_every = 75
         warmup_length = 750
@@ -1725,7 +1844,7 @@ def get_opensplat_runtime_recommendation(
             warmup_length = 900
             ssim_weight = 0.28
             reset_alpha_every = 24
-        elif quality_mode in {"fog_heavy", "production_balanced"}:
+        elif quality_mode in {"fog", "production"}:
             refine_every = int(opensplat_config["refine_every"])
             warmup_length = int(opensplat_config["warmup_length"])
             ssim_weight = float(opensplat_config["ssim_weight"])
@@ -1782,7 +1901,7 @@ def get_colmap_config_for_pipeline(paths, config, project_id=None):
         ]
     )
 
-    quality_mode = config.get("quality_mode", "balanced")
+    quality_mode = normalize_quality_mode(config.get("quality_mode", "production"))
 
     custom_params = {
         "peak_threshold": config.get("peak_threshold"),

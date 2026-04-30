@@ -16,9 +16,37 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Optional
 
+try:
+    import numpy as np
+except ImportError:  # pragma: no cover - numpy is expected in runtime, but keep helper resilient
+    np = None
+
 from . import config
 
 logger = logging.getLogger(__name__)
+
+
+def make_json_safe(value: Any) -> Any:
+    """Convert runtime state into structures accepted by json/jsonify/socketio."""
+    if np is not None and isinstance(value, np.generic):
+        return value.item()
+
+    if isinstance(value, Path):
+        return str(value)
+
+    if isinstance(value, dict):
+        return {str(key): make_json_safe(child) for key, child in value.items()}
+
+    if isinstance(value, list):
+        return [make_json_safe(child) for child in value]
+
+    if isinstance(value, tuple):
+        return [make_json_safe(child) for child in value]
+
+    if isinstance(value, set):
+        return [make_json_safe(child) for child in sorted(value, key=lambda item: str(item))]
+
+    return value
 
 # ----------------------------------------------------------------------------
 # Runtime state

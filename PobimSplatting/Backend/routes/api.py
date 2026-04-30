@@ -31,6 +31,7 @@ from ..core.projects import (
     append_log_line,
     get_recent_log_lines,
     initialize_project_entry,
+    make_json_safe,
     save_projects_db,
     update_stage_detail,
     update_state,
@@ -78,7 +79,7 @@ def _normalize_video_capture_mode(value):
 
 
 def _parse_video_timeline_plan(raw_value):
-    if raw_value in {None, ""}:
+    if raw_value is None or raw_value == "":
         return None
 
     if isinstance(raw_value, str):
@@ -1012,6 +1013,51 @@ def _resolve_project_camera_pose_model_path(
     return None, "missing"
 
 
+def _resolve_camera_pose_text_model(
+    project_id: str,
+    sparse_model_path: Path,
+    source_type: str,
+    *,
+    prefer_live: bool = True,
+) -> tuple[Path, str, tuple[Path | str, Path | str, Path | str]]:
+    try:
+        return sparse_model_path, source_type, _ensure_sparse_text_model(sparse_model_path)
+    except (FileNotFoundError, RuntimeError) as exc:
+        if not (prefer_live and source_type == "snapshot"):
+            raise
+
+        project_path = (app_config.UPLOAD_FOLDER / project_id).resolve()
+        logger.warning(
+            "Live sparse snapshot became unavailable for project %s at %s: %s",
+            project_id,
+            sparse_model_path,
+            exc,
+        )
+
+        refreshed_snapshot = _find_latest_sparse_snapshot(project_path)
+        if refreshed_snapshot and refreshed_snapshot != sparse_model_path:
+            try:
+                return refreshed_snapshot, "snapshot", _ensure_sparse_text_model(refreshed_snapshot)
+            except (FileNotFoundError, RuntimeError) as retry_exc:
+                logger.warning(
+                    "Refreshed sparse snapshot also unavailable for project %s at %s: %s",
+                    project_id,
+                    refreshed_snapshot,
+                    retry_exc,
+                )
+
+        final_sparse_path = select_best_sparse_model(project_path / "sparse")
+        if final_sparse_path and final_sparse_path.exists():
+            logger.info(
+                "Falling back to final sparse model for camera poses on project %s: %s",
+                project_id,
+                final_sparse_path,
+            )
+            return final_sparse_path, "final", _ensure_sparse_text_model(final_sparse_path)
+
+        raise
+
+
 def _load_project_camera_poses(project_id, *, prefer_live: bool = True):
     project_path = (app_config.UPLOAD_FOLDER / project_id).resolve()
     if not project_path.exists():
@@ -1025,9 +1071,13 @@ def _load_project_camera_poses(project_id, *, prefer_live: bool = True):
 
     cleanup_paths = []
     try:
-        cameras_ref, images_ref, points_ref = _ensure_sparse_text_model(
-            sparse_model_path
+        sparse_model_path, source_type, refs = _resolve_camera_pose_text_model(
+            project_id,
+            sparse_model_path,
+            source_type,
+            prefer_live=prefer_live,
         )
+        cameras_ref, images_ref, points_ref = refs
         if isinstance(cameras_ref, str):
             cleanup_paths.append(cameras_ref)
             cameras_path = Path(cameras_ref)
@@ -1106,7 +1156,14 @@ def _load_project_camera_pose_manifest(project_id, *, prefer_live: bool = True) 
 
     cleanup_paths = []
     try:
-        cameras_ref, images_ref, points_ref = _ensure_sparse_text_model(sparse_model_path)
+        sparse_model_path, source_type, refs = _resolve_camera_pose_text_model(
+            project_id,
+            sparse_model_path,
+            source_type,
+            prefer_live=prefer_live,
+        )
+        snapshot_version = _get_sparse_model_version(sparse_model_path)
+        cameras_ref, images_ref, points_ref = refs
         if isinstance(cameras_ref, str):
             cleanup_paths.append(cameras_ref)
             cameras_path = Path(cameras_ref)
@@ -1785,7 +1842,7 @@ def get_status(project_id):
         data["log_truncated"] = log_count > len(recent_logs)
         data["stage_details"] = data.get("stage_details", {})
 
-    return jsonify(data)
+    return jsonify(make_json_safe(data))
 
 
 @api_bp.route("/project/<project_id>/logs")

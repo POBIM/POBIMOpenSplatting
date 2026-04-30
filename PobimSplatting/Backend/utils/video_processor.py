@@ -2751,7 +2751,7 @@ class VideoProcessor:
 
         brightness_penalty = abs(brightness - 128.0) * 0.3
         score = sharpness - brightness_penalty - duplicate_penalty
-        accepted = sharpness >= blur_threshold and brightness_ok and duplicate_ok
+        accepted = bool(sharpness >= blur_threshold and brightness_ok and duplicate_ok)
 
         return {
             'accepted': accepted,
@@ -2809,7 +2809,8 @@ class VideoProcessor:
             'score': float('-inf'),
             'metrics': {'sharpness': 0.0, 'brightness': 0.0, 'diff_mean': None, 'blur_threshold': 0.0},
         }
-        winner['fallback_used'] = best_accepted is None
+        winner['accepted'] = bool(winner.get('accepted', False))
+        winner['fallback_used'] = bool(best_accepted is None)
         winner['rejected_candidates'] = rejected_candidates
         return winner
 

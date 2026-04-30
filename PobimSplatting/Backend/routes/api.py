@@ -63,6 +63,26 @@ TRAINING_LIVE_CONTROL_FILENAME = "live_training_preview_control.json"
 _CAMERA_POSE_MANIFEST_CACHE: dict[tuple[str, int], dict] = {}
 _CAMERA_POSE_MANIFEST_CACHE_MAX = 16
 _VIDEO_CAPTURE_MODES = {"normal", "simulated_360_positions", "raw_360_mock"}
+_OPEN_SPLAT_RETRY_OVERRIDE_KEYS = (
+    "iterations",
+    "densify_grad_threshold",
+    "refine_every",
+    "warmup_length",
+    "ssim_weight",
+    "reset_alpha_every",
+    "num_downscales",
+    "resolution_schedule",
+    "split_screen_size",
+    "stop_screen_size_at",
+    "learning_rate",
+    "position_lr_init",
+    "position_lr_final",
+    "feature_lr",
+    "opacity_lr",
+    "scaling_lr",
+    "rotation_lr",
+    "percent_dense",
+)
 
 
 def _calculate_progress_percent(current: int, total: int) -> int:
@@ -76,6 +96,19 @@ def _normalize_video_capture_mode(value):
         return None
     normalized = str(value).strip()
     return normalized if normalized in _VIDEO_CAPTURE_MODES else None
+
+
+def _clear_stale_opensplat_retry_overrides(config: dict, new_params: dict) -> list[str]:
+    requested_quality = str(new_params.get("quality_mode") or "").strip().lower()
+    if not requested_quality or requested_quality == "custom":
+        return []
+
+    cleared_keys = []
+    for key in _OPEN_SPLAT_RETRY_OVERRIDE_KEYS:
+        if key in config and key not in new_params:
+            config.pop(key, None)
+            cleared_keys.append(key)
+    return cleared_keys
 
 
 def _parse_video_timeline_plan(raw_value):
@@ -2225,6 +2258,15 @@ def retry_project(project_id):
         if new_params:
             append_log_line(project_id, "🔧 Updating configuration with new parameters")
             config["resource_override_source"] = "manual_retry"
+            cleared_training_overrides = _clear_stale_opensplat_retry_overrides(
+                config, new_params
+            )
+            if cleared_training_overrides:
+                append_log_line(
+                    project_id,
+                    "  • cleared stale OpenSplat overrides for preset retry: "
+                    + ", ".join(cleared_training_overrides),
+                )
 
             # Update OpenSplat training parameters if provided
             for param_key in [
